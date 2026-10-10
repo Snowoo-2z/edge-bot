@@ -87,7 +87,49 @@ const TEXTS = [
     default: 'Le système de tickets est désactivé sur ce serveur.',
   },
 ];
+const HINTS = {
+  panel_title: 'Ex : 🎫 Support',
+  panel_description: 'Texte affiché sous le titre du panneau',
+  panel_button: 'Texte du bouton qui ouvre un ticket',
+  panel_footer: 'Petit texte en bas du panneau',
+  channel_name: 'Variables : {user}, {number}. Espaces → tirets',
+  welcome_title: 'Variables : {user}, {number}',
+  welcome_description: 'Variables : {user}, {number}, {channel}',
+  welcome_footer: 'Variables : {user}, {number}',
+  close_button: 'Texte du bouton de fermeture',
+  msg_opened: 'Variables : {user}, {channel}',
+  msg_already_open: 'Variables : {user}, {channel}',
+  msg_closed: 'Affiché juste avant la suppression du salon',
+  msg_disabled: 'Affiché quand le système de tickets est désactivé',
+};
+for (const t of TEXTS) t.hint = HINTS[t.key];
 const TEXT_BY_KEY = Object.fromEntries(TEXTS.map((t) => [t.key, t]));
+
+// Groupes : une seule fenêtre (modale) pour plusieurs textes à la fois.
+const GROUPS = [
+  {
+    id: 'panel',
+    label: 'Panneau',
+    emoji: '🎫',
+    title: 'Panneau Ouvrir un ticket',
+    keys: ['panel_title', 'panel_description', 'panel_button', 'panel_footer'],
+  },
+  {
+    id: 'welcome',
+    label: 'Accueil du ticket',
+    emoji: '💬',
+    title: 'Accueil du ticket',
+    keys: ['welcome_title', 'welcome_description', 'welcome_footer', 'close_button', 'channel_name'],
+  },
+  {
+    id: 'messages',
+    label: 'Messages',
+    emoji: '📩',
+    title: 'Messages du bot',
+    keys: ['msg_opened', 'msg_already_open', 'msg_closed', 'msg_disabled'],
+  },
+];
+const GROUP_BY_ID = Object.fromEntries(GROUPS.map((g) => [g.id, g]));
 
 const DEFAULTS = {
   enabled: true,
@@ -131,6 +173,8 @@ function render(view, guild) {
   switch (view) {
     case 'texts':
       return renderTexts(cfg);
+    case 'preview':
+      return renderPreview(guild, cfg);
     case 'publish':
       return renderChannelPicker(
         'Choisis le salon où publier le panneau **Ouvrir un ticket**.',
@@ -203,27 +247,85 @@ function renderTexts(cfg) {
   const e = embed()
     .setTitle('✏️ Textes du module Ticket')
     .setDescription(
-      'Clique sur un bouton pour modifier le texte.\n' +
-        'Variables : `{user}` (pseudo), `{number}` (n° du ticket), `{channel}` (salon du ticket).',
+      '**Clique sur une section** : une fenêtre s’ouvre avec tous ses textes, déjà remplis avec tes valeurs actuelles.\n' +
+        'Modifie ce que tu veux, valide, et c’est enregistré.\n\n' +
+        'Variables : `{user}` pseudo • `{number}` n° du ticket • `{channel}` salon du ticket.',
     )
     .addFields(
       TEXTS.map((t) => ({
-        name: t.label,
+        name: `${GROUPS.find((g) => g.keys.includes(t.key)).emoji} ${t.label}`,
         value: truncate(cfg.texts[t.key], 200) || '—',
         inline: false,
       })),
     );
 
-  const rows = [];
-  for (let i = 0; i < TEXTS.length; i += 5) {
-    rows.push(
+  return {
+    embeds: [e],
+    components: [
+      row(...GROUPS.map((g) => button(`cfg:ticket:text:${g.id}`, g.label, ButtonStyle.Primary, g.emoji))),
       row(
-        ...TEXTS.slice(i, i + 5).map((t) => button(`cfg:ticket:text:${t.key}`, t.label, ButtonStyle.Secondary)),
+        button('cfg:ticket:view:preview', 'Aperçu', ButtonStyle.Success, '👁️'),
+        button('cfg:ticket:view:main', '◀ Retour', ButtonStyle.Danger),
       ),
+    ],
+  };
+}
+
+// Aperçu : rendu réel des messages avec des valeurs d'exemple.
+function renderPreview(guild, cfg) {
+  const vars = { user: 'Alice', number: 1, channel: '#ticket-alice' };
+  const t = cfg.texts;
+  const panel = embed()
+    .setTitle(truncate(fmt(t.panel_title, vars), 256))
+    .setDescription(fmt(t.panel_description, vars))
+    .setFooter({ text: fmt(t.panel_footer, vars) });
+  if (cfg.image && cfg.assets.image?.url) panel.setImage(cfg.assets.image.url);
+
+  const welcome = embed()
+    .setTitle(truncate(fmt(t.welcome_title, vars), 256))
+    .setDescription(fmt(t.welcome_description, vars))
+    .setFooter({ text: fmt(t.welcome_footer, vars) });
+  if (cfg.gif && cfg.assets.gif?.url) welcome.setImage(cfg.assets.gif.url);
+
+  const messages = embed()
+    .setTitle('📩 Messages')
+    .setDescription(
+      [
+        `**Ticket créé** : ${fmt(t.msg_opened, vars)}`,
+        `**Déjà ouvert** : ${fmt(t.msg_already_open, vars)}`,
+        `**Fermeture** : ${fmt(t.msg_closed, vars)}`,
+        `**Désactivé** : ${fmt(t.msg_disabled, vars)}`,
+      ].join('\n\n'),
     );
+
+  return {
+    content: '**Aperçu** (valeurs d’exemple) : voici ce que verront les membres.',
+    embeds: [panel, welcome, messages],
+    components: [
+      row(button('noop:panel', t.panel_button, ButtonStyle.Primary, '🎫').setDisabled(true)),
+      row(button('noop:close', t.close_button, ButtonStyle.Danger).setDisabled(true)),
+      row(button('cfg:ticket:view:texts', '◀ Retour aux textes', ButtonStyle.Secondary)),
+    ],
+  };
+}
+
+// Fenêtre (modale) avec un ou plusieurs champs, pré-remplis avec les textes actuels.
+function buildTextModal(cfg, id, keys, title) {
+  const modal = new ModalBuilder().setCustomId(`cfg:ticket:modal:${id}`).setTitle(truncate(title, 45));
+  for (const key of keys) {
+    const def = TEXT_BY_KEY[key];
+    const input = new TextInputBuilder()
+      .setCustomId(key)
+      .setLabel(truncate(def.label, 45))
+      .setStyle(def.style === 'long' ? TextInputStyle.Paragraph : TextInputStyle.Short)
+      .setValue(truncate(cfg.texts[key], def.max))
+      .setPlaceholder(truncate(def.hint || def.label, 100))
+      .setMinLength(1)
+      .setMaxLength(def.max)
+      .setRequired(true);
+    modal.addComponents(new ActionRowBuilder().addComponents(input));
   }
-  rows.push(row(button('cfg:ticket:view:main', '◀ Retour', ButtonStyle.Danger)));
-  return { embeds: [e], components: rows };
+  return modal;
 }
 
 function renderChannelPicker(description, customId, types, clearId) {
@@ -298,21 +400,13 @@ async function handleComponent(interaction) {
     }
 
     case 'text': {
+      const group = GROUP_BY_ID[arg];
+      if (group) {
+        return interaction.showModal(buildTextModal(cfg, group.id, group.keys, group.title));
+      }
       const def = TEXT_BY_KEY[arg];
       if (!def) return;
-      const input = new TextInputBuilder()
-        .setCustomId('value')
-        .setLabel(truncate(def.label, 45))
-        .setStyle(def.style === 'long' ? TextInputStyle.Paragraph : TextInputStyle.Short)
-        .setValue(truncate(cfg.texts[arg], def.max))
-        .setMinLength(1)
-        .setMaxLength(def.max)
-        .setRequired(true);
-      const modal = new ModalBuilder()
-        .setCustomId(`cfg:ticket:modal:${arg}`)
-        .setTitle(truncate(`Modifier : ${def.label}`, 45))
-        .addComponents(new ActionRowBuilder().addComponents(input));
-      return interaction.showModal(modal);
+      return interaction.showModal(buildTextModal(cfg, arg, [arg], def.label));
     }
 
     case 'pick': {
@@ -357,16 +451,21 @@ async function handleComponent(interaction) {
 async function handleModal(interaction) {
   const guild = interaction.guild;
   if (!guild) return;
-  const [, , , key] = interaction.customId.split(':');
-  if (!TEXT_BY_KEY[key]) return;
+  const id = interaction.customId.split(':')[3];
+  const group = GROUP_BY_ID[id];
+  const keys = group ? group.keys : [id];
+  if (!keys.every((k) => TEXT_BY_KEY[k])) return;
 
-  const value = interaction.fields.getTextInputValue('value').trim();
   const cfg = cfgOf(guild.id);
-  cfg.texts[key] = value;
+  for (const key of keys) {
+    const value = interaction.fields.getTextInputValue(key).trim();
+    if (value) cfg.texts[key] = value;
+  }
   save(guild.id, cfg);
 
   await interaction.deferUpdate();
-  return interaction.editReply(render('texts', guild));
+  await interaction.editReply(render('texts', guild));
+  return interaction.followUp(ephemeralPayload(`✅ ${group ? group.label : TEXT_BY_KEY[id].label} : textes enregistrés.`));
 }
 
 // ---------------------------------------------------------------------------
