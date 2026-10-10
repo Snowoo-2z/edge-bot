@@ -118,6 +118,7 @@ ils survivent aux redéploiements et redémarrages.
 Dans **Ticket → 🗂️ Types de ticket**, tu peux ajouter jusqu'à 25 types (ex. Support, Plainte, Partenariat),
 chacun avec un nom, un emoji optionnel et une description optionnelle.
 
+- **Ordre** : ouvre un type, puis utilise **⬆️ Monter** / **⬇️ Descendre**. L'ordre est le même dans la liste, dans le menu et sur le panneau.
 - **Affichage** : bouton « Affichage » pour choisir **Boutons** (un bouton par type) ou **Menu déroulant**
   (un menu avec tous les types) sur le panneau.
 - **Rôle à ping** : pour chaque type, le bouton **🔔 Rôle à ping** permet de choisir un rôle. À chaque ouverture

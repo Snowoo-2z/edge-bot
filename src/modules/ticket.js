@@ -369,10 +369,14 @@ function renderTypes(cfg) {
 function renderType(cfg, id) {
   const ty = cfg.types.find((x) => x.id === id);
   if (!ty) return renderTypes(cfg);
+  const index = cfg.types.indexOf(ty);
   const e = embed()
     .setTitle(`${ty.emoji ? ty.emoji + ' ' : ''}${ty.label}`)
     .setDescription(ty.description ? truncate(ty.description, 300) : '_Pas de description_')
-    .addFields({ name: 'Rôle à ping', value: ty.roleId ? `<@&${ty.roleId}>` : 'Aucun', inline: false });
+    .addFields(
+      { name: 'Rôle à ping', value: ty.roleId ? `<@&${ty.roleId}>` : 'Aucun', inline: false },
+      { name: 'Position', value: `${index + 1} / ${cfg.types.length}`, inline: false },
+    );
   return {
     embeds: [e],
     components: [
@@ -381,6 +385,12 @@ function renderType(cfg, id) {
         button(`cfg:ticket:typerole:${id}`, 'Rôle à ping', ButtonStyle.Secondary, '🔔'),
         button(`cfg:ticket:typedel:${id}`, 'Supprimer', ButtonStyle.Danger, '🗑️'),
         button('cfg:ticket:view:types', '◀ Retour', ButtonStyle.Secondary),
+      ),
+      row(
+        button(`cfg:ticket:typeup:${id}`, 'Monter', ButtonStyle.Secondary, '⬆️').setDisabled(index <= 0),
+        button(`cfg:ticket:typedown:${id}`, 'Descendre', ButtonStyle.Secondary, '⬇️').setDisabled(
+          index >= cfg.types.length - 1,
+        ),
       ),
     ],
   };
@@ -597,6 +607,17 @@ async function handleComponent(interaction) {
         save(guild.id, cfg);
       }
       return interaction.update(render(`type:${arg}`, guild));
+    }
+
+    case 'typeup':
+    case 'typedown': {
+      const index = cfg.types.findIndex((x) => x.id === arg);
+      const target = action === 'typeup' ? index - 1 : index + 1;
+      if (index >= 0 && target >= 0 && target < cfg.types.length) {
+        [cfg.types[index], cfg.types[target]] = [cfg.types[target], cfg.types[index]];
+        save(guild.id, cfg);
+      }
+      return interaction.update(render('types', guild));
     }
 
     case 'typerole': {
