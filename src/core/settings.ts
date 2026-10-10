@@ -299,7 +299,31 @@ export class Config {
   private cache = new Map<string, { v: unknown; t: number }>();
   private static TTL = 20_000;
 
-  constructor(private db: Db, private registre: Registre, private onChange: (module: string) => void = () => void 0) {}
+  /** `alerte` sert une seule fois par erreur de table : voir plus bas. */
+  constructor(
+    private db: Db,
+    private registre: Registre,
+    private onChange: (module: string) => void = () => void 0,
+    private alerte: (message: string) => void = () => void 0,
+    private alarme = { dite: false },
+  ) {}
+
+  /**
+   * Lire la valeur brute. Si la table n'existe pas encore (migration `module_settings` pas
+   * collée dans Supabase) ou que l'API tousse, on retombe sur le defaut declare et on le dit
+   * UNE fois : un bot qui ne peut pas lire ses reglages doit continuer de parler aux gens.
+   */
+  private async brut(def: SettingDef): Promise<unknown> {
+    try {
+      return await store.lire(this.db, def);
+    } catch (e) {
+      if (!this.alarme.dite) {
+        this.alarme.dite = true;
+        this.alerte(`réglages illisibles (${(e as Error).message.slice(0, 120)}) : Edge tourne sur ses valeurs par défaut. Colle supabase/schema.sql dans l’éditeur SQL de Supabase (c’est idempotent) pour /edge config.`);
+      }
+      return null;
+    }
+  }
 
   defs(module: string): SettingDef[] { return reglagesDe(this.registre, module); }
   def(module: string, cle: string): SettingDef | undefined { return this.registre.get(module)?.get(cle); }
@@ -314,7 +338,7 @@ export class Config {
     const k = `${module}:${cle}`;
     const hit = this.cache.get(k);
     if (hit && hit.t > Date.now()) return hit.v;
-    const brut = await store.lire(this.db, def);
+    const brut = await this.brut(def);
     const v = brut === null || brut === undefined ? def.defaut : normaliser(def, brut);
     this.cache.set(k, { v, t: Date.now() + Config.TTL });
     return v;
@@ -323,7 +347,7 @@ export class Config {
   async tout(module: string): Promise<Record<string, { valeur: unknown; parDefaut: boolean; def: SettingDef }>> {
     const out: Record<string, { valeur: unknown; parDefaut: boolean; def: SettingDef }> = {};
     for (const def of this.defs(module)) {
-      const brut = await store.lire(this.db, def);
+      const brut = await this.brut(def);
       const valeur = brut === null || brut === undefined ? def.defaut : normaliser(def, brut);
       out[def.cle] = { valeur, parDefaut: JSON.stringify(valeur) === JSON.stringify(def.defaut), def };
     }
@@ -362,7 +386,7 @@ export class Config {
   async exporter(module: string): Promise<Record<string, unknown>> {
     const out: Record<string, unknown> = {};
     for (const def of this.defs(module)) {
-      const brut = await store.lire(this.db, def);
+      const brut = await this.brut(def);
       if (brut !== null && brut !== undefined) out[def.cle] = brut;
     }
     return out;

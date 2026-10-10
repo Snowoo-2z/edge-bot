@@ -798,6 +798,20 @@ test('réglages : un défaut déclaré == le fallback réellement lu au pied du 
   }
 });
 
+test('réglages : une base sans la table module_settings ne casse rien — défauts + une seule alerte', async () => {
+  const db = Db.memory();
+  const registre = construireRegistre([{ key: 'test', label: 'Test', reglages: [def({ cle: 'max', type: 'nombre', label: 'Max', defaut: 3 })] }]);
+  (db as unknown as { one: (t: string, w?: unknown) => Promise<never> }).one = async () => {
+    throw new Error('could not find the relation module_settings (42P01)');
+  };
+  let alertes = 0;
+  const cfg = new Config(db, registre, () => void 0, () => { alertes++; });
+  assert.equal(await cfg.pour('test').num('max'), 3, 'le module doit lire son défaut, pas une exception');
+  assert.equal(await cfg.pour('test').num('max'), 3);
+  assert.deepEqual(Object.keys(await cfg.exporter('test')), [], 'exporter sur une base muette renvoie vide, pas une erreur');
+  assert.equal(alertes, 1, `une seule alerte, pas une par message lu : ${alertes}`);
+});
+
 test('réglages : régler / lire / oublier / exporter, sur la vraie couche de stockage', async () => {
   const db = Db.memory();
   const defs: SettingDef[] = [

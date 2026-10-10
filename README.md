@@ -221,7 +221,7 @@ entier sans redémarrer. Sauf `bot.maintenance`, tous sont aussi visibles et ré
 
 ```bash
 npm run typecheck   # 0 erreur
-npm test            # 53 tests purs : barèmes, tirage pondéré, détecteurs, permissions, structure, registre
+npm test            # 54 tests purs : barèmes, tirage pondéré, détecteurs, permissions, structure, registre
                     #   db (les 3 moteurs : mémoire, pg, API Supabase), sonde HTTP, autoping
 npm run dry         # 8 scénarios de serveur (conforme, salon renommé, rôle oublié, fuite @everyone…)
 ```

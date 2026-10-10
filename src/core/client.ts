@@ -132,7 +132,7 @@ async function start(client: Client<true>, modules: EdgeModule[], onProgress?: (
     // dans la base : on redemande le panneau du module concerne (idempotent, a chaud).
     const mod = modules.find((x) => x.key === m);
     if (mod?.panels) void safeRun('panneaux ' + m, () => mod.panels!(ctx));
-  });
+  }, (message: string) => log.warn(message));
 
   /**
    * Le style global (couleur, pied de page, pings de roles) est lu au demarrage puis re-pose a
