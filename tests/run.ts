@@ -414,7 +414,7 @@ test('sonde : un port deja pris ne tue pas le bot', async () => {
   await h!.close();
 });
 
-test('keep-alive : ping immediat puis arret net (les plans gratuits qui dorment)', async () => {
+test('keep-alive : ping immediat puis arret net (le minuteur ne survit pas a un stop)', async () => {
   let n = 0;
   const srv = createServer((_q, res) => { n += 1; res.writeHead(200); res.end('pong'); }).listen(18095);
   await new Promise((r) => srv.once('listening', r));

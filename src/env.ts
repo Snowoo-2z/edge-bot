@@ -13,7 +13,7 @@ const Schema = z.object({
   EDGE_DRY_RUN: booleen('false'),
   EDGE_LOG_LEVEL: z.preprocess(vide, z.enum(['debug', 'info', 'warn', 'error']).default('info')),
   // Les trois variables ci-dessous ne servent QU'AU DEPLOIEMENT (voir README § 7).
-  // Un hebergeur (Koyeb, Render, Fly, Railway) fournit PORT : sans port qui repond,
+  // Un hebergeur (Northflank, Render, Fly, Railway) fournit PORT : sans port qui repond,
   // il juge le service casse ou l'endort, et le bot disparait du serveur.
   PORT: z.preprocess(vide, z.string().optional().refine((s) => s === undefined || /^\d{2,5}$/.test(s), 'PORT doit etre un numero de port (ou vide)')),
   EDGE_HEALTH: booleen('false'),

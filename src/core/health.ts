@@ -1,5 +1,5 @@
 /**
- * Sante HTTP pour les hebergeurs. Koyeb, Render, Fly et Railway veulent tous un port
+ * Sante HTTP pour les hebergeurs. Northflank, Render, Fly et Railway veulent tous un port
  * qui repond : sans lui, soit le deploiement est tenu pour casse, soit le service part
  * en veille — et un bot Discord en veille ne repond plus a personne.
  *
@@ -42,7 +42,7 @@ export interface HealthOpts {
   /** Peut etre async : un ping base peut trainer, on ne bloque pas la sonde pour autant. */
   status: () => Status | Promise<Status>;
   log?: (msg: string) => void;
-  /** Koyeb/Railway exposent la variable PORT ; on écoute sur 0.0.0.0 obligatoirement. */
+  /** L'hébergeur fournit PORT (ou on le fige a 8080) ; sur 0.0.0.0 obligatoirement. */
   host?: string;
 }
 
@@ -120,7 +120,13 @@ export function startHealth(opts: HealthOpts): HealthHandle | null {
   return { port: opts.port, close: () => new Promise<void>((resolve) => (srv.listening ? srv.close(() => resolve()) : resolve())) };
 }
 
-/** Certains plans gratuits endorment un service qui ne recoit aucun appel entrant. */
+/**
+ * Reveil de supervision : tape une URL toutes les N minutes (utile pour prevenir un
+ * moniteur, ou garder chaude une route publique). Mais cela ne REVEILLE PAS un service
+ * deja endormi par la plateforme : son minuteur est gele avec lui. Pour un plan qui dort
+ * sur inactivite (Render), il faut un sondeur EXTERNE sur /health (UptimeRobot gratuit,
+ * 5 min) -- ou un hebergeur qui ne dort pas, comme le Sandbox de Northflank.
+ */
 export function startKeepalive(url: string, everyMs = 4 * 60_000, log?: (msg: string) => void): () => void {
   let dejaAverti = false;
   const ping = (): void => {

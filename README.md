@@ -101,39 +101,72 @@ le passe dans le vrai resolveur et le vrai rapport d'écart, et te montre **quel
 
 ## 4. Déployer gratuitement (le bot doit tourner 24 h/24)
 
-Un bot Discord n'est **pas** un site web : il tient une connexion sortante en permanence.
-Les plans gratuits qui dorment quand il n'y a pas de trafic entrant le coupent donc du
-serveur au bout d'un quart d'heure. C'est le seul piège du sujet — et Edge y répond :
-il ouvre une sonde HTTP dès que l'hébergeur fournit `PORT` (`GET /health` répond 200
-dès la première seconde, `GET /ready` seulement quand Discord et la base sont bons).
+Un bot Discord n'est **pas** un site web : il tient une connexion sortante en permanence,
+et n'a **aucun** trafic entrant. Les plateformes qui dorment sans trafic entrant le
+déconnectent donc en 15 minutes. C'est le seul vrai piège du sujet — et c'est pour ça
+qu'Edge ouvre une sonde HTTP dès qu'on lui donne un `PORT` : `GET /health` répond 200 dès
+la première seconde, `GET /ready` seulement quand Discord et la base sont bons.
 
-| Hébergeur | Gratuit ? | Verdict pour Edge |
+**État du gratuit en octobre 2026** (vérifié sur les pages de prix, pas sur des blogs de 2024) :
+
+| Plateforme | Vraiment gratuit ? | Verdict pour Edge |
 | --- | --- | --- |
-| **Koyeb** | 1 service gratuit, 512 MB, **pas de mise en veille** | **Le meilleur choix ici.** Git → Dockerfile détecté tout seul, `PORT` fourni, tu pointes la santé sur `/health`. |
-| **Oracle Cloud — Always Free** | un vrai serveur ARM, 12 à 24 Go de RAM, à vie | Le plus solide (et le plus instructif). CB demandée à l'inscription. `sudo bash deploy/vps.sh` et c'est parti. |
-| **Fly.io** | petite allowance de VM | Correct, **à condition** de mettre `auto_stop_machines = "off"` dans `fly.toml` (déjà fait ici), sinon il s'endort. |
-| **Railway** | 5 $ de crédit/mois | Un bot de cette taille consomme ~2 $ : ça passe chaque mois. Le plus simple des quatre. |
-| **Render** | 750 h/mois, **mais endormi sans trafic** | Possible avec `KEEPALIVE_URL` (Edge se réveille tout seul), sinon non. |
-| les « bot hosting » 100 % gratuits | oui (128-256 MB) | Trop juste pour 23 modules, et surtout : **l'hébergeur lit ton token**. À éviter. |
+| **Northflank** (plan **Sandbox**) | **oui**, vérifié sur leur page de prix : « *Always-on-compute — no sleeping :)* », 2 services + 1 base + 2 cron gratuits | **Le successeur direct de Koyeb : c'est lui qu'il te faut.** CB demandée pour vérifier l'identité (0 € débité). Il build depuis le `Dockerfile` du repo : aucun fichier de config à écrire. |
+| **Oracle Cloud — Always Free** | oui : VM ARM 2 OCPU / 12 Go à vie (rabaissée en juin 2026) | Le plus solide, et le seul gratuit qu'**aucun rachat ne peut te retirer**. CB + un peu de Linux. `sudo bash deploy/vps.sh`. |
+| **Un Raspberry Pi ou un vieux PC portable** | oui, 0 €, et ça dort jamais si tu le laisses branché | `deploy/vps.sh` fait exactement ça. C'est l'option « je ne donne ma CB à personne ». |
+| **Render** (free) | oui, **sans CB**, 750 h/mois | Dort après 15 min sans trafic **entrant**. Utilisable **avec un pingeur externe** (UptimeRobot gratuit, 5 min) — voir plus bas. |
+| **Railway** | essai 5 $ (30 jours), puis 1 $/mois | 1 $/mois ne couvre pas un 24/7 : compte ~5 $/mois. Le déploiement le plus simple, si tu veux en finir en 5 minutes. |
+| **Fly.io** | non : plus d'allocation gratuite (essai 2 h de VM), CB | ~2 $/mois. `fly.toml` fourni, avec `auto_stop_machines = "off"` (sans ça, il s'endort). |
+| **Koyeb** | **non — fermé** | Racheté par Mistral le 17 février 2026 : le plan Starter gratuit est supprimé pour les nouveaux, entrée à 29 $/mois + CB (empreinte de 29 $). Les anciens comptes Starter gardent leurs conditions. |
+| les « free bot hosting » (Pterodactyl, 128-256 Mo) | oui | Trop juste pour 23 modules, renouvellements maniaques, et surtout : **l'hébergeur lit ton token**. |
 
-### Koyeb en 6 étapes (ma reco)
+### Northflank en 8 étapes (ma reco)
 
-1. Developer Portal → ton app → **Bot** : coche `Server Members Intent`, `Message Content Intent`,
-   `Guild Moderation Intent`, puis copie le **token**.
-2. Koyeb → *Create Web Service* → **GitHub** → `Snowoo-2z/edge-bot`, branche `main`.
-   Le `Dockerfile` est détecté ; sinon choisis « Docker ».
-3. Région **Paris (`par`)**, instance **Free**, 1 worker.
-4. Onglet *Environment variables* : `DISCORD_TOKEN`, `DATABASE_URL` (Supabase → Connection string →
-   **session pooler, port 5432**), `GUILD_ID=1558076024778919946`. **Ne mets pas `PORT`** : Koyeb le fournit.
-5. Health check : path `/health`, port `8080`, délai initial 45 s.
-6. Déploie, puis ouvre `https://<ton-service>.koyeb.app/health` : tu dois lire
-   `"pret": true`. Les commandes `/edge` arrivent dans Discord 2 secondes après.
+1. Developer Portal → ton app → **Bot** : coche `Server Members Intent`, `Message Content
+   Intent`, `Guild Moderation Intent`, puis copie le **token**.
+2. northflank.com → *Sign up with GitHub* → **Create new project** (le plan Sandbox est à 0 € ;
+   ils demandent une CB pour vérifier l'identité, rien n'est débité).
+3. Dans le projet → **Create service** → **Run service** → *Deploy from Git provider* →
+   `Snowoo-2z/edge-bot`, branche `main`. Source type : **Docker** (le `Dockerfile` du repo est
+   détecté, region de build au choix).
+4. Plan de compute : prends **`nf-compute-20`** (0,2 vCPU / **512 Mo**). `nf-compute-10`
+   (256 Mo) fait tourner Edge mais sans aucune marge — un giveaway à 300 participants ou
+   un `/audit structure` complet peut le faire sortir de ses gonds. La sonde `/health`
+   renvoie `ramMb` : c'est là que tu vois la vraie conso, en direct.
+5. **Advanced → Environment variables** :
+   ```
+   DISCORD_TOKEN   = <ton token>
+   DATABASE_URL    = <Supabase → Connection string → session pooler, port 5432>
+   GUILD_ID        = 1558076024778919946
+   EDGE_REQUIRE_MESSAGE_CONTENT = true
+   PORT            = 8080
+   ```
+   Chez Northflank le port n'est **pas** injecté automatiquement : c'est toi qui le fixes,
+   et il doit correspondre à celui du `Dockerfile` (`EXPOSE 8080`).
+6. **Add exposed port** (ou *Ingress*) : port `8080`, visibilité **interne** suffit — le bot
+   n'a besoin de personne côté entrant. Puis **Health check** : port `8080`, path `/health`,
+   délai initial 45 s, intervalle 60 s.
+7. **Deploy**. Si le dashboard dit « no capacity » dans la région gratuite, change de région
+   (Paris/Francfort) et relance : c'est un souci de quota, pas de config.
+8. Ouvre l'URL du service suivie de `/health` : `"pret": true` = les commandes arrivent.
+
+### Si tu ne veux donner ta CB nulle part : Render + UptimeRobot
+
+- Render → *New +* → **Web Service** → le repo → Runtime **Docker** → région **Francfort** →
+  instance **Free** → les mêmes variables d'env (Render fournit `PORT` tout seul) →
+  **Health Check Path** = `/health`.
+- **Le point qui make ou break** : un service **endormi ne peut pas se réveiller tout seul**
+  (son propre minuteur est gelé avec lui). `KEEPALIVE_URL` ne sert donc **pas** à ça —
+  il faut un ping **venu de l'extérieur** : UptimeRobot (gratuit) → *Add New Monitor* →
+  *HTTP(s)* → `https://<ton-service>.onrender.com/health` → 5 min.
+- Résultat : ~1 minute de froid au réveil, puis le bot répond. Ça marche, mais c'est du
+  bricolage ; Northflank ou un Pi à la maison font ça mieux et pour le même prix.
 
 ### VPS gratuit (Oracle) ou machine à la maison
 
 ```bash
 git clone https://github.com/Snowoo-2z/edge-bot /tmp/edge && cd /tmp/edge
-sudo bash deploy/vps.sh          # node 22 + utilisateur dédié + systemd, et c2019est tout
+sudo bash deploy/vps.sh          # node 22 + utilisateur dédié + systemd, et c'est tout
 nano /etc/edge-bot.env           # DISCORD_TOKEN + DATABASE_URL
 sudo bash deploy/vps.sh          # relance : cette fois il démarre
 journalctl -u edge-bot -f        # les logs en direct
@@ -154,7 +187,7 @@ Une coupure Discord, un serveur pas encore invité, une base qui met 3 s à rép
 pas fatal. Le processus **reste vivant**, `GET /health` répond 200 avec la raison honnête
 (`"raison": "Discord injoignable : …"`), `GET /ready` répond 503 tant que ce n'est pas prêt,
 et Edge réessaie avec un retard qui grandit (5 s → 15 s → 30 s → 1 min → 2 min → 5 min).
-Un hébergeur qui voit `/health` en vie ne redémarre pas le service, donc **les commandes
+Une plateforme qui voit `/health` en vie ne redémarre pas le service, donc **les commandes
 slash ne sautent pas** et le bot se rattrape tout seul dès que Discord revient — y compris
 si tu l'invites pendant qu'il attend.
 
@@ -171,7 +204,7 @@ pour dépassement de RAM est l'accident le plus probable, et il se lit là.
 
 ### Le token, sérieusement
 
-Le token ne vit que dans les variables d'environnement de l'hébergeur (et dans `.env`,
+Le token ne vit que dans les variables d'environnement de la plateforme (et dans `.env`,
 ignoré par Git). Quiconque le lit peut faire **tout ce que le rôle Edge permet** : bannir,
 supprimer des salons, changer les permissions. S'il a été collé quelque part, dans un
 ticket, un canal, un historique de commit → Developer Portal → **Reset Token**, puis
@@ -201,7 +234,7 @@ src/logic/             barèmes, détecteurs, tirage pondéré — pur, testable
 src/modules/           23 modules, même forme : commandes / composants / listeners / jobs / sync
 src/db/                Db (pg + mémoire), migrate
 src/dryrun/            faux serveur + harnais de simulation (npm run dry)
-Dockerfile             image node:22-alpine non-root, pour Koyeb/Fly/Railway/Render/compose
+Dockerfile             image node:22-alpine non-root, pour Northflank/Fly/Railway/Render/compose
 deploy/                unit systemd + installeur VPS (Ubuntu 24.04, Oracle Always Free, RPi)
 render.yaml fly.toml railway.json docker-compose.yml   un fichier de config par hébergeur
 migrations/            0001_init.sql — 20 tables

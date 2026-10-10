@@ -46,7 +46,7 @@ async function snapshot(): Promise<Status> {
 // Sur un hebergeur, PORT est fourni par la plateforme : la sonde s'ouvre et prouve
 // qu'Edge vit meme pendant une coupure Discord. En local, aucun port n'est ouvert.
 const sonde = startHealth({ port: env.port, status: snapshot, log: (m) => log.info(m) });
-if (env.port === 0) log.debug('pas de PORT => sonde HTTP fermée (normal en local, obligatoire sur Koyeb/Render/Fly)');
+if (env.port === 0) log.debug('pas de PORT => sonde HTTP fermée (normal en local, exigée par Northflank/Render/Fly)');
 
 let reveil: (() => void) | null = null;
 if (env.keepaliveUrl) {

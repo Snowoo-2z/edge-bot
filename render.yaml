@@ -1,6 +1,7 @@
 # Blueprint Render : bouton "New +" > Blueprint > ce repo, sur le plan gratuit.
-# Attention : le plan gratuit endort un service sans trafic ENTRANT. La sonde /health
-# ne suffit pas a elle seule — mets KEEPALIVE_URL (voir README) ou prends Koyeb.
+# Attention : le plan gratuit ENDORT un service qui ne recoit pas de trafic ENTRANT, et
+# un process endormi ne peut pas se reveiller lui-meme. Mets un sondeur EXTERNE sur
+# /health (UptimeRobot gratuit, 5 min) — ou prends Northflank, dont le Sandbox ne dort pas.
 services:
   - type: web
     name: edge-bot
