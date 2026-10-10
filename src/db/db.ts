@@ -7,6 +7,7 @@
  * les deux modes, ce qui permet de tester la logique métier sans Discord ni BDD.
  */
 import pg from 'pg';
+import { RestBackend } from './rest.js';
 
 export type Where = Record<string, string | number | boolean | null | string[] | number[]>;
 export interface FindOpts { where?: Where; orderBy?: string; desc?: boolean; limit?: number }
@@ -18,17 +19,24 @@ const id = (s: string): string => {
   return s;
 };
 
-interface Backend {
+export interface Backend {
+  readonly mode: 'pg' | 'rest' | 'memory';
   insert(table: string, row: Row): Promise<Row>;
   all(table: string, opts: FindOpts): Promise<Row[]>;
   update(table: string, where: Where, patch: Row): Promise<Row | null>;
   remove(table: string, where: Where): Promise<number>;
+  /** Compte sans transporter les lignes (le mode API a un en-tete Content-Range pour ca). */
+  count?(table: string, where?: Where): Promise<number>;
+  /** Fonction SQL (see supabase/schema.sql) : le seul moyen de faire une agregation en mode API. */
+  rpc<T>(fn: string, args?: Record<string, unknown>): Promise<T[]>;
   raw<T>(text: string, params?: unknown[]): Promise<T[]>;
+  ping?(): Promise<boolean>;
 }
 
 /* ------------------------------------------------------------------ pg backend */
 
 class PgBackend implements Backend {
+  readonly mode = 'pg' as const;
   constructor(private pool: pg.Pool) {
     // Le *Transaction pooler* de Supabase (port 6543, pgbouncer) casse sur les
     // requêtes préparées : on les désactive, et on le détecte depuis l'URL.
@@ -76,6 +84,21 @@ class PgBackend implements Backend {
     const { rows } = await this.q(text, params as unknown[]);
     return rows as T[];
   }
+
+  async count(table: string, where?: Where): Promise<number> {
+    const { text, params } = whereSql(where);
+    const { rows } = await this.q(`SELECT count(*)::int AS n FROM ${id(table)}${text ? ` WHERE ${text}` : ''}`, params);
+    return Number(rows[0]?.n ?? 0);
+  }
+
+  async rpc<T>(fn: string, args: Record<string, unknown> = {}): Promise<T[]> {
+    const cles = Object.keys(args);
+    const text = `SELECT ${id(fn)}(${cles.map((k, i) => `${id(k)} => $${i + 1}`).join(', ')}) AS res`;
+    const { rows } = await this.q(text, cles.map((k) => enc(args[k])));
+    return rows.map((r) => r.res as T);
+  }
+
+  async ping(): Promise<boolean> { await this.q('SELECT 1'); return true; }
 }
 
 function enc(v: unknown): unknown {
@@ -108,6 +131,7 @@ function whereSql(where: Where | undefined, offset = 0): { text: string; params:
 /* -------------------------------------------------------------- memory backend */
 
 class MemoryBackend implements Backend {
+  readonly mode = 'memory' as const;
   private tables = new Map<string, Row[]>();
   private seq = new Map<string, number>();
 
@@ -154,6 +178,8 @@ class MemoryBackend implements Backend {
     return before.length - keep.length;
   }
 
+  async rpc<T>(): Promise<T[]> { return []; }
+
   async raw<T>(): Promise<T[]> {
     throw new Error('SQL brut indisponible en mode mémoire (pas de DATABASE_URL).');
   }
@@ -188,9 +214,24 @@ export class Db {
     return new Db(new PgBackend(pool), true);
   }
 
+  /**
+   * Supabase par son API HTTP (PostgREST) : `https://<ref>.supabase.co` + cle service_role.
+   * C'est le chemin sans mot de passe de la base, sans pooler, sans IP a autoriser (README § 1).
+   */
+  static rest(opts: { url: string; key: string; schema?: string; timeoutMs?: number; log?: (m: string) => void }): Db {
+    return new Db(new RestBackend({ ...opts, url: opts.url, key: opts.key, schema: opts.schema ?? 'public', timeoutMs: opts.timeoutMs ?? 20_000 }), true);
+  }
+
   static memory(): Db { return new Db(new MemoryBackend(), false); }
 
   get isPersisted(): boolean { return this.persisted; }
+  get mode(): 'pg' | 'rest' | 'memory' { return this.b.mode; }
+  /** Ce que les logs et `/edge sante` doivent annoncer. */
+  get libelle(): string { return this.mode === 'rest' ? 'API Supabase' : this.mode === 'pg' ? 'Postgres direct' : 'mémoire'; }
+
+  /** Fonction SQL declaree dans supabase/schema.sql (agregations, menage, diagnostics). */
+  async rpc<T>(fn: string, args: Record<string, unknown> = {}): Promise<T[]> { return this.b.rpc<T>(fn, args); }
+  async rpc1<T>(fn: string, args: Record<string, unknown> = {}): Promise<T | null> { return (await this.b.rpc<T>(fn, args))[0] ?? null; }
 
   async insert(table: string, row: Row): Promise<Row> { return this.b.insert(table, row); }
   async upsert(table: string, key: string[], row: Row, patch?: Row): Promise<Row> {
@@ -205,7 +246,10 @@ export class Db {
     const rows = await this.b.all(table, { where, orderBy, limit: 1 });
     return rows[0] ?? null;
   }
-  async count(table: string, where?: Where): Promise<number> { return (await this.b.all(table, { where })).length; }
+  async count(table: string, where?: Where): Promise<number> {
+    if (this.b.count) return this.b.count(table, where);
+    return (await this.b.all(table, { where })).length;
+  }
   async update(table: string, where: Where, patch: Row): Promise<Row | null> { return this.b.update(table, where, patch); }
   async remove(table: string, where: Where): Promise<number> { return this.b.remove(table, where); }
   async delete(table: string, where: Where): Promise<number> { return this.b.remove(table, where); }
@@ -245,7 +289,10 @@ export class Db {
   async raw<T = Row>(text: string, params?: unknown[]): Promise<T[]> { return this.b.raw<T>(text, params); }
 
   async ping(): Promise<boolean> {
-    try { await this.b.raw('SELECT 1'); return true; } catch { return !this.persisted; }
+    try {
+      if (this.b.ping) return await this.b.ping();
+      await this.b.raw('SELECT 1'); return true;
+    } catch { return !this.persisted; }
   }
 
   async track(kind: string, payload: Row = {}): Promise<void> {

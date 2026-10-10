@@ -4,6 +4,7 @@
  * Les tests de structure passent par le faux serveur de src/dryrun/fake.ts.
  */
 import { strict as assert } from 'node:assert';
+import { readFileSync, readdirSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { PermissionFlagsBits } from 'discord.js';
 import { afterCheck, automodStep, escalate, isActive, pointsAfter, weightOf, AUTOMOD_LADDER, WARN_LADDER } from '../src/logic/ladders.js';
@@ -19,7 +20,7 @@ import { fakeGuild } from '../src/dryrun/fake.js';
 import { inviteUrl } from '../src/core/client.js';
 import { fr } from '../src/core/copy.js';
 import { startHealth, startKeepalive, statusOf } from '../src/core/health.js';
-import { dbUrlProblem, env, resolveKeepalive, resolvePort } from '../src/env.js';
+import { dbUrlProblem, env, jwtRole, resolveKeepalive, resolvePort, resolveSupabase, supabaseProblem } from '../src/env.js';
 
 type Test = { name: string; fn: () => void | Promise<void> };
 const tests: Test[] = [];
@@ -475,7 +476,7 @@ test('autoping : une URL vide ou absurde est signalee, pas laissee trainer en re
 
 test('DATABASE_URL : on explique au lieu de laisser pg cracher « invalid connection »', () => {
   const jwt = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.' + 'a'.repeat(40) + '.' + 'b'.repeat(40);
-  assert.match(dbUrlProblem(jwt) ?? '', /service_role/, 'une clé API collée dans DATABASE_URL = le cas le plus fréquent');
+  assert.match(dbUrlProblem(jwt) ?? '', /SERVICE_ROLE/i, 'une clé API collée dans DATABASE_URL = le cas le plus fréquent');
   assert.match(dbUrlProblem('https://xyz.supabase.co/rest/v1/') ?? '', /postgres:\/\//);
   assert.match(dbUrlProblem('postgres://postgres:@localhost:5432/postgres') ?? '', /local/i);
   assert.match(dbUrlProblem('postgres://postgres:mdp@db.x.supabase.co:5433/postgres') ?? '', /5433/);
@@ -483,6 +484,173 @@ test('DATABASE_URL : on explique au lieu de laisser pg cracher « invalid connec
   assert.equal(dbUrlProblem('postgres://postgres:mdp@db.x.supabase.co:5432/postgres'), null, 'direct : nickel');
   assert.equal(dbUrlProblem('postgresql://postgres:[m@dp]@aws-0-eu-central-1.pooler.supabase.com:6543/postgres'), null, 'transaction pooler 6543 : nickel');
   assert.equal(dbUrlProblem(undefined), null, 'absent = pas une erreur, juste pas de stockage');
+});
+
+/* ------------------------------------------------------------------ mode API Supabase */
+
+type VueRequete = { method: string; path: string; query: string; body: any; prefer?: string; apikey?: string; auth?: string };
+type Reponse = { status?: number; json?: unknown; texte?: string; headers?: Record<string, string> };
+
+/** Un faux PostgREST : on verifie les requetes EMISES, pas une imitation de la base. */
+function fauxSupabase(repondre: (q: { method: string; path: string; searchParams: URLSearchParams; body: any }) => Reponse | undefined) {
+  const vus: VueRequete[] = [];
+  const srv = createServer((req, res) => {
+    let buf = '';
+    req.on('data', (c) => { buf += c; });
+    req.on('end', () => {
+      const u = new URL(req.url ?? '/', 'http://127.0.0.1');
+      const body = buf ? JSON.parse(buf) : undefined;
+      vus.push({ method: req.method ?? '?', path: u.pathname, query: u.search, body, prefer: req.headers.prefer as string | undefined, apikey: req.headers.apikey as string | undefined, auth: req.headers.authorization as string | undefined });
+      let entete: Record<string, unknown> = { 'content-type': 'application/json' };
+      const r = repondre({ method: req.method ?? '?', path: u.pathname, searchParams: u.searchParams, body }) ?? { json: [] };
+      Object.assign(entete, r.headers ?? {});
+      res.writeHead(r.status ?? 200, entete as never);
+      res.end(r.texte ?? JSON.stringify(r.json ?? []));
+    });
+  });
+  return new Promise<{ port: number; vus: VueRequete[]; fermer: () => Promise<void> }>((resolve) => {
+    srv.listen(0, '127.0.0.1', () => {
+      const port = (srv.address() as { port: number }).port;
+      resolve({ port, vus, fermer: () => new Promise((r2) => void srv.close(() => r2(undefined))) });
+    });
+  });
+}
+
+const btoa = (o: unknown): string => Buffer.from(JSON.stringify(o)).toString('base64url');
+
+test('SUPABASE_URL : on accepte ce que le tableau de bord donne a copier, et rien d’autre', () => {
+  const cle = 'x'.repeat(40);
+  assert.deepEqual(resolveSupabase({ SUPABASE_URL: 'https://abcdefghijklmnopqrst.supabase.co', SUPABASE_SERVICE_ROLE_KEY: cle }),
+    { url: 'https://abcdefghijklmnopqrst.supabase.co', key: cle, schema: 'public' });
+  assert.equal(resolveSupabase({ SUPABASE_URL: 'abcdefghijklmnopqrst.supabase.co/', SUPABASE_SERVICE_ROLE_KEY: cle })?.url, 'https://abcdefghijklmnopqrst.supabase.co', 'sans protocole ni slash final');
+  assert.equal(resolveSupabase({ SUPABASE_URL: 'abcdefghijklmnopqrst', SUPABASE_SERVICE_ROLE_KEY: cle })?.url, 'https://abcdefghijklmnopqrst.supabase.co', 'référence nue du dashboard');
+  assert.equal(resolveSupabase({ SUPABASE_URL: 'https://abc.supabase.co/rest/v1', SUPABASE_SERVICE_ROLE_KEY: cle })?.url, 'https://abc.supabase.co', '/rest/v1 colle par-dessus');
+  assert.equal(resolveSupabase({ SUPABASE_URL: 'http://cleartext.example.com', SUPABASE_SERVICE_ROLE_KEY: cle }), null, 'jamais de cle en clair hors localhost');
+  assert.equal(resolveSupabase({ SUPABASE_URL: 'http://127.0.0.1:54324', SUPABASE_SERVICE_ROLE_KEY: cle })?.url, 'http://127.0.0.1:54324', 'Supabase auto-hébergé en local : OK');
+  assert.equal(resolveSupabase({ SUPABASE_URL: 'https://abc.supabase.co' }), null, 'URL sans cle = on ne devine rien');
+  assert.equal(resolveSupabase({ SUPABASE_URL: 'rien du tout', SUPABASE_SERVICE_ROLE_KEY: cle }), null);
+  assert.equal(resolveSupabase({ SUPABASE_URL: 'https://abc.supabase.co', SUPABASE_KEY: cle })?.key, cle, 'alias SUPABASE_KEY accepté');
+});
+
+test('la clé fournie est-elle la bonne ? jwtRole lit le JWT sans appeler Supabase', () => {
+  assert.equal(jwtRole(`${btoa({ alg: 'HS256' })}.${btoa({ role: 'service_role' })}.sig`), 'service_role');
+  assert.equal(jwtRole(`${btoa({})}.${btoa({ role: 'anon' })}.sig`), 'anon');
+  assert.equal(jwtRole('pas-un-jwt'), null, 'on n’invente pas un role');
+  assert.equal(jwtRole(undefined), null);
+  assert.match(supabaseProblem({ SUPABASE_URL: 'https://abc.supabase.co' }) ?? '', /SERVICE_ROLE/, 'un URL sans cle = message explicite');
+  assert.match(supabaseProblem({ SUPABASE_KEY: `${btoa({})}.${btoa({ role: 'anon' })}.s`, SUPABASE_URL: 'https://abc.supabase.co' }) ?? '', /service_role/, 'la cle anon doit etre refusee AVANT le premier ecrit');
+  assert.equal(supabaseProblem({ SUPABASE_URL: 'https://abc.supabase.co', SUPABASE_SERVICE_ROLE_KEY: `${btoa({})}.${btoa({ role: 'service_role' })}.s` }), null);
+  assert.equal(supabaseProblem({}), null, 'rien configure = rien a reprocher');
+});
+
+test('mode API : chaque operation de la facade devient la requete PostgREST attendue', async () => {
+  const s = await fauxSupabase(({ method, path }) => {
+    if (path === '/rest/v1/tickets' && method === 'POST') return { json: [{ id: 't-1', statut: 'open' }] };
+    if (path === '/rest/v1/tickets' && method === 'PATCH') return { json: [{ id: 't-1', statut: 'closed' }] };
+    if (path === '/rest/v1/tickets' && method === 'DELETE') return { json: [{ id: '1' }, { id: '2' }] };
+    if (path === '/rest/v1/tickets' && method === 'GET') return { json: [{ id: 't-1' }], headers: { 'content-range': '0-0/42' } };
+    if (path === '/rest/v1/rpc/edge_prune_events') return { json: [{ edge_prune_events: 7 }] };
+    return { json: [] };
+  });
+  try {
+    const db = Db.rest({ url: `http://127.0.0.1:${s.port}`, key: 'cle-de-test', timeoutMs: 5000 });
+    assert.equal(db.mode, 'rest');
+    assert.equal(db.libelle, 'API Supabase');
+
+    const ins = await db.insert('tickets', { id: 't-1', statut: 'open', ouvert_le: new Date('2026-10-10T12:00:00Z'), payload: { n: 1 } });
+    assert.equal(ins.id, 't-1');
+    const v0 = s.vus[0]!;
+    assert.equal(v0.method, 'POST');
+    assert.equal(v0.apikey, 'cle-de-test', 'la cle part en en-tete apikey…');
+    assert.equal(v0.auth, 'Bearer cle-de-test', '…et en Bearer, comme l’attend PostgREST');
+    assert.match(v0.prefer ?? '', /return=representation/, 'sinon on ne recupere pas la ligne inseree');
+    assert.equal(v0.body.ouvert_le, '2026-10-10T12:00:00.000Z', 'une Date devient un timestamp');
+    assert.deepEqual(v0.body.payload, { n: 1 }, 'un objet part en jsonb, pas en chaine');
+
+    await db.all('tickets', { where: { statut: 'open', id: ['12 34', '67'], refus_le: null }, orderBy: 'created_at', desc: true, limit: 3 });
+    const q = new URLSearchParams(s.vus[1]!.query);
+    assert.equal(q.get('select'), '*');
+    assert.equal(q.get('statut'), 'eq.open');
+    assert.equal(q.get('id'), 'in.("12 34","67")', 'IN avec valeur contenant une virgule, citee');
+    assert.equal(q.get('refus_le'), 'is.null');
+    assert.equal(q.get('order'), 'created_at.desc');
+    assert.equal(q.get('limit'), '3');
+
+    assert.equal(await db.count('tickets', { statut: 'open' }), 42, 'count lit l’en-tete Content-Range, pas les lignes');
+    assert.match(s.vus[2]!.prefer ?? '', /count=exact/);
+    assert.match(new URLSearchParams(s.vus[2]!.query).get('limit') ?? '', /^0$/, 'limite a zero : on ne transporte rien');
+
+    const upd = await db.update('tickets', { id: 't-1' }, { statut: 'closed' });
+    assert.equal(upd?.statut, 'closed');
+    assert.equal(s.vus[3]!.method, 'PATCH');
+
+    assert.equal(await db.remove('tickets', { id: 't-1' }), 2, 'le nombre de lignes rendues = le nombre supprime');
+    assert.equal(s.vus[4]!.method, 'DELETE');
+
+    assert.equal(await db.rpc1('edge_prune_events', { p_older_than: '2026-01-01T00:00:00Z' }), 7, 'une fonction SQL scalaire revient depouillee');
+    assert.equal(s.vus[5]!.path, '/rest/v1/rpc/edge_prune_events');
+    assert.deepEqual(s.vus[5]!.body, { p_older_than: '2026-01-01T00:00:00Z' });
+
+    assert.equal(await db.ping(), true, 'ping = une selection minuscule, pas SELECT 1');
+    assert.deepEqual(s.vus[6]!.path, '/rest/v1/kv_store');
+
+    // une liste vide ne peut matcher : on n'appelle meme pas le serveur
+    const avant = s.vus.length;
+    assert.deepEqual(await db.all('tickets', { where: { statut: [] } }), []);
+    assert.equal(await db.remove('tickets', { statut: [] }), 0);
+    assert.equal(s.vus.length, avant, 'aucune requete inutile');
+  } finally { await s.fermer(); }
+});
+
+test('mode API : upsert reste lire-puis-ecrire, et les erreurs deviennent des phrases', async () => {
+  const s = await fauxSupabase(({ path }) => {
+    if (path === '/rest/v1/kv_store') return { json: [{ key: 'panneaux', value: { a: 1 } }] };
+    return { json: [] };
+  });
+  try {
+    const db = Db.rest({ url: `http://127.0.0.1:${s.port}`, key: 'k', timeoutMs: 5000 });
+    await db.kv.set('panneaux', { a: 2 });
+    assert.deepEqual(s.vus.map((v) => v.method), ['GET', 'PATCH'], 'la ligne existe deja : on ne duplique pas');
+    await assert.rejects(db.raw('SELECT 1'), /diteur SQL/, 'le SQL brut doit etre refuse en termes clairs');
+  } finally { await s.fermer(); }
+
+  const mechant = await fauxSupabase(({ path }) => (path === '/rest/v1/tickets' ? { status: 404, json: { code: 'PGRST202', message: 'could not find the relation public.tickets' } } : { json: [] }));
+  try {
+    const db = Db.rest({ url: `http://127.0.0.1:${mechant.port}`, key: 'k', timeoutMs: 5000 });
+    await assert.rejects(db.all('tickets', {}), /schema\.sql/, 'table absente = on renvoie vers le fichier a coller');
+    assert.equal(await db.ping(), true, 'la table tickets manque mais l’API repond : /health ne doit pas crier a la panne de base');
+  } finally { await mechant.fermer(); }
+
+  const coupee = await fauxSupabase(() => ({ status: 401, json: { message: 'JWSError' } }));
+  try {
+    const db = Db.rest({ url: `http://127.0.0.1:${coupee.port}`, key: 'k', timeoutMs: 5000 });
+    await assert.rejects(db.all('tickets', {}), /service_role/, 'une cle refusee doit dire laquelle il faut');
+  } finally { await coupee.fermer(); }
+});
+
+test('mode API : un Supabase injoignable ne tue pas Edge (le bot continue de tourner)', async () => {
+  const db = Db.rest({ url: 'http://127.0.0.1:1', key: 'k', timeoutMs: 1500 });
+  assert.equal(await db.ping(), false, 'ping = false, pas une exception');
+  await assert.rejects(db.all('tickets', {}), /Supabase injoignable|reseau/i);
+});
+
+test('supabase/schema.sql est bien la copie a jour de migrations/*.sql (+ les 3 fonctions)', () => {
+  const mig = readdirSync('migrations').filter((f: string) => f.endsWith('.sql')).sort();
+  const gen = readFileSync('supabase/schema.sql', 'utf8');
+  assert.ok(mig.length >= 1, 'migrations absentes');
+  for (const f of mig) {
+    assert.ok(gen.includes(`-- ---- ${f} ----`), `${f} n'est pas reporte dans le fichier a coller`);
+    const sql = readFileSync(`migrations/${f}`, 'utf8').trim();
+    for (const ligne of sql.split('\n').filter((l: string) => l.trim().startsWith('CREATE TABLE') || l.trim().startsWith('CREATE INDEX'))) {
+      assert.ok(gen.includes(ligne.trim()), `ligne absente du fichier a coller : ${ligne.trim().slice(0, 60)}`);
+    }
+  }
+  for (const fn of ['edge_schema_check', 'edge_prune_events', 'edge_counts']) {
+    assert.ok(gen.includes(`FUNCTION ${fn}(`), `fonction API ${fn} manquante`);
+  }
+  const sql = gen.split('\n').filter((l: string) => !l.trim().startsWith('--')).join('\n');
+  assert.ok(!/DROP TABLE|DROP COLUMN|TRUNCATE|\bDELETE FROM [a-z_]+;/.test(sql.replace(/DELETE FROM bot_events\n  GET|DELETE FROM bot_events WHERE created_at < p_older_than;/, '')), 'le fichier a coller ne doit rien detruire (le menage passe par edge_prune_events)');
+  assert.ok(gen.includes("NOTIFY pgrst, 'reload schema'"), 'sinon PostgREST ne voit pas les tables neuves');
 });
 
 /* ------------------------------------------------------------------ lanceur */

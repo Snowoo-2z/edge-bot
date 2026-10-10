@@ -23,6 +23,8 @@ export interface Status {
   membres?: number;
   latenceWsMs?: number;
   base: 'ok' | 'absente' | 'ko';
+  /** Comment la base est atteinte : « API Supabase », « Postgres direct » ou « mémoire ». */
+  baseMode?: string;
   modulesActifs: number;
   modulesCoupes: [string, string][];
   jobs: number;
@@ -82,6 +84,7 @@ export function statusOf(b: Boot | null, whyNotReady?: string): Status {
     membres: b.ctx.guild.memberCount,
     latenceWsMs: ping > 0 ? Math.round(ping) : undefined,
     base: b.db.isPersisted ? 'ok' : 'absente',
+    baseMode: b.db.libelle,
     modulesActifs: 0,
     modulesCoupes: [...b.disabled.entries()],
     jobs: b.sched.jobCount,

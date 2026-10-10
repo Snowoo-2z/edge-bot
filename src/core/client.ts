@@ -1,6 +1,6 @@
 /** Demarrage d'Edge : client, structure, BDD, modules, commandes, listeners, ordonnanceur. */
 import { ActivityType, Client, GatewayIntentBits, Partials } from 'discord.js';
-import { dbUrlProblem, env } from '../env.js';
+import { dbUrlProblem, env, jwtRole, supabaseProblem } from '../env.js';
 import {
   BOT_PERMISSIONS, GUILD_ID, type CategoryKey, type ChannelKey, type PermName, type RoleKey,
   categoryDef, channelDef, roleDef,
@@ -98,11 +98,21 @@ async function start(client: Client<true>, modules: EdgeModule[], onProgress?: (
   if (!guild.available) { await guild.fetch(); }
 
   onProgress?.('base de données…');
-  const souci = dbUrlProblem(env.DATABASE_URL);
-  if (souci) log.error(`DATABASE_URL invalide : ${souci}\n   → Edge démarre quand même, en mémoire : tout est oublié au redémarrage (tickets, points, giveaways, dossiers).`);
-  const db = env.DATABASE_URL && !souci ? Db.pool(env.DATABASE_URL) : Db.memory();
-  if (!db.isPersisted) log.warn(souci ? 'stockage en mémoire (DATABASE_URL rejetée).' : 'DATABASE_URL absente => stockage en mémoire uniquement (tout se perd au restart).');
-  else await migrate(db);
+  const db = ouvrirBase(log);
+  if (!db.isPersisted) {
+    log.warn('aucune base joignable => stockage en mémoire uniquement (tout se perd au restart).');
+  } else if (db.mode === 'rest') {
+    // Le schema vient du fichier SQL colle dans l'editeur : on ne migre pas, on VERIFIE.
+    const etat = await verifierSchemaSupabase(db, log);
+    if (etat && etat.manquantes?.length) {
+      log.error(`schéma incomplet dans Supabase : ${etat.manquantes.join(', ')} — recolle supabase/schema.sql dans l'éditeur SQL puis relance.`);
+    } else if (etat) {
+      const total = Object.values(etat.lignes ?? {}).reduce((a, b) => a + Number(b), 0);
+      log.ok(`base : API Supabase · ${Object.keys(etat.lignes ?? {}).length} tables · ${total} lignes`);
+    }
+  } else {
+    await migrate(db);
+  }
 
   const s = resolveStructure(guild);
   const sched = new Scheduler(() => ctx!);
@@ -187,7 +197,8 @@ async function sweep(ctx: Ctx): Promise<void> {
   const cut = new Date(Date.now() - 1000 * 60 * 60 * 24 * 30);
   await ctx.db.delete('bot_events', {} as never).catch(() => void 0).finally(async () => {
     // bot_events: on ne garde que 30 jours (les lignes plus vieilles sont virees en SQL reel)
-    if (ctx.db.isPersisted) await ctx.db.raw('DELETE FROM bot_events WHERE created_at < $1', [cut.toISOString()]).catch(() => void 0);
+    // En mode API il n'y a pas de SQL brut : la fonction edge_prune_events fait le menage.
+    if (ctx.db.isPersisted) await ctx.db.rpc('edge_prune_events', { p_older_than: cut.toISOString() }).catch(() => void 0);
   });
   await ctx.db.delete('automod_hits', {} as never).catch(() => void 0);
 }
@@ -203,5 +214,41 @@ function wireLogSinks(ctx: Ctx): void {
       if (!(await ctx.db.flags.isOn(`log:${kind}`, true))) return;
       await ch.send({ content: line.slice(0, 1990), allowedMentions: { parse: [] } }).catch(() => void 0);
     });
+  }
+}
+
+/**
+ * Choix du moteur de persistance, dans l'ordre : API Supabase (SUPABASE_URL + cle), puis
+ * connexion directe (DATABASE_URL), puis memoire. Chaque rejet est EXPLIQUE dans les logs :
+ * une variable mal remplie ne doit jamais ressembler a une panne de Discord.
+ */
+export function ouvrirBase(log: Logger): Db {
+  const pbSupa = supabaseProblem({ SUPABASE_URL: process.env.SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY, SUPABASE_KEY: process.env.SUPABASE_KEY });
+  if (pbSupa) {
+    log.error(`config Supabase incomplète : ${pbSupa}\n   → Edge démarre quand même${env.DATABASE_URL ? ', sur DATABASE_URL.' : ' en mémoire : tout est oublié au redémarrage (tickets, points, giveaways, dossiers).'}`);
+  }
+  if (env.supabase && !pbSupa) {
+    const role = jwtRole(env.supabase.key);
+    log.info(`base : API Supabase · ${env.supabase.url.replace(/^https:\/\//, '')} · schéma ${env.supabase.schema}${role && role !== 'service_role' ? ` · ⚠ clé de rôle ${role}` : ''}`);
+    return Db.rest({ ...env.supabase, log: (m: string) => log.warn(m) });
+  }
+  const souci = dbUrlProblem(env.DATABASE_URL);
+  if (souci) {
+    log.error(`DATABASE_URL invalide : ${souci}\n   → Edge démarre quand même, en mémoire : tout est oublié au redémarrage (tickets, points, giveaways, dossiers).`);
+    return Db.memory();
+  }
+  if (env.DATABASE_URL) { log.info('base : Postgres direct (pg)'); return Db.pool(env.DATABASE_URL); }
+  return Db.memory();
+}
+
+
+
+/** `edge_schema_check()` — renvoie null si la fonction n'existe pas encore (vieux schema). */
+async function verifierSchemaSupabase(db: Db, log: Logger): Promise<{ manquantes?: string[]; lignes?: Record<string, number> } | null> {
+  try {
+    return await db.rpc1<{ manquantes?: string[]; lignes?: Record<string, number> }>('edge_schema_check');
+  } catch (e) {
+    log.error(`je n'ai pas pu vérifier le schéma (${(e as Error).message})`);
+    return null;
   }
 }

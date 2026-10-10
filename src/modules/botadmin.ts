@@ -85,7 +85,7 @@ export const botadmin: EdgeModule = {
             `· intents texte : ${c.content ? '✅ MessageContent (automod + XP actifs)' : '⚠️ MessageContent absent → automod/XP coupés (normal si tu ne l’as pas validé dans le Developer Portal)'}`,
             `· permissions : ${lacking.length ? `❌ manquent ${lacking.join(', ')}` : '✅ toutes celles attendues'}`,
             `· rôle « ${EDGE_ROLE_NAME} » position ${(c.guild.members.me?.roles.highest.position ?? '?')} / ${c.guild.roles.highest.position} (le plus haut du serveur)`,
-            `· BDD : ${dbOk ? (c.db.isPersisted ? '✅ Supabase/Postgres connecté' : '🟡 mémoire (non durable)') : '❌ injoignable — la partie stockage est coupée'}`,
+            `· BDD : ${dbOk ? (c.db.isPersisted ? `✅ ${c.db.libelle} connecté` : '🟡 mémoire (non durable)') : `❌ ${c.db.libelle} injoignable — la partie stockage est coupée`}`,
             `· ordonnanceur : ${jobs.length} job(s) en attente${failed.length ? `, ${failed.length} en échec` : ''}`,
             `· modules : ${MODULES.length - c.disabled.size}/${MODULES.length} actifs${c.disabled.size ? ` — coupés : ${[...c.disabled.keys()].join(', ')}` : ''}`,
           ].join('\n') }));

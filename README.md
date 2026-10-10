@@ -13,8 +13,9 @@ Les modules ne connaissent que des **clés** (`'mod'`, `'annonces'`), jamais des
 
 ```bash
 npm install
-cp .env.example .env       # puis colle DISCORD_TOKEN et DATABASE_URL
-npm run db:migrate         # applique migrations/*.sql sur Supabase
+cp .env.example .env       # puis colle DISCORD_TOKEN + les 2 valeurs Supabase
+                             # le schéma se colle dans Supabase (voir § Supabase ci-dessous) ;
+# npm run db:migrate ne sert que si tu tiens à la connexion directe par DATABASE_URL
 npm run dry                # simulation : Edge te dit s'il voit bien ton serveur
 npm run build && npm start
 ```
@@ -27,39 +28,50 @@ Sans token, `npm run dev` refuse de démarrer et te dit pourquoi (c'est voulu : 
 | --- | --- |
 | `DISCORD_TOKEN` | Jeton (Developer Portal → Bot → Token). **Jamais** commité : `.env` est dans `.gitignore`. |
 | `GUILD_ID` | ID du serveur géré. Edge refuse tout ailleurs. Défaut : `1558076024778919946`. |
-| `DATABASE_URL` | **URL de connexion Postgres** de Supabase (Project settings → Database → *Connection string*). **Pas** une clé `service_role`/`anon` : `pg` parle le protocole Postgres, pas le HTTP de l'API. Vide (ou mal formée) = Edge tourne en mémoire et le dit dans les logs. |
+| `SUPABASE_URL` | `https://<reference>.supabase.co` — la référence est dans l'URL du dashboard. **Voie recommandée** : Edge passe par l'API HTTP de Supabase, donc ni mot de passe de base, ni pooler, ni IP à autoriser. |
+| `SUPABASE_SERVICE_ROLE_KEY` | La clé **service_role** (celle qui commence par `eyJ…`, Project Settings → API → *Secret keys*). C'est la seule qui a le droit d'écrire. |
+| `DATABASE_URL` | *Optionnel, alternative* : URL Postgres directe (`postgres://…`) pour `pg`. Si `SUPABASE_URL` est rempli, il est ignoré. Les deux absents = Edge tourne en mémoire et le dit. |
 | `EDGE_DRY_RUN` | `true` = ne se connecte pas, simule la structure et rapporte. |
 | `EDGE_REQUIRE_MESSAGE_CONTENT` | `true` (défaut) = exige l'intent Message Content (automod, XP). À `false`, ces modules se désactivent et le reste marche. |
 | `EDGE_LOG_LEVEL` | `debug` / `info` / `warn` / `error`. |
 
-### Supabase : la bonne chaîne, pas la clé
+### Supabase : coller le SQL, coller la clé — pas de mot de passe de base
 
-`DATABASE_URL` doit ressembler à **une des deux lignes suivantes** (les deux marchent, Edge
-détecte le pooler tout seul) :
+C'est la voie par défaut, et la plus courte. **Deux copier-coller** et c'est fini :
+
+1. **Le schéma.** Ouvre le fichier [`supabase/schema.sql`](supabase/schema.sql) du dépôt,
+   sélectionne *tout*, colle-le dans **Supabase → Project → SQL Editor → New query → Run**.
+   Il crée les 23 tables, les index et 3 fonctions (`edge_schema_check`, `edge_prune_events`,
+   `edge_counts`). Il est **idempotent** : rien n'est supprimé, tu peux le relancer après chaque
+   mise à jour du dépôt. (Généré par `npm run db:sql` à partir de `migrations/*.sql` ; un test
+   vérifie qu'il n'a pas dérivé.)
+2. **Les deux variables.** Dans Render (ou `.env` en local) :
+   `SUPABASE_URL` et `SUPABASE_SERVICE_ROLE_KEY`. C'est tout.
+
+Edge parle alors à **l'API HTTP** de Supabase (PostgREST, port 443) : pas besoin du mot de passe
+de la base, pas besoin de pooler, pas besoin d'autoriser une IP — Render change d'IP sans
+prévenir, c'est précisément ce qui casse les connexions Postgres directes. La clé `service_role`
+sert ici : elle est faite pour un serveur de confiance, jamais pour un front. Si tu te trompes de
+clé (la `anon`), Edge s'en aperçoit en lisant le JWT et te le dit avant le premier écrit.
+
+Le contrat de données est le même que sur Postgres direct (`insert`, `all`, `update`, `count`,
+`rpc`) ; les requêtes compliquées passent par les fonctions SQL ci-dessus, jamais par du SQL brut.
+`/edge sante` et `/health` affichent le chemin utilisé : `API Supabase` ou `Postgres direct`.
+
+<details><summary>Alternative : la connexion Postgres directe (<code>DATABASE_URL</code>)</summary>
 
 ```
-# 1) Connexion DIRECTE — sans pooler, ce que tu demandes
-postgres://postgres:[MOT_DE_PASSE]@db.[REFERENCE].supabase.co:5432/postgres
-
-# 2) Transaction pooler (port 6543) — si les IP de Render te jouent des tours
-postgres://postgres.[REFERENCE]:[MOT_DE_PASSE]@aws-0-eu-central-1.pooler.supabase.com:6543/postgres
+postgres://postgres:[MOT_DE_PASSE]@db.[REFERENCE].supabase.co:5432/postgres          # directe
+postgres://postgres.[REF]:[MOT_DE_PASSE]@aws-0-eu-central-1.pooler.supabase.com:6543/postgres  # transaction pooler
 ```
 
-Le piège, c'est **quel mot de passe**. Celui de la **base** : dashboard Supabase →
-*Project Settings → Database → Reset database password* → tu en choisis un → tu le colles dans
-l'URL. La clé **`service_role`** (une longue chaîne qui commence par `eyJ…`) sert à l'API REST et
-à `supabase-js` : pour `pg`, elle ne veut rien dire. Edge la reconnaît désormais et écrit
-exactement ça dans les logs au lieu d'un « invalid connection » obscur — et il démarre quand même,
-en mémoire, pour que tu puisses tester pendant que tu corriges.
+Le mot de passe est celui de la **base** (Project Settings → Database → *Reset database
+password*), pas une clé d'API. En direct, active **« Allow IPv4 connections »** et ne mets **aucune
+allowlist d'IP** (Render n'a pas d'IP fixe). `npm run db:migrate` applique alors les migrations
+tout seul au démarrage. Edge vérifie la *forme* de la variable et refuse une clé `eyJ…` collée là
+par erreur, en disant quoi faire, au lieu d'un « invalid connection » obscur.
 
-Avec la connexion **directe** (5432), deux réglages d'un clic côté Supabase, sinon Render se fait
-jeter : *Project Settings → Database → Network limits* → **« Allow IPv4 connections »** activé, et
-**pas d'IP allowlist** restrictive (Render n'a pas d'IP fixe). Edge ouvre au plus 4 connexions ;
-la limite gratuite est plus large que ça. Le port 6543, lui, marche avec l'allowlist fermée —
-c'est la roue de secours, pas le choix par défaut.
-
-Sans base du tout, Edge tourne aussi : tickets, points et giveaways fonctionnent, mais
-**tout est oublié au redémarrage**. C'est utile pour la première heure, pas pour vivre dessus.
+</details>
 
 ### Dans le Developer Portal
 
@@ -116,7 +128,8 @@ qui te le dit si tu t'es trompé de cran.
 
 ```bash
 npm run typecheck   # 0 erreur
-npm test            # 30 tests purs : barèmes, tirage pondéré, détecteurs, permissions, structure, db
+npm test            # 45 tests purs : barèmes, tirage pondéré, détecteurs, permissions, structure,
+                    #   db (les 3 moteurs : mémoire, pg, API Supabase), sonde HTTP, autoping
 npm run dry         # 8 scénarios de serveur (conforme, salon renommé, rôle oublié, fuite @everyone…)
 ```
 
@@ -136,46 +149,16 @@ la première seconde, `GET /ready` seulement quand Discord et la base sont bons.
 
 | Plateforme | Vraiment gratuit ? | Verdict pour Edge |
 | --- | --- | --- |
-| **Northflank** (plan **Sandbox**) | **oui**, vérifié sur leur page de prix : « *Always-on-compute — no sleeping :)* », 2 services + 1 base + 2 cron gratuits | **Le successeur direct de Koyeb : c'est lui qu'il te faut.** CB demandée pour vérifier l'identité (0 € débité). Il build depuis le `Dockerfile` du repo : aucun fichier de config à écrire. |
+| **Render** (free) | oui, **sans CB**, 512 Mo, 750 h/mois | Dort après 15 min sans trafic entrant — **mais Edge est déjà câblé pour ça** : autoping interne (Render lui donne son URL) + workflow GitHub toutes les 5 min. **→ Ton chemin, celui que le repo cable : voir § Render plus bas.** |
+| **Northflank** (plan **Sandbox**) | **oui**, vérifié sur leur page de prix : « *Always-on-compute — no sleeping :)* », 2 services + 1 base + 2 cron gratuits | Le plan gratuit le plus généreux et le plus stable (successeur de Koyeb) ; **Render reste le choix retenu ici**, celui pour lequel le repo est câblé. CB demandée pour vérifier l'identité (0 € débité). Il build depuis le `Dockerfile` du repo : aucun fichier de config à écrire. |
 | **Oracle Cloud — Always Free** | oui : VM ARM 2 OCPU / 12 Go à vie (rabaissée en juin 2026) | Le plus solide, et le seul gratuit qu'**aucun rachat ne peut te retirer**. CB + un peu de Linux. `sudo bash deploy/vps.sh`. |
 | **Un Raspberry Pi ou un vieux PC portable** | oui, 0 €, et ça dort jamais si tu le laisses branché | `deploy/vps.sh` fait exactement ça. C'est l'option « je ne donne ma CB à personne ». |
-| **Render** (free) | oui, **sans CB**, 512 Mo, 750 h/mois | Dort après 15 min sans trafic entrant — **mais Edge est déjà câblé pour ça** : autoping interne (Render lui donne son URL) + workflow GitHub toutes les 5 min. C'est l'option choisie ici, voir plus bas. |
 | **Railway** | essai 5 $ (30 jours), puis 1 $/mois | 1 $/mois ne couvre pas un 24/7 : compte ~5 $/mois. Le déploiement le plus simple, si tu veux en finir en 5 minutes. |
 | **Fly.io** | non : plus d'allocation gratuite (essai 2 h de VM), CB | ~2 $/mois. `fly.toml` fourni, avec `auto_stop_machines = "off"` (sans ça, il s'endort). |
 | **Koyeb** | **non — fermé** | Racheté par Mistral le 17 février 2026 : le plan Starter gratuit est supprimé pour les nouveaux, entrée à 29 $/mois + CB (empreinte de 29 $). Les anciens comptes Starter gardent leurs conditions. |
 | les « free bot hosting » (Pterodactyl, 128-256 Mo) | oui | Trop juste pour 23 modules, renouvellements maniaques, et surtout : **l'hébergeur lit ton token**. |
 
-### Northflank en 8 étapes (ma reco)
-
-1. Developer Portal → ton app → **Bot** : coche `Server Members Intent`, `Message Content
-   Intent`, `Guild Moderation Intent`, puis copie le **token**.
-2. northflank.com → *Sign up with GitHub* → **Create new project** (le plan Sandbox est à 0 € ;
-   ils demandent une CB pour vérifier l'identité, rien n'est débité).
-3. Dans le projet → **Create service** → **Run service** → *Deploy from Git provider* →
-   `Snowoo-2z/edge-bot`, branche `main`. Source type : **Docker** (le `Dockerfile` du repo est
-   détecté, region de build au choix).
-4. Plan de compute : prends **`nf-compute-20`** (0,2 vCPU / **512 Mo**). `nf-compute-10`
-   (256 Mo) fait tourner Edge mais sans aucune marge — un giveaway à 300 participants ou
-   un `/audit structure` complet peut le faire sortir de ses gonds. La sonde `/health`
-   renvoie `ramMb` : c'est là que tu vois la vraie conso, en direct.
-5. **Advanced → Environment variables** :
-   ```
-   DISCORD_TOKEN   = <ton token>
-   DATABASE_URL    = <Supabase → Project Settings → Database → Connection string, directe 5432 : postgres://postgres:[MOT_DE_PASSE]@db.[REF].supabase.co:5432/postgres — le mot de passe de la BASE, pas une clé>
-   GUILD_ID        = 1558076024778919946
-   EDGE_REQUIRE_MESSAGE_CONTENT = true
-   PORT            = 8080
-   ```
-   Chez Northflank le port n'est **pas** injecté automatiquement : c'est toi qui le fixes,
-   et il doit correspondre à celui du `Dockerfile` (`EXPOSE 8080`).
-6. **Add exposed port** (ou *Ingress*) : port `8080`, visibilité **interne** suffit — le bot
-   n'a besoin de personne côté entrant. Puis **Health check** : port `8080`, path `/health`,
-   délai initial 45 s, intervalle 60 s.
-7. **Deploy**. Si le dashboard dit « no capacity » dans la région gratuite, change de région
-   (Paris/Francfort) et relance : c'est un souci de quota, pas de config.
-8. Ouvre l'URL du service suivie de `/health` : `"pret": true` = les commandes arrivent.
-
-### Render (gratuit, sans CB) — le chemin que j'ai câblé en priorité
+### Render (gratuit, sans CB) — le chemin retenu, câblé dans le repo
 
 Deux couches d'autoping, **aucun réglage à faire de ta part** pour la première :
 
@@ -200,25 +183,37 @@ En chiffres : instance free = **0,1 CPU / 512 Mo**, et Edge au repos en occupe *
 
 Pas-à-pas :
 
-1. Developer Portal → ton app → **Bot** : coche `Server Members Intent`, `Message Content
+1. **La base, d'abord** (une minute) : Supabase → *New project* (plan free, région
+   `eu-central-1`) → **SQL Editor** → *New query* → colle le contenu de
+   [`supabase/schema.sql`](../blob/main/supabase/schema.sql) → **Run**. Vas-y, c'est écrit
+   « idempotent » : rien n'est détruit, tu peux relancer à chaque mise à jour. Récupère au
+   passage l'**URL du projet** (`https://<ref>.supabase.co`) et la **clé `service_role`**
+   (*Project Settings → API → Secret keys*). Ni mot de passe de base, ni pooler, ni IP à
+   autoriser : Edge parle à l'API HTTP.
+2. Developer Portal → ton app → **Bot** : coche `Server Members Intent`, `Message Content
    Intent`, `Guild Moderation Intent` → copie le **token**.
-2. Render → **New + → Web Service** → connecte `Snowoo-2z/edge-bot` (branche `main`).
-3. **Runtime : Node** (ou **Docker** si tu préfères l'image — les deux marchent, le repo a
+3. Render → **New + → Web Service** → connecte `Snowoo-2z/edge-bot` (branche `main`).
+4. **Runtime : Node** (ou **Docker** si tu préfères l'image — les deux marchent, le repo a
    les deux configs). Render lit `render.yaml` tout seul : région **`frankfurt`** (seules
    valeurs possibles : `oregon`, `ohio`, `virginia`, `frankfurt`, `singapore`), plan
    **`free`** (0,1 CPU / 512 Mo), build `npm ci && npm run build`, start
    `node dist/index.js`, health check `/health`.
-4. **Environment variables** (les deux `sync: false` du blueprint te seront demandés) :
+5. **Environment variables** (les `sync: false` du blueprint te seront demandés) :
    ```
-   DISCORD_TOKEN   = <ton token>
-   DATABASE_URL    = <Supabase → Project Settings → Database → Connection string, directe 5432 : postgres://postgres:[MOT_DE_PASSE]@db.[REF].supabase.co:5432/postgres — le mot de passe de la BASE, pas une clé>
-   GUILD_ID        = 1558076024778919946
+   DISCORD_TOKEN               = <ton token>
+   SUPABASE_URL                = https://<reference>.supabase.co
+   SUPABASE_SERVICE_ROLE_KEY   = <clé service_role>
+   GUILD_ID                    = 1558076024778919946
    EDGE_REQUIRE_MESSAGE_CONTENT = true
    ```
-   **Ne touche pas à `PORT`** : Render le fournit (défaut 10000) et Edge écoute dessus.
-5. **Create Web Service** → attends ~2 min → ouvre `https://<service>.onrender.com/health`.
-   `"pret": true` = les commandes `/edge` `/aide` `/ticket` répondent dans Discord.
-6. Si au bout d'un moment le bot semble muet : `curl https://<service>.onrender.com/ready`
+   C'est tout : la base est couverte par les deux `SUPABASE_`. **Ne touche pas à `PORT`** —
+   Render le fournit (défaut 10000) et Edge y branche la sonde tout seul. Et ne remets pas de
+   `DATABASE_URL` : elle est ignorée dès que `SUPABASE_URL` est là, mais une valeur bancale y
+   ferait chercher tout le monde.
+6. **Create Web Service** → attends ~2 min → ouvre `https://<service>.onrender.com/health`.
+   `"pret": true` et `"baseMode": "API Supabase"` = les commandes `/edge` `/aide` `/ticket`
+   répondent dans Discord et que les données sont écrites.
+7. Si au bout d'un moment le bot semble muet : `curl https://<service>.onrender.com/ready`
    et regarde les logs. Un `503` avec `"raison"` te dit exactement quoi (base injoignable,
    serveur pas visible, Discord coupé) — ce n'est presque jamais l'endormissement, maintenant.
 
@@ -232,12 +227,43 @@ Deux choses qui font gagner des heures :
   dessus automatiquement. Le mettre à la main avec une valeur bidon est la panne n°1 de ce
   type de déploiement.
 
+### Northflank en 8 étapes (l'autre gratuit solide, si Render t'ennuie)
+
+1. Developer Portal → ton app → **Bot** : coche `Server Members Intent`, `Message Content
+   Intent`, `Guild Moderation Intent`, puis copie le **token**.
+2. northflank.com → *Sign up with GitHub* → **Create new project** (le plan Sandbox est à 0 € ;
+   ils demandent une CB pour vérifier l'identité, rien n'est débité).
+3. Dans le projet → **Create service** → **Run service** → *Deploy from Git provider* →
+   `Snowoo-2z/edge-bot`, branche `main`. Source type : **Docker** (le `Dockerfile` du repo est
+   détecté, region de build au choix).
+4. Plan de compute : prends **`nf-compute-20`** (0,2 vCPU / **512 Mo**). `nf-compute-10`
+   (256 Mo) fait tourner Edge mais sans aucune marge — un giveaway à 300 participants ou
+   un `/audit structure` complet peut le faire sortir de ses gonds. La sonde `/health`
+   renvoie `ramMb` : c'est là que tu vois la vraie conso, en direct.
+5. **Advanced → Environment variables** :
+   ```
+   DISCORD_TOKEN   = <ton token>
+   SUPABASE_URL                  = https://<reference>.supabase.co
+   SUPABASE_SERVICE_ROLE_KEY   = <clé service_role>   (et rien d'autre à configurer pour la base)
+   GUILD_ID        = 1558076024778919946
+   EDGE_REQUIRE_MESSAGE_CONTENT = true
+   PORT            = 8080
+   ```
+   Chez Northflank le port n'est **pas** injecté automatiquement : c'est toi qui le fixes,
+   et il doit correspondre à celui du `Dockerfile` (`EXPOSE 8080`).
+6. **Add exposed port** (ou *Ingress*) : port `8080`, visibilité **interne** suffit — le bot
+   n'a besoin de personne côté entrant. Puis **Health check** : port `8080`, path `/health`,
+   délai initial 45 s, intervalle 60 s.
+7. **Deploy**. Si le dashboard dit « no capacity » dans la région gratuite, change de région
+   (Paris/Francfort) et relance : c'est un souci de quota, pas de config.
+8. Ouvre l'URL du service suivie de `/health` : `"pret": true` = les commandes arrivent.
+
 ### VPS gratuit (Oracle) ou machine à la maison
 
 ```bash
 git clone https://github.com/Snowoo-2z/edge-bot /tmp/edge && cd /tmp/edge
 sudo bash deploy/vps.sh          # node 22 + utilisateur dédié + systemd, et c'est tout
-nano /etc/edge-bot.env           # DISCORD_TOKEN + DATABASE_URL
+nano /etc/edge-bot.env           # DISCORD_TOKEN + SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY
 sudo bash deploy/vps.sh          # relance : cette fois il démarre
 journalctl -u edge-bot -f        # les logs en direct
 ```

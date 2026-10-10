@@ -29,5 +29,12 @@ services:
         value: "true"
       - key: DISCORD_TOKEN
         sync: false
+      # La base passe par l'API HTTP de Supabase : rien d'autre a regler (ni mot de passe de
+      # base, ni pooler, ni IP a autoriser). Le schema se colle dans l'editeur SQL : supabase/schema.sql
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      # Optionnel : connection Postgres directe (pg). Ignore des que SUPABASE_URL est defini.
       - key: DATABASE_URL
         sync: false
