@@ -1,5 +1,3 @@
-require('dotenv').config({ quiet: true });
-
 const { Client, GatewayIntentBits, Events } = require('discord.js');
 const { handleConfigCommand, handleConfigInteraction } = require('./config');
 const ticket = require('./modules/ticket');
@@ -7,11 +5,16 @@ const { ephemeralPayload } = require('./ui');
 const { startServer } = require('./server');
 const { startKeepAlive } = require('./keepalive');
 
-const token = process.env.DISCORD_TOKEN;
-if (!token) {
-  console.error('DISCORD_TOKEN manquant : copie .env.example vers .env et renseigne ton token.');
+const store = require('./store');
+
+// Variables d'environnement requises (à définir dans Render > Environment).
+const REQUIRED_ENV = ['DISCORD_TOKEN', 'SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY'];
+const missing = REQUIRED_ENV.filter((name) => !process.env[name]);
+if (missing.length) {
+  console.error(`Variables d'environnement manquantes : ${missing.join(', ')}`);
   process.exit(1);
 }
+const token = process.env.DISCORD_TOKEN;
 
 // MessageContent : nécessaire pour recevoir les pièces jointes (import image / GIF).
 const client = new Client({
@@ -48,7 +51,13 @@ ticket.registerEvents(client);
 startServer(() => ({ bot: client.isReady() ? 'connected' : 'connecting' }));
 startKeepAlive();
 
-client.login(token).catch((err) => {
-  console.error('Connexion à Discord impossible (token invalide ou réseau) :', err.message);
+async function main() {
+  // Charge les réglages depuis Supabase avant d'accepter les interactions.
+  await store.init();
+  await client.login(token);
+}
+
+main().catch((err) => {
+  console.error('Démarrage impossible :', err.message);
   process.exit(1);
 });

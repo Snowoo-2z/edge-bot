@@ -1,52 +1,100 @@
-const fs = require('node:fs');
-const path = require('node:path');
+// Stockage persistant dans Supabase.
+//  - Réglages : table "edge_module_configs" (une ligne par serveur et par module, colonne jsonb).
+//  - Images / GIF : bucket "edge-assets" (Supabase Storage, lecture publique).
+//
+// Le client utilise la clé "service role" (variable SUPABASE_SERVICE_ROLE_KEY) : elle contourne
+// la RLS, donc elle ne doit JAMAIS être exposée côté client ni committée dans Git.
+//
+// Les réglages sont chargés en mémoire au démarrage (init) ; les lectures sont donc synchrones,
+// et chaque écriture est répercutée dans Supabase en arrière-plan (file d'attente par clé).
 
-// DATA_DIR permet de pointer vers un disque persistant (ex. Render Disk).
-const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
-const FILE = path.join(DATA_DIR, 'store.json');
+const { createClient } = require('@supabase/supabase-js');
 
-let data = load();
+const TABLE = 'edge_module_configs';
+const BUCKET = 'edge-assets';
 
-function load() {
-  try {
-    return JSON.parse(fs.readFileSync(FILE, 'utf8'));
-  } catch {
-    return { guilds: {} };
+let supabase = null;
+const cache = new Map(); // "guildId:module" -> config
+const writeQueues = new Map(); // "guildId:module" -> Promise (écritures sérialisées)
+
+function requireEnv() {
+  const url = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) {
+    throw new Error('SUPABASE_URL et SUPABASE_SERVICE_ROLE_KEY doivent être définis (variables d’environnement).');
   }
+  return { url, key };
 }
 
-function save() {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  const tmp = FILE + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
-  fs.renameSync(tmp, FILE);
+// À appeler une fois au démarrage, avant de se connecter à Discord.
+async function init() {
+  const { url, key } = requireEnv();
+  supabase = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
+
+  const { data, error } = await supabase.from(TABLE).select('guild_id, module, config');
+  if (error) throw new Error(`Lecture Supabase impossible (table ${TABLE}) : ${error.message}`);
+  for (const row of data) cache.set(`${row.guild_id}:${row.module}`, row.config ?? {});
+  console.log(`[store] ${data.length} configuration(s) chargée(s) depuis Supabase.`);
 }
 
-/**
- * Retourne la config d'un module pour un serveur.
- * Ajoute automatiquement les clés manquantes (nouvelles options / nouveaux textes).
- */
 function getModuleConfig(guildId, moduleId, defaults) {
-  data.guilds[guildId] ??= {};
-  const guild = data.guilds[guildId];
-  const current = guild[moduleId] ?? {};
+  const key = `${guildId}:${moduleId}`;
+  const current = cache.get(key) ?? {};
   const merged = { ...structuredClone(defaults), ...current };
   merged.texts = { ...structuredClone(defaults.texts ?? {}), ...(current.texts ?? {}) };
   merged.assets = { ...structuredClone(defaults.assets ?? {}), ...(current.assets ?? {}) };
   merged.open = current.open ?? {};
-  guild[moduleId] = merged;
+  cache.set(key, merged);
   return merged;
 }
 
+function getGuildModule(guildId, moduleId) {
+  return cache.get(`${guildId}:${moduleId}`) ?? null;
+}
+
 function updateModuleConfig(guildId, moduleId, cfg) {
-  data.guilds[guildId] ??= {};
-  data.guilds[guildId][moduleId] = cfg;
-  save();
+  const key = `${guildId}:${moduleId}`;
+  cache.set(key, cfg);
+  enqueueWrite(key, guildId, moduleId, structuredClone(cfg));
   return cfg;
 }
 
-function getGuildModule(guildId, moduleId) {
-  return data.guilds[guildId]?.[moduleId] ?? null;
+function enqueueWrite(key, guildId, moduleId, snapshot) {
+  const previous = writeQueues.get(key) ?? Promise.resolve();
+  const next = previous.then(async () => {
+    const { error } = await supabase.from(TABLE).upsert(
+      { guild_id: guildId, module: moduleId, config: snapshot, updated_at: new Date().toISOString() },
+      { onConflict: 'guild_id,module' },
+    );
+    if (error) console.error(`[store] écriture Supabase échouée (${key}) :`, error.message);
+  });
+  writeQueues.set(key, next);
 }
 
-module.exports = { DATA_DIR, getModuleConfig, updateModuleConfig, getGuildModule, save };
+// ---------------------------------------------------------------------------
+// Fichiers (images / GIF)
+// ---------------------------------------------------------------------------
+
+// Envoie le fichier dans le bucket et retourne son URL publique.
+async function uploadAsset(path, buffer, contentType) {
+  const { error } = await supabase.storage.from(BUCKET).upload(path, buffer, {
+    contentType,
+    upsert: true,
+  });
+  if (error) throw new Error(`Upload Supabase échoué : ${error.message}`);
+  return supabase.storage.from(BUCKET).getPublicUrl(path).data.publicUrl;
+}
+
+async function deleteAsset(path) {
+  const { error } = await supabase.storage.from(BUCKET).remove([path]);
+  if (error) console.error('[store] suppression fichier échouée :', error.message);
+}
+
+module.exports = {
+  init,
+  getModuleConfig,
+  getGuildModule,
+  updateModuleConfig,
+  uploadAsset,
+  deleteAsset,
+};

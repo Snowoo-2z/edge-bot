@@ -1,8 +1,6 @@
-const fs = require('node:fs');
 const path = require('node:path');
 const {
   ActionRowBuilder,
-  AttachmentBuilder,
   ButtonStyle,
   ChannelType,
   ChannelSelectMenuBuilder,
@@ -12,14 +10,20 @@ const {
   TextInputBuilder,
   TextInputStyle,
 } = require('discord.js');
-const { DATA_DIR, getModuleConfig, updateModuleConfig, getGuildModule } = require('../store');
+const { getModuleConfig, updateModuleConfig, getGuildModule, uploadAsset, deleteAsset } = require('../store');
 const { embed, button, row, toggleButton, truncate, moduleSelectRow, ephemeralPayload } = require('../ui');
 const { MODULE_LIST } = require('./registry');
 
 const ID = 'ticket';
-const ASSETS_DIR = path.join(DATA_DIR, 'assets');
 const MAX_FILE_BYTES = 8 * 1024 * 1024; // limite d'upload Discord (salon standard)
 const UPLOAD_TIMEOUT_MS = 2 * 60 * 1000;
+const MIME_BY_EXT = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
+};
 const EXT_ALLOWED = {
   image: ['.png', '.jpg', '.jpeg', '.webp', '.gif'],
   gif: ['.gif'],
@@ -113,13 +117,6 @@ function fmt(template, vars) {
   return String(template).replace(/\{(user|number|channel)\}/g, (_, k) => vars[k] ?? `{${k}}`);
 }
 
-function assetFile(guildId, filename) {
-  return path.join(ASSETS_DIR, guildId, filename);
-}
-
-function assetExists(guildId, filename) {
-  return Boolean(filename) && fs.existsSync(assetFile(guildId, filename));
-}
 
 function countOpen(guild, cfg) {
   return Object.keys(cfg.open).filter((id) => guild.channels.cache.has(id)).length;
@@ -168,12 +165,12 @@ function renderMain(guild, cfg) {
       { name: 'Module', value: cfg.enabled ? '🟢 Activé' : '⚪ Désactivé', inline: true },
       {
         name: 'Image du panneau',
-        value: `${cfg.image ? '🟢 ON' : '⚪ OFF'} • ${assetExists(guild.id, cfg.assets.image) ? '✅ fichier' : '❌ aucun fichier'}`,
+        value: `${cfg.image ? '🟢 ON' : '⚪ OFF'} • ${cfg.assets.image ? '✅ fichier' : '❌ aucun fichier'}`,
         inline: true,
       },
       {
         name: 'GIF du ticket',
-        value: `${cfg.gif ? '🟢 ON' : '⚪ OFF'} • ${assetExists(guild.id, cfg.assets.gif) ? '✅ fichier' : '❌ aucun fichier'}`,
+        value: `${cfg.gif ? '🟢 ON' : '⚪ OFF'} • ${cfg.assets.gif ? '✅ fichier' : '❌ aucun fichier'}`,
         inline: true,
       },
       { name: 'Catégorie', value: cfg.categoryId ? `<#${cfg.categoryId}>` : 'Aucune', inline: true },
@@ -293,10 +290,8 @@ async function handleComponent(interaction) {
 
     case 'remove': {
       if (!['image', 'gif'].includes(arg)) return;
-      const filename = cfg.assets[arg];
-      if (filename) {
-        fs.rmSync(assetFile(guild.id, filename), { force: true });
-      }
+      const asset = cfg.assets[arg];
+      if (asset?.path) await deleteAsset(asset.path);
       cfg.assets[arg] = null;
       save(guild.id, cfg);
       return interaction.update(render('main', guild));
@@ -449,22 +444,20 @@ async function saveAsset(guild, kind, attachment) {
     const buffer = Buffer.from(await res.arrayBuffer());
     if (buffer.length > MAX_FILE_BYTES) return { ok: false, reason: 'Fichier trop lourd (max 8 Mo).' };
 
-    const dir = path.join(ASSETS_DIR, guild.id);
-    fs.mkdirSync(dir, { recursive: true });
-
     const cfg = cfgOf(guild.id);
-    const filename = `${kind}${ext}`;
-    // Supprime l'ancien fichier de ce slot (ex : extension différente).
-    if (cfg.assets[kind] && cfg.assets[kind] !== filename) {
-      fs.rmSync(assetFile(guild.id, cfg.assets[kind]), { force: true });
-    }
-    fs.writeFileSync(assetFile(guild.id, filename), buffer);
-    cfg.assets[kind] = filename;
+    const filePath = `${guild.id}/${kind}${ext}`;
+    // Envoi dans Supabase Storage (écrase le fichier précédent du même emplacement).
+    const url = await uploadAsset(filePath, buffer, MIME_BY_EXT[ext]);
+    // Supprime l'ancien fichier de ce slot s'il avait un autre chemin (ex : autre extension).
+    const previous = cfg.assets[kind];
+    if (previous?.path && previous.path !== filePath) await deleteAsset(previous.path);
+
+    cfg.assets[kind] = { path: filePath, url };
     save(guild.id, cfg);
-    return { ok: true, filename };
+    return { ok: true };
   } catch (err) {
-    console.error('[ticket] téléchargement asset :', err);
-    return { ok: false, reason: 'Impossible de télécharger le fichier, réessaie.' };
+    console.error('[ticket] upload asset :', err);
+    return { ok: false, reason: 'Impossible d’enregistrer le fichier, réessaie.' };
   }
 }
 
@@ -472,20 +465,12 @@ async function saveAsset(guild, kind, attachment) {
 // Panneau public + ouverture / fermeture des tickets
 // ---------------------------------------------------------------------------
 
-function attachmentFor(guildId, filename) {
-  return new AttachmentBuilder(assetFile(guildId, filename), { name: filename });
-}
-
 async function publishPanel(guild, cfg, channel) {
   const t = cfg.texts;
   const e = embed().setTitle(t.panel_title).setDescription(t.panel_description).setFooter({ text: t.panel_footer });
-  const files = [];
-  if (cfg.image && assetExists(guild.id, cfg.assets.image)) {
-    files.push(attachmentFor(guild.id, cfg.assets.image));
-    e.setImage(`attachment://${cfg.assets.image}`);
-  }
+  if (cfg.image && cfg.assets.image?.url) e.setImage(cfg.assets.image.url);
   const btn = button('tkt:open', t.panel_button, ButtonStyle.Primary, '🎫');
-  await channel.send({ embeds: [e], components: [row(btn)], files });
+  await channel.send({ embeds: [e], components: [row(btn)] });
 }
 
 async function findOpenTicket(guild, cfg, userId) {
@@ -579,17 +564,12 @@ async function openTicket(interaction) {
       .setTitle(truncate(fmt(t.welcome_title, vars), 256))
       .setDescription(fmt(t.welcome_description, vars))
       .setFooter({ text: fmt(t.welcome_footer, vars) });
-    const files = [];
-    if (cfg.gif && assetExists(guild.id, cfg.assets.gif)) {
-      files.push(attachmentFor(guild.id, cfg.assets.gif));
-      welcome.setImage(`attachment://${cfg.assets.gif}`);
-    }
+    if (cfg.gif && cfg.assets.gif?.url) welcome.setImage(cfg.assets.gif.url);
 
     await channel.send({
       content: `<@${user.id}>`,
       embeds: [welcome],
       components: [row(button('tkt:close', t.close_button, ButtonStyle.Danger))],
-      files,
       allowedMentions: { users: [user.id] },
     });
 

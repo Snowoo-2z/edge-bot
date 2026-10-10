@@ -48,20 +48,62 @@ Sur le [Discord Developer Portal](https://discord.com/developers/applications) :
    *View Channels*, *Send Messages*, *Manage Channels*, *Embed Links*, *Attach Files*, *Read Message History*.
    Ouvre l'URL générée et invite le bot sur ton serveur.
 
-### 2. Configurer le projet
+### 2. Créer la base Supabase
+
+1. Dans ton projet Supabase : **SQL Editor → New query**, colle le contenu de `supabase/schema.sql`, puis **Run**.
+   Ça crée la table `edge_module_configs` et le bucket de stockage `edge-assets`.
+2. Récupère l'**URL du projet** (Project Settings → API → *Project URL*, de la forme `https://xxxx.supabase.co`)
+   et la **clé service_role** (Project Settings → API → *service_role*).
+
+> La clé `service_role` contourne toutes les règles de sécurité de Supabase. Ne la mets **que** dans les
+> variables d'environnement de Render. Ne la commite jamais dans Git et ne la partage pas dans un chat.
+> Si elle a été exposée, régénère-la dans Supabase (Project Settings → API).
+
+### 3. Lancer en local (optionnel)
+
+Node.js ne lit pas de fichier `.env` : exporte les variables dans ton terminal.
 
 ```bash
 npm install
-cp .env.example .env   # puis remplis DISCORD_TOKEN, CLIENT_ID (et GUILD_ID pour tester)
-npm run deploy         # enregistre la commande /config
-npm start              # lance le bot
+export DISCORD_TOKEN=...  CLIENT_ID=...  GUILD_ID=...
+export SUPABASE_URL=https://xxxx.supabase.co  SUPABASE_SERVICE_ROLE_KEY=...
+npm run deploy   # enregistre /config
+npm start
 ```
 
-- `GUILD_ID` renseigné → la commande apparaît immédiatement sur ce serveur (recommandé pour tester).
-- `GUILD_ID` vide → enregistrement global (peut mettre jusqu'à 1 h à apparaître).
+## Déploiement sur Render (Web Service)
 
-Les réglages sont sauvegardés dans `data/store.json` et les fichiers importés dans `data/assets/`
-(dossier ignoré par Git).
+1. Sur [Render](https://dashboard.render.com) : **New → Web Service** et choisis le dépôt `Snowoo-2z/edge-bot`
+   (et la branche à déployer).
+2. Paramètres :
+   - **Runtime** : Node
+   - **Build Command** : `npm ci && npm run deploy`
+   - **Start Command** : `npm start`
+   - **Health Check Path** : `/health`
+3. **Environment** : ajoute les variables suivantes (Render les chiffre pour les valeurs secrètes) :
+
+   | Variable | Obligatoire | Valeur |
+   |---|---|---|
+   | `DISCORD_TOKEN` | oui | token du bot Discord |
+   | `CLIENT_ID` | oui | Application ID de Discord |
+   | `GUILD_ID` | non | ID du serveur (commande `/config` immédiate) |
+   | `SUPABASE_URL` | oui | URL du projet Supabase |
+   | `SUPABASE_SERVICE_ROLE_KEY` | oui | clé service_role Supabase |
+   | `NODE_VERSION` | non | `22` |
+
+4. **Create Web Service**. Le service écoute sur le port fourni par Render (`PORT`).
+
+### Anti-veille (auto-ping)
+
+Le plan gratuit de Render met le service en veille après environ 15 min sans requête entrante,
+et une connexion WebSocket Discord ne compte pas comme trafic. Le bot s'envoie donc lui-même une
+requête `GET /health` sur son URL publique (`RENDER_EXTERNAL_URL`, fournie automatiquement par Render)
+**toutes les 10 minutes**. Rien à configurer. Les logs affichent `[keepalive] … → 200`.
+
+### Données
+
+Les réglages et les images/GIF sont stockés dans Supabase, pas sur le disque du service :
+ils survivent aux redéploiements et redémarrages.
 
 ## Utiliser les tickets
 
@@ -72,39 +114,6 @@ Les réglages sont sauvegardés dans `data/store.json` et les fichiers importés
 > Les administrateurs du serveur voient tous les salons (comportement Discord normal).
 > Pour donner accès à un rôle staff, il faut ajuster les permissions de la catégorie dans Discord.
 
-## Déploiement sur Render
-
-Le bot tourne comme **web service** Render (le serveur HTTP sert le health check `/health`).
-
-### Mise en place
-
-1. Pousse le code sur GitHub (branche `main` de préférence).
-2. Sur [Render](https://dashboard.render.com) : **New → Blueprint** et choisis le dépôt `edge-bot`.
-   Render lit `render.yaml` et crée le service `edge-bot`.
-3. Renseigne les variables secrètes demandées :
-   - `DISCORD_TOKEN` : token du bot
-   - `CLIENT_ID` : Application ID
-   - `GUILD_ID` (optionnel) : ID du serveur pour un enregistrement instantané de `/config`
-4. Lance le déploiement. La commande de build est `npm ci && npm run deploy` (enregistre `/config`),
-   et la commande de démarrage est `npm start`.
-
-Ou sans Blueprint : **New → Web Service**, runtime Node, build `npm ci && npm run deploy`,
-start `npm start`, health check path `/health`, puis les mêmes variables d'environnement.
-
-### Anti-veille (auto-ping)
-
-Le plan gratuit de Render met le service en veille après environ 15 min sans requête entrante,
-et une connexion WebSocket Discord ne compte pas comme trafic. Le bot s'envoie donc lui-même une
-requête `GET /health` sur son URL publique (`RENDER_EXTERNAL_URL`, fournie automatiquement par Render)
-**toutes les 10 minutes**. Rien à configurer. Les logs affichent `[keepalive] … → 200`.
-
-### Données (important)
-
-Sans disque persistant, Render efface le système de fichiers à chaque redéploiement ou redémarrage :
-les réglages (`store.json`) et les images/GIF importés seraient perdus.
-Pour les conserver : ajoute un **Render Disk** (plan payant) et décommente la section `disk` /
-`DATA_DIR` dans `render.yaml`.
-
 ## Structure
 
 ```
@@ -114,7 +123,8 @@ src/
   keepalive.js          auto-ping toutes les 10 min (anti-veille)
   config.js             commande /config et routage vers les modules
   deploy-commands.js    enregistrement de la commande auprès de Discord
-  store.js              sauvegarde JSON (data/store.json)
+supabase/schema.sql     tables et bucket à créer dans Supabase
+  store.js              stockage Supabase (réglages + bucket d'images)
   ui.js                 helpers d'embeds (violet), boutons, menus
   modules/registry.js   liste des modules affichés dans le menu
   modules/ticket.js     module Ticket (panneau, tickets, textes, images/GIF)
