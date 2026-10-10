@@ -5,7 +5,7 @@ const { REST, Routes, SlashCommandBuilder, PermissionFlagsBits } = require('disc
 
 const { DISCORD_TOKEN, CLIENT_ID, GUILD_ID } = process.env;
 if (!DISCORD_TOKEN || !CLIENT_ID) {
-  console.error('DISCORD_TOKEN et CLIENT_ID sont requis (variables d'environnement).');
+  console.error("DISCORD_TOKEN et CLIENT_ID sont requis (variables d'environnement).");
   process.exit(1);
 }
 
