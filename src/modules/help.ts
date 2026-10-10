@@ -12,7 +12,7 @@ import {
 } from 'discord.js';
 import type { Ctx, EdgeModule } from '../core/module.js';
 import { MODULES } from './index.js';
-import { channelDef, CHANNEL_DEFS, ROLE_DEFS } from '../core/../../src/manifest.js';
+import { channelDef, CHANNEL_DEFS, ROLE_DEFS } from '../manifest.js';
 import { roleMention } from '../core/send.js';
 import { embed } from '../core/send.js';
 import { habilitation, vueModule } from '../core/config-ui.js';

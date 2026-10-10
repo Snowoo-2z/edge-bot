@@ -4,7 +4,8 @@
  * Les tests de structure passent par le faux serveur de src/dryrun/fake.ts.
  */
 import { strict as assert } from 'node:assert';
-import { readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { dirname, relative, resolve } from 'node:path';
 import { createServer } from 'node:http';
 import { PermissionFlagsBits } from 'discord.js';
 import { afterCheck, automodStep, escalate, isActive, pointsAfter, weightOf, AUTOMOD_LADDER, WARN_LADDER } from '../src/logic/ladders.js';
@@ -999,6 +1000,58 @@ test('/config : une commande sans option, un module, un réglage — et rien à 
   }
   assert.ok(menus.some((x) => x.type === 3), 'le menu des reglages doit etre pose la, sous les yeux');
   assert.equal(menus.filter((x) => x.type === 2).length, 5, 'couper, reinitialiser, exporter, avance, retour : les 5 boutons connus de la vue module');
+});
+
+test('les imports relatifs restent dans leur racine (le crash d’Render au démarrage, une fois pour toutes)', () => {
+  // `../core/../../src/manifest.js` : TypeScript valide, `tsx` (les tests, le dry-run) résout
+  // depuis src/, et `node dist/index.js` meurt sur ERR_MODULE_NOT_FOUND — le seul moment où ça
+  // se voit est le serveur. On verifie donc la forme, sur la source PUIS sur la sortie compilee.
+  const racine = process.cwd();
+  const fichiersTs: string[] = [];
+  const marcher = (dossier: string): void => {
+    for (const e of readdirSync(dossier, { withFileTypes: true })) {
+      const plein = `${dossier}/${e.name}`;
+      if (e.isDirectory()) { if (!/node_modules|dist|\.git/.test(plein)) marcher(plein); continue; }
+      if (/\.ts$/.test(e.name) && !e.name.endsWith('.d.ts')) fichiersTs.push(plein);
+    }
+  };
+  marcher('src');
+  assert.ok(fichiersTs.length > 40, ` seulement ${fichiersTs.length} fichiers scannés : l audit est aveugle`);
+  const spec = /(?:from|import)\s*\(?\s*'(\.[^']+)'/g;
+  let verifie = 0;
+  for (const f of fichiersTs) {
+    const src = readFileSync(f, 'utf8');
+    for (const m of src.matchAll(spec)) {
+      const vise = resolve(dirname(f), m[1]!);
+      verifie++;
+      assert.ok(vise.startsWith(`${racine}/src/`), `${f} : « ${m[1]} » sort de src/ (${relative(racine, vise)}) — introuvable une fois compilé dans dist/`);
+      // les sources importent .js (convention NodeNext) : c'est le .ts a cote qui doit exister
+      const base = vise.replace(/\.js$/, '');
+      const trouve = [`${base}.ts`, `${base}.tsx`, `${base}.js`, `${base}/index.ts`, vise].some((x) => existsSync(x));
+      assert.ok(trouve, `${f} : « ${m[1]} » ne pointe sur aucun fichier de src/`);
+    }
+  }
+  assert.ok(verifie > 200, `que ${verifie} imports verifiés : la source n est pas couverte en entier`);
+
+  // et la preuve definitive, si la sortie buildlee est la : chaque import de dist/ doit resoudre
+  if (existsSync('dist')) {
+    const fichiersJs: string[] = [];
+    const marcherDist = (dossier: string): void => {
+      for (const e of readdirSync(dossier, { withFileTypes: true })) {
+        const plein = `${dossier}/${e.name}`;
+        if (e.isDirectory()) { marcherDist(plein); continue; }
+        if (e.name.endsWith('.js')) fichiersJs.push(plein);
+      }
+    };
+    marcherDist('dist');
+    for (const f of fichiersJs) {
+      for (const m of readFileSync(f, 'utf8').matchAll(spec)) {
+        const vise = resolve(dirname(f), m[1]!);
+        assert.ok(vise.startsWith(`${racine}/dist/`), `${f} : « ${m[1]} » pointe hors de dist/ — node ne le trouvera jamais`);
+        assert.ok(existsSync(vise), `${f} : « ${m[1]} » -> ${relative(racine, vise)} n existe pas`);
+      }
+    }
+  }
 });
 
 /* ------------------------------------------------------------------ lanceur */
