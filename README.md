@@ -18,6 +18,12 @@ Bot Discord **Edge** : une seule commande de configuration, `/config`, qui ouvre
 
 ### Textes modifiables (module Ticket)
 
+Dans **✏️ Textes**, le bouton **Mode** alterne entre deux façons de modifier :
+- **Boutons** : une fenêtre par section (Panneau, Accueil, Messages), avec tous ses textes.
+- **Sélecteur** : un menu déroulant avec les 13 textes, pour en modifier un seul à la fois.
+
+Le choix est enregistré pour le serveur. Les textes déjà modifiés ne changent pas quand tu changes de mode.
+
 Titre / description / bouton / footer du panneau, nom des salons, titre / description / footer
 du salon ticket, bouton « fermer », et les messages (ticket créé, déjà ouvert, fermeture, désactivé).
 

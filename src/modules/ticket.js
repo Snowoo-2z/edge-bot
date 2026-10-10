@@ -7,6 +7,7 @@ const {
   MessageFlags,
   ModalBuilder,
   PermissionFlagsBits,
+  StringSelectMenuBuilder,
   TextInputBuilder,
   TextInputStyle,
 } = require('discord.js');
@@ -133,6 +134,7 @@ const GROUP_BY_ID = Object.fromEntries(GROUPS.map((g) => [g.id, g]));
 
 const DEFAULTS = {
   enabled: true,
+  textMode: 'buttons', // 'buttons' (sections) ou 'select' (menu déroulant, un texte à la fois)
   image: false, // image affichée sur le panneau
   gif: false, // GIF affiché dans le salon du ticket
   categoryId: null,
@@ -244,11 +246,13 @@ function renderMain(guild, cfg) {
 }
 
 function renderTexts(cfg) {
+  const selectMode = cfg.textMode === 'select';
   const e = embed()
     .setTitle('✏️ Textes du module Ticket')
     .setDescription(
-      '**Clique sur une section** : une fenêtre s’ouvre avec tous ses textes, déjà remplis avec tes valeurs actuelles.\n' +
-        'Modifie ce que tu veux, valide, et c’est enregistré.\n\n' +
+      (selectMode
+        ? '**Choisis un texte dans le menu** : une fenêtre s’ouvre avec ce texte, rempli avec ta valeur actuelle.\n'
+        : '**Clique sur une section** : une fenêtre s’ouvre avec tous ses textes, déjà remplis avec tes valeurs actuelles.\n') +
         'Variables : `{user}` pseudo • `{number}` n° du ticket • `{channel}` salon du ticket.',
     )
     .addFields(
@@ -259,14 +263,38 @@ function renderTexts(cfg) {
       })),
     );
 
+  const modeButton = button(
+    'cfg:ticket:mode:toggle',
+    selectMode ? 'Mode : Sélecteur' : 'Mode : Boutons',
+    ButtonStyle.Primary,
+    selectMode ? '📋' : '🔘',
+  );
+  const actions = row(
+    modeButton,
+    button('cfg:ticket:view:preview', 'Aperçu', ButtonStyle.Success, '👁️'),
+    button('cfg:ticket:view:main', '◀ Retour', ButtonStyle.Danger),
+  );
+
+  if (selectMode) {
+    const menu = new StringSelectMenuBuilder()
+      .setCustomId('cfg:ticket:pick:text')
+      .setPlaceholder('Choisis le texte à modifier')
+      .addOptions(
+        TEXTS.map((t) => ({
+          label: truncate(t.label, 100),
+          value: t.key,
+          description: truncate(t.hint || t.label, 100),
+          emoji: GROUPS.find((g) => g.keys.includes(t.key)).emoji,
+        })),
+      );
+    return { embeds: [e], components: [row(menu), actions] };
+  }
+
   return {
     embeds: [e],
     components: [
-      row(...GROUPS.map((g) => button(`cfg:ticket:text:${g.id}`, g.label, ButtonStyle.Primary, g.emoji))),
-      row(
-        button('cfg:ticket:view:preview', 'Aperçu', ButtonStyle.Success, '👁️'),
-        button('cfg:ticket:view:main', '◀ Retour', ButtonStyle.Danger),
-      ),
+      row(...GROUPS.map((g) => button(`cfg:ticket:text:${g.id}`, g.label, ButtonStyle.Secondary, g.emoji))),
+      actions,
     ],
   };
 }
@@ -383,6 +411,12 @@ async function handleComponent(interaction) {
       return interaction.update(render(arg, guild));
     }
 
+    case 'mode': {
+      cfg.textMode = cfg.textMode === 'select' ? 'buttons' : 'select';
+      save(guild.id, cfg);
+      return interaction.update(render('texts', guild));
+    }
+
     case 'toggle': {
       if (!['enabled', 'image', 'gif'].includes(arg)) return;
       cfg[arg] = !cfg[arg];
@@ -411,6 +445,11 @@ async function handleComponent(interaction) {
 
     case 'pick': {
       const value = interaction.values[0];
+      if (arg === 'text') {
+        const def = TEXT_BY_KEY[value];
+        if (!def) return;
+        return interaction.showModal(buildTextModal(cfg, value, [value], def.label));
+      }
       if (arg === 'category') {
         cfg.categoryId = value;
         save(guild.id, cfg);
