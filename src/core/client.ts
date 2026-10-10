@@ -1,5 +1,5 @@
 /** Demarrage d'Edge : client, structure, BDD, modules, commandes, listeners, ordonnanceur. */
-import { ActivityType, Client, GatewayIntentBits, Partials } from 'discord.js';
+import { ActivityType, Client, Events, GatewayIntentBits, Partials } from 'discord.js';
 import { dbUrlProblem, env, jwtRole, supabaseProblem } from '../env.js';
 import {
   BOT_PERMISSIONS, GUILD_ID, type CategoryKey, type ChannelKey, type PermName, type RoleKey,
@@ -58,9 +58,11 @@ export async function boot(modules: EdgeModule[], onProgress?: (why: string) => 
   let echec: (e: Error) => void = () => void 0;
   const pret = new Promise<Boot>((resolve, reject) => {
     echec = reject;
-    client.once('ready', (c) => {
+    // Events.ClientReady (et pas la chaine 'ready') : v14.16 a renomme l'evenement, l'ancien
+    // nom emet encore mais pollue les logs d'un DeprecationWarning a chaque demarrage.
+    client.once(Events.ClientReady, (c) => {
       onProgress?.('structure, base de données, commandes…');
-      start(c as Client<true>, modules, onProgress).then(resolve, (e) => reject(e instanceof Error ? e : new Error(String(e))));
+      start(c, modules, onProgress).then(resolve, (e) => reject(e instanceof Error ? e : new Error(String(e))));
     });
   });
 
@@ -134,7 +136,12 @@ async function start(client: Client<true>, modules: EdgeModule[], onProgress?: (
 
   // 1) ecarts de structure
   const drift = driftReport(s);
-  for (const d of drift) (d.level === 'error' ? log.error : d.level === 'warn' ? log.warn : log.info)(`[${d.area}] ${d.what}${d.expected ? ` (attendu ${d.expected}, réel ${d.got ?? '?'})` : ''}`);
+  for (const d of drift) {
+    const ligne = `[${d.area}] ${d.what}${d.expected ? ` (attendu ${d.expected}, réel ${d.got ?? '?'})` : ''}`;
+    if (d.level === 'error') log.error(ligne);
+    else if (d.level === 'warn') log.warn(ligne);
+    else log.info(ligne);
+  }
 
   // 2) modules dont une dependance manque => desactives avec motif
   for (const m of modules) {

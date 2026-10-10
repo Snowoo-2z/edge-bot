@@ -22,6 +22,7 @@ import { inviteUrl } from '../src/core/client.js';
 import { fr } from '../src/core/copy.js';
 import { startHealth, startKeepalive, statusOf } from '../src/core/health.js';
 import { dbUrlProblem, env, jwtRole, resolveKeepalive, resolvePort, resolveSupabase, supabaseProblem } from '../src/env.js';
+import { Logger } from '../src/core/logger.js';
 
 type Test = { name: string; fn: () => void | Promise<void> };
 const tests: Test[] = [];
@@ -652,6 +653,22 @@ test('supabase/schema.sql est bien la copie a jour de migrations/*.sql (+ les 3 
   const sql = gen.split('\n').filter((l: string) => !l.trim().startsWith('--')).join('\n');
   assert.ok(!/DROP TABLE|DROP COLUMN|TRUNCATE|\bDELETE FROM [a-z_]+;/.test(sql.replace(/DELETE FROM bot_events\n  GET|DELETE FROM bot_events WHERE created_at < p_older_than;/, '')), 'le fichier a coller ne doit rien detruire (le menage passe par edge_prune_events)');
   assert.ok(gen.includes("NOTIFY pgrst, 'reload schema'"), 'sinon PostgREST ne voit pas les tables neuves');
+});
+
+test('le logger survit a une methode arrachee a son objet (le boot-loop de Render)', () => {
+  // `cond ? log.warn : log.info`, `rows.forEach(log.warn)`, `[log.error]…` : des que la methode
+  // quitte l'objet, this vaut undefined. Les methodes sont donc des fleches fixees.
+  const log = new Logger('test');
+  const { info, warn, error, ok, debug, line, child } = log;
+  const arrachees = [info, warn, error, ok, debug] as const;
+  assert.equal(arrachees.length, 5);
+  for (const f of arrachees) f('appel sans this — ne doit pas lever');
+  line?.('ops', 'ligne de salon sans this');
+  const fils = child?.('enfant');
+  assert.ok(fils instanceof Logger, 'child() doit rester utilisable detaché');
+  // et la vraie forme qui plantait : selection de methode dans une ternaire
+  const choix = (n: string) => (n === 'a' ? log.error : n === 'b' ? log.warn : log.info);
+  for (const n of ['a', 'b', 'c']) choix(n)('dérive');
 });
 
 /* ------------------------------------------------------------------ schema SQL vs code */

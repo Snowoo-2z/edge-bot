@@ -87,6 +87,12 @@ for (;;) {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     raison = msg;
+    // Le message seul ne suffit pas a distance : sur le premier echec on ecrit les trois
+    // premieres lignes de la trace, filtrees sur NOS fichiers. C'est ce qui a manque ici.
+    if (essai === 1 && e instanceof Error && e.stack) {
+      const cadre = e.stack.split('\n').slice(1).map((l) => l.trim()).filter((l) => l.includes('edge-bot') || l.includes('dist/')).slice(0, 3);
+      if (cadre.length) log.warn(`d'où ça vient : ${cadre.join(' ← ')}`);
+    }
     essai++;
     // Sans port de sonde (donc hors hebergeur), on n'endort pas un terminal pendant
     // dix minutes pour un token errone : on sort, avec le message.
