@@ -1,0 +1,32 @@
+[Unit]
+Description=Edge — bot Discord du serveur 1558076024778919946
+Documentation=https://github.com/Snowoo-2z/edge-bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=edgebot
+Group=edgebot
+WorkingDirectory=/opt/edge-bot
+# Le token ne vit PAS dans ce fichier : only in /etc/edge-bot.env (chmod 600)
+EnvironmentFile=/etc/edge-bot.env
+ExecStart=/usr/bin/node dist/index.js
+Restart=always
+RestartSec=5
+# Edge gere SIGTERM lui-meme (ordonnanceur coupe, base vidée) : laisse-le finir.
+TimeoutStopSec=25
+KillSignal=SIGTERM
+MemoryMax=420M
+LimitNOFILE=65536
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/edge-bot/data
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

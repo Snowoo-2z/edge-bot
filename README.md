@@ -99,21 +99,99 @@ npm run dry         # 8 scénarios de serveur (conforme, salon renommé, rôle o
 le passe dans le vrai resolveur et le vrai rapport d'écart, et te montre **quels modules se coupent** et
 **pourquoi**. Un salon `💬│・Discussion` renommé en `💬│・Chat` ne casse que le module qui en a besoin.
 
-## 4. Ce que Edge ne fera pas (et pourquoi c'est mieux)
+## 4. Déployer gratuitement (le bot doit tourner 24 h/24)
+
+Un bot Discord n'est **pas** un site web : il tient une connexion sortante en permanence.
+Les plans gratuits qui dorment quand il n'y a pas de trafic entrant le coupent donc du
+serveur au bout d'un quart d'heure. C'est le seul piège du sujet — et Edge y répond :
+il ouvre une sonde HTTP dès que l'hébergeur fournit `PORT` (`GET /health` répond 200
+dès la première seconde, `GET /ready` seulement quand Discord et la base sont bons).
+
+| Hébergeur | Gratuit ? | Verdict pour Edge |
+| --- | --- | --- |
+| **Koyeb** | 1 service gratuit, 512 MB, **pas de mise en veille** | **Le meilleur choix ici.** Git → Dockerfile détecté tout seul, `PORT` fourni, tu pointes la santé sur `/health`. |
+| **Oracle Cloud — Always Free** | un vrai serveur ARM, 12 à 24 Go de RAM, à vie | Le plus solide (et le plus instructif). CB demandée à l'inscription. `sudo bash deploy/vps.sh` et c'est parti. |
+| **Fly.io** | petite allowance de VM | Correct, **à condition** de mettre `auto_stop_machines = "off"` dans `fly.toml` (déjà fait ici), sinon il s'endort. |
+| **Railway** | 5 $ de crédit/mois | Un bot de cette taille consomme ~2 $ : ça passe chaque mois. Le plus simple des quatre. |
+| **Render** | 750 h/mois, **mais endormi sans trafic** | Possible avec `KEEPALIVE_URL` (Edge se réveille tout seul), sinon non. |
+| les « bot hosting » 100 % gratuits | oui (128-256 MB) | Trop juste pour 23 modules, et surtout : **l'hébergeur lit ton token**. À éviter. |
+
+### Koyeb en 6 étapes (ma reco)
+
+1. Developer Portal → ton app → **Bot** : coche `Server Members Intent`, `Message Content Intent`,
+   `Guild Moderation Intent`, puis copie le **token**.
+2. Koyeb → *Create Web Service* → **GitHub** → `Snowoo-2z/edge-bot`, branche `main`.
+   Le `Dockerfile` est détecté ; sinon choisis « Docker ».
+3. Région **Paris (`par`)**, instance **Free**, 1 worker.
+4. Onglet *Environment variables* : `DISCORD_TOKEN`, `DATABASE_URL` (Supabase → Connection string →
+   **session pooler, port 5432**), `GUILD_ID=1558076024778919946`. **Ne mets pas `PORT`** : Koyeb le fournit.
+5. Health check : path `/health`, port `8080`, délai initial 45 s.
+6. Déploie, puis ouvre `https://<ton-service>.koyeb.app/health` : tu dois lire
+   `"pret": true`. Les commandes `/edge` arrivent dans Discord 2 secondes après.
+
+### VPS gratuit (Oracle) ou machine à la maison
+
+```bash
+git clone https://github.com/Snowoo-2z/edge-bot /tmp/edge && cd /tmp/edge
+sudo bash deploy/vps.sh          # node 22 + utilisateur dédié + systemd, et c2019est tout
+nano /etc/edge-bot.env           # DISCORD_TOKEN + DATABASE_URL
+sudo bash deploy/vps.sh          # relance : cette fois il démarre
+journalctl -u edge-bot -f        # les logs en direct
+```
+
+Ou en Docker, n'importe où :
+
+```bash
+docker compose up -d --build
+# ou sans fichier :
+docker build -t edge-bot . && docker run -d --name edge --restart unless-stopped --env-file .env edge-bot
+curl localhost:8080/health
+```
+
+### Edge ne meurt pas si Discord tousse
+
+Une coupure Discord, un serveur pas encore invité, une base qui met 3 s à répondre : ce n'est
+pas fatal. Le processus **reste vivant**, `GET /health` répond 200 avec la raison honnête
+(`"raison": "Discord injoignable : …"`), `GET /ready` répond 503 tant que ce n'est pas prêt,
+et Edge réessaie avec un retard qui grandit (5 s → 15 s → 30 s → 1 min → 2 min → 5 min).
+Un hébergeur qui voit `/health` en vie ne redémarre pas le service, donc **les commandes
+slash ne sautent pas** et le bot se rattrape tout seul dès que Discord revient — y compris
+si tu l'invites pendant qu'il attend.
+
+`/health` rend aussi la mémoire (`ramMb`) : sur un plan gratuit à 512 Mo, un kill silencieux
+pour dépassement de RAM est l'accident le plus probable, et il se lit là.
+
+### Ce que Edge fait déjà tout seul quand il est posé
+
+- **Migrations** : `boot()` applique `migrations/*.sql` au démarrage — pas d'étape SQL à la main.
+- **Redémarrages** : SIGTERM est écouté (l'ordonnanceur et la sonde se ferment proprement) ;
+  les jobs à venir vivent dans `scheduler_jobs`, donc un `kill` en plein giveaway ne perd rien.
+- **Commandes slash** : laissées en place, resynchronisées si le manifeste a changé.
+- **Base injoignable** : les modules stockés se coupent, le reste tourne, `/health` l'écrit noir sur blanc.
+
+### Le token, sérieusement
+
+Le token ne vit que dans les variables d'environnement de l'hébergeur (et dans `.env`,
+ignoré par Git). Quiconque le lit peut faire **tout ce que le rôle Edge permet** : bannir,
+supprimer des salons, changer les permissions. S'il a été collé quelque part, dans un
+ticket, un canal, un historique de commit → Developer Portal → **Reset Token**, puis
+`systemctl restart edge-bot` (ou « Redeploy » chez l'hébergeur).
+
+## 5. Ce que Edge ne fera pas (et pourquoi c'est mieux)
 
 - **Pas de bannissement automatique sur un compteur.** L'automod s'arrête à `ban_suggest` ; le ban reste une décision humaine.
 - **Pas de rôle staff accordé tout seul.** `/recrutement` prepare, notifie, relance à J+30 — c'est toi qui donnes le rôle.
 - **Pas d'Administrateur.** Les permissions demandées sont exactement celles du manifeste ; `/audit perms` compare les deux.
 - **Il ne recrée pas ton serveur.** Edge lit la structure, signale les écarts, et ne touche aux surcharges que si tu le lui demandes (`/raid unlock`, `/audit structure`).
 
-## 5. Quatre détails à connaître
+## 6. Quatre détails à connaître
 
 1. Les rôles `🎁│ Notification Giveaway` et `🤝│ Notification Partenariat` sont **non-mentionnables** par les membres (c'est bien). Pour qu'Edge puisse les ping, il a `MentionEveryone` + `ManageRoles`. Si un humain tente le ping à la main, Discord l'ignore — c'est normal, passe par les commandes.
 2. `💼│ Manager Partenariat` n'a pas le droit d'écrire dans 📣│・Annonces (lecture seule pour tout le monde sauf staff). Edge publie donc **l'annonce de partenariat à sa place**, avec le ping 🤝.
 3. Attribution des invitations : Edge ne peut créditer que les liens **qu'il voit** (invites créées après un `/invites resync`, non expirées). Un lien créé avant son arrivée est incomptable — d'où `/invites resync`.
 4. Réciprocité d'un partenaire : Edge ne peut lire le serveur d'à côté **que s'il y est**. Sinon le contrôle hebdo marque « non vérifiable » et un Manager tranche avec `/partenariat reciprocite`.
 
-## 6. Organisation du code
+## 7. Organisation du code
 
 ```
 src/manifest.ts        rôles, salons, catégories, ACL attendues, permissions du bot : LA source de vérité
@@ -123,6 +201,9 @@ src/logic/             barèmes, détecteurs, tirage pondéré — pur, testable
 src/modules/           23 modules, même forme : commandes / composants / listeners / jobs / sync
 src/db/                Db (pg + mémoire), migrate
 src/dryrun/            faux serveur + harnais de simulation (npm run dry)
+Dockerfile             image node:22-alpine non-root, pour Koyeb/Fly/Railway/Render/compose
+deploy/                unit systemd + installeur VPS (Ubuntu 24.04, Oracle Always Free, RPi)
+render.yaml fly.toml railway.json docker-compose.yml   un fichier de config par hébergeur
 migrations/            0001_init.sql — 20 tables
 tests/run.ts           harnais de tests maison
 ```

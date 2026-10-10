@@ -1,0 +1,24 @@
+# Blueprint Render : bouton "New +" > Blueprint > ce repo, sur le plan gratuit.
+# Attention : le plan gratuit endort un service sans trafic ENTRANT. La sonde /health
+# ne suffit pas a elle seule — mets KEEPALIVE_URL (voir README) ou prends Koyeb.
+services:
+  - type: web
+    name: edge-bot
+    plan: free
+    runtime: node
+    region: fra
+    buildCommand: npm ci && npm run build
+    startCommand: node dist/index.js
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: GUILD_ID
+        value: "1558076024778919946"
+      - key: EDGE_REQUIRE_MESSAGE_CONTENT
+        value: "true"
+      - key: DISCORD_TOKEN
+        sync: false
+      - key: DATABASE_URL
+        sync: false

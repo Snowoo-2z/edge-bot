@@ -49,30 +49,46 @@ export interface Boot {
 /** Le seul serveur que Edge accepte. */
 const ONLY_GUILD = env.GUILD_ID || GUILD_ID;
 
-export async function boot(modules: EdgeModule[]): Promise<Boot> {
+export async function boot(modules: EdgeModule[], onProgress?: (why: string) => void): Promise<Boot> {
   const client = makeClient(env.contentIntent);
-
-  client.once('ready', async (c: Client<true>) => {
-    try { await start(c, modules); } catch (e) { log.error('demarrage impossible', (e as Error).message); }
-  });
   client.on('error', (e) => log.error('client', e.message));
   client.on('shardDisconnect', () => log.warn('shard déconnecté, reconnexion en cours…'));
   client.rest.on('rateLimited', (info) => log.warn(`rate limit ${info.route} : pause ${info.timeToReset}ms`));
 
-  await client.login(env.DISCORD_TOKEN);
-  return state ?? (await waitReady(client, modules));
-}
-
-let state: Boot | null = null;
-
-function waitReady(client: Client, modules: EdgeModule[]): Promise<Boot> {
-  return new Promise((resolve, reject) => {
-    const to = setTimeout(() => reject(new Error('timeout : le bot ne voit aucun serveur avec ce token')), 15_000);
-    client.once('ready', () => { clearTimeout(to); resolve(state!); });
+  let echec: (e: Error) => void = () => void 0;
+  const pret = new Promise<Boot>((resolve, reject) => {
+    echec = reject;
+    client.once('ready', (c) => {
+      onProgress?.('structure, base de données, commandes…');
+      start(c as Client<true>, modules, onProgress).then(resolve, (e) => reject(e instanceof Error ? e : new Error(String(e))));
+    });
   });
+
+  onProgress?.('connexion à Discord…');
+  try {
+    await client.login(env.DISCORD_TOKEN);
+  } catch (e) {
+    await client.destroy().catch(() => void 0);
+    const m = (e as Error).message ?? String(e);
+    throw new Error(/401|invalid session|Unauthorized/i.test(m)
+      ? 'DISCORD_TOKEN refusé par Discord (401). Regenerate-le dans le Developer Portal, puis redémarre.'
+      : `Discord injoignable : ${m}`);
+  }
+  try {
+    // Un bot qui ne voit aucun serveur en 25 s est en fait un bot pas invite, ou des
+    // intents non coches : on le dit, on se deconnecte, et le lanceur reessaiera.
+    return await Promise.race([pret, echecApres(25_000, 'aucun serveur visible en 25 s : Edge est-il invite sur le serveur (GUILD_ID) ? les 3 intents sont-ils coches ?')]);
+  } catch (e) {
+    await client.destroy().catch(() => void 0);
+    throw e;
+  }
 }
 
-async function start(client: Client<true>, modules: EdgeModule[]): Promise<void> {
+function echecApres(ms: number, msg: string): Promise<never> {
+  return new Promise<never>((_, reject) => { const t = setTimeout(() => reject(new Error(msg)), ms); t.unref?.(); });
+}
+
+async function start(client: Client<true>, modules: EdgeModule[], onProgress?: (why: string) => void): Promise<Boot> {
   log.info(`connecté en ${client.user.tag}`);
   const guild = client.guilds.cache.get(ONLY_GUILD) ?? (await client.guilds.fetch(ONLY_GUILD).catch(() => null));
   if (!guild) {
@@ -81,6 +97,7 @@ async function start(client: Client<true>, modules: EdgeModule[]): Promise<void>
   }
   if (!guild.available) { await guild.fetch(); }
 
+  onProgress?.('base de données…');
   const db = env.DATABASE_URL ? Db.pool(env.DATABASE_URL) : Db.memory();
   if (!db.isPersisted) log.warn('DATABASE_URL absente => stockage en mémoire uniquement (tout se perd au restart).');
   else await migrate(db);
@@ -114,6 +131,7 @@ async function start(client: Client<true>, modules: EdgeModule[]): Promise<void>
   }
 
   // 3) commandes
+  onProgress?.(`${modules.length} modules : commandes…`);
   const dispatch = buildDispatch(ctx, modules);
   const { n, skipped } = await syncCommands(ctx, dispatch);
   log.ok(`${n} commandes synchronisées sur la guilde ${skipped ? '(inchangées)' : ''}`);
@@ -136,8 +154,9 @@ async function start(client: Client<true>, modules: EdgeModule[]): Promise<void>
   wireLogSinks(ctx);
   sched.start();
   await client.user.setPresence({ activities: [{ name: `${guild.name} · /aide`, type: ActivityType.Watching }], status: 'online' });
+  onProgress?.('');
   log.ok(`${modules.length - disabled.size}/${modules.length} modules actifs · ${s.guild.channels.cache.size} salons vus · ${s.missingChannels.length} manquant(s)`);
-  state = { client, ctx, dispatch, sched, drift, disabled, db };
+  return { client, ctx, dispatch, sched, drift, disabled, db };
 }
 
 function safeRun(scope: string, fn?: () => unknown, once?: boolean): Promise<void> {

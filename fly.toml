@@ -1,0 +1,34 @@
+# fly launch --now  (region cdg = Paris, la plus proche de Discord EU)
+app = "edge-bot"
+primary_region = "cdg"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8080"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # Un bot Discord n'a AUCUN trafic entrant : sans ces deux lignes, Fly le met en
+  # veille et il disparait du serveur au bout de quelques minutes.
+  auto_stop_machines = "off"
+  min_machines_running = 1
+  processes = ["app"]
+
+  [http_service.concurrency]
+    type = "connections"
+    hard_limit = 60
+    soft_limit = 30
+
+  [[http_service.checks]]
+    interval = "45s"
+    timeout = "5s"
+    grace_period = "60s"
+    method = "get"
+    path = "/health"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"

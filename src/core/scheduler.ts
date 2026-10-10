@@ -14,6 +14,11 @@ export class Scheduler {
 
   constructor(private ctxFor: () => Ctx) {}
 
+  /** Nombre de genres de taches suivies (sante, /edge sante). */
+  get jobCount(): number { return this.defs.size; }
+  /** L'ordonnanceur a-t-il sa minuterie active ? */
+  get running(): boolean { return this.timer !== null; }
+
   register(def: JobDef): void {
     if (this.defs.has(def.kind)) throw new Error(`job déjà enregistré: ${def.kind}`);
     this.defs.set(def.kind, def);

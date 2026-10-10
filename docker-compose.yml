@@ -1,0 +1,16 @@
+# Pour un VPS gratuit (Oracle Always Free) ou une machine a la maison :
+#   docker compose up -d --build
+services:
+  edge:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # La sonde HTTP sert aux hebergeurs ; sur un VPS elle est juste pratique a consulter.
+      PORT: "8080"
+    # Publish utile seulement si tu veux ouvrir /health depuis l'exterieur.
+    # ports:
+    #   - "8080:8080"
+    logging:
+      driver: json-file
+      options: { max-size: "5m", max-file: "3" }

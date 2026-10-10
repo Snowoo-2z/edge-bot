@@ -4,6 +4,7 @@
  * Les tests de structure passent par le faux serveur de src/dryrun/fake.ts.
  */
 import { strict as assert } from 'node:assert';
+import { createServer } from 'node:http';
 import { PermissionFlagsBits } from 'discord.js';
 import { afterCheck, automodStep, escalate, isActive, pointsAfter, weightOf, AUTOMOD_LADDER, WARN_LADDER } from '../src/logic/ladders.js';
 import { distribution, seeded, weightedDraw } from '../src/logic/draw.js';
@@ -17,6 +18,8 @@ import { driftReport, resolveStructure } from '../src/core/structure.js';
 import { fakeGuild } from '../src/dryrun/fake.js';
 import { inviteUrl } from '../src/core/client.js';
 import { fr } from '../src/core/copy.js';
+import { startHealth, startKeepalive, statusOf } from '../src/core/health.js';
+import { env } from '../src/env.js';
 
 type Test = { name: string; fn: () => void | Promise<void> };
 const tests: Test[] = [];
@@ -365,6 +368,64 @@ test('copy : rien de vide, rien en anglais', () => {
   const anglais = seen.filter((x) => /\b(you|your|please|error|not found|module is)\b/i.test(x));
   assert.deepEqual(anglais, [], `textes anglais restants : ${anglais.join(' | ')}`);
   for (const x of seen) assert.ok(!x.includes('undefined') && !x.includes('NaN'), `variable pas rempliee : ${x}`);
+});
+
+/* ------------------------------------------------------------------ deploiement */
+test('sonde HTTP : /health repond meme avant la connexion, /ready dit la verite', async () => {
+  assert.equal(env.port, 0, 'sans PORT (local), Edge n’ouvre aucun port et n’écrase rien');
+  const h = startHealth({ port: 18099, status: () => statusOf(null, 'connexion à Discord…') });
+  assert.ok(h, 'PORT fourni => la sonde s’ouvre');
+  const health = await fetch('http://127.0.0.1:18099/health');
+  const ready = await fetch('http://127.0.0.1:18099/ready');
+  const page = await fetch('http://127.0.0.1:18099/');
+  assert.equal(health.status, 200, 'la sonde de vivacite ne doit JAMAIS faire redemarrer Edge en boucle');
+  assert.equal(ready.status, 503, 'pret = seulement quand Discord et la base sont la');
+  const body = (await health.json()) as Record<string, unknown>;
+  assert.equal(body.vivant, true);
+  assert.equal(body.pret, false);
+  assert.equal(body.raison, 'connexion à Discord…');
+  assert.equal(body.base, 'absente', 'sans DATABASE_URL, la base est « absente », pas « ko »');
+  assert.equal(typeof body.ramMb, 'number', 'la RAM est affichée : sur 512 Mo gratuits, un OOMkiller silencieux sinon');
+  assert.match((await page.text()).trim(), /Edge démarre/);
+  assert.equal((await fetch('http://127.0.0.1:18099/admin')).status, 404, 'aucune route utile pour un curieux');
+  await h!.close();
+});
+
+test('sonde : une base qui traine ne fait pas tomber /health', async () => {
+  const h = startHealth({ port: 18098, status: () => new Promise((res) => setTimeout(() => res(statusOf(null, 'x')), 5_000)) });
+  const t0 = Date.now();
+  const r = await fetch('http://127.0.0.1:18098/health');
+  const b = (await r.json()) as Record<string, unknown>;
+  assert.ok(Date.now() - t0 < 3_000, 'la sonde lache apres 1,5 s au lieu de pendre');
+  assert.equal(r.status, 200);
+  assert.equal(b.base, 'ko');
+  await h!.close();
+});
+
+test('sonde : un port deja pris ne tue pas le bot', async () => {
+  const concurrent = createServer((_q, res) => res.end('autre chose')).listen(18096);
+  await new Promise((r) => concurrent.once('listening', r));
+  const messages: string[] = [];
+  const h = startHealth({ port: 18096, status: () => statusOf(null), log: (m) => messages.push(m) });
+  assert.ok(h, 'startHealth ne l’exception pas, meme sur un port occupe');
+  await new Promise((r) => setTimeout(r, 60));
+  assert.ok(messages.some((m) => m.includes('sonde HTTP indisponible')), 'c’est dit une fois, puis Edge continue');
+  concurrent.close();
+  await h!.close();
+});
+
+test('keep-alive : ping immediat puis arret net (les plans gratuits qui dorment)', async () => {
+  let n = 0;
+  const srv = createServer((_q, res) => { n += 1; res.writeHead(200); res.end('pong'); }).listen(18095);
+  await new Promise((r) => srv.once('listening', r));
+  const stop = startKeepalive('http://127.0.0.1:18095/', 60_000);
+  await new Promise((r) => setTimeout(r, 120));
+  assert.ok(n >= 1, 'le premier depart est immediat');
+  stop();
+  const apres = n;
+  await new Promise((r) => setTimeout(r, 120));
+  assert.equal(n, apres, 'stop() coupe vraiment le reveil : pas de timer zombie a la fermeture');
+  srv.close();
 });
 
 /* ------------------------------------------------------------------ lanceur */
