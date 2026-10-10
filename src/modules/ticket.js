@@ -93,9 +93,9 @@ const HINTS = {
   panel_description: 'Texte affiché sous le titre du panneau',
   panel_button: 'Texte du bouton qui ouvre un ticket',
   panel_footer: 'Petit texte en bas du panneau',
-  channel_name: 'Variables : {user}, {number}. Espaces → tirets',
-  welcome_title: 'Variables : {user}, {number}',
-  welcome_description: 'Variables : {user}, {number}, {channel}',
+  channel_name: 'Variables : {user}, {number}, {type}. Espaces → tirets',
+  welcome_title: 'Variables : {user}, {number}, {type}',
+  welcome_description: 'Variables : {user}, {number}, {channel}, {type}',
   welcome_footer: 'Variables : {user}, {number}',
   close_button: 'Texte du bouton de fermeture',
   msg_opened: 'Variables : {user}, {channel}',
@@ -132,7 +132,15 @@ const GROUPS = [
 ];
 const GROUP_BY_ID = Object.fromEntries(GROUPS.map((g) => [g.id, g]));
 
+const MAX_TYPES = 25; // limite Discord : 25 options de menu / 25 boutons
+
+function newTypeId() {
+  return 't' + Math.random().toString(36).slice(2, 10);
+}
+
 const DEFAULTS = {
+  panelStyle: 'buttons', // affichage des types sur le panneau : 'buttons' ou 'select'
+  types: [], // [{ id, label, emoji?, description? }] ; vide = un seul bouton "Ouvrir un ticket"
   enabled: true,
   textMode: 'buttons', // 'buttons' (sections) ou 'select' (menu déroulant, un texte à la fois)
   image: false, // image affichée sur le panneau
@@ -158,7 +166,7 @@ function save(guildId, cfg) {
 }
 
 function fmt(template, vars) {
-  return String(template).replace(/\{(user|number|channel)\}/g, (_, k) => vars[k] ?? `{${k}}`);
+  return String(template).replace(/\{(user|number|channel|type)\}/g, (_, k) => vars[k] ?? `{${k}}`);
 }
 
 
@@ -172,7 +180,10 @@ function countOpen(guild, cfg) {
 
 function render(view, guild) {
   const cfg = cfgOf(guild.id);
+  if (view.startsWith('type:')) return renderType(cfg, view.slice('type:'.length));
   switch (view) {
+    case 'types':
+      return renderTypes(cfg);
     case 'texts':
       return renderTexts(cfg);
     case 'preview':
@@ -241,6 +252,7 @@ function renderMain(guild, cfg) {
         button('cfg:ticket:remove:gif', 'Retirer GIF', ButtonStyle.Secondary, '🗑️'),
         button('cfg:ticket:view:texts', 'Textes', ButtonStyle.Primary, '✏️'),
       ),
+      row(button('cfg:ticket:view:types', `Types de ticket (${cfg.types.length})`, ButtonStyle.Primary, '🗂️')),
     ],
   };
 }
@@ -299,9 +311,111 @@ function renderTexts(cfg) {
   };
 }
 
+// Vue Types de ticket : liste + ajout + choix du style du panneau.
+function renderTypes(cfg) {
+  const types = cfg.types;
+  const selectStyle = cfg.panelStyle === 'select';
+  const e = embed()
+    .setTitle('🗂️ Types de ticket')
+    .setDescription(
+      (types.length
+        ? 'Ces types apparaissent sur le panneau. Choisis-en un pour le modifier ou le supprimer.'
+        : 'Aucun type : le panneau affiche un seul bouton **Ouvrir un ticket**. Ajoute des types (ex. Support, Plainte, Partenariat) pour proposer plusieurs catégories.') +
+        `\n\nAffichage sur le panneau : **${selectStyle ? 'Menu déroulant' : 'Boutons'}**`,
+    );
+  if (types.length) {
+    e.addFields(
+      types.map((ty) => ({
+        name: `${ty.emoji ?? '•'} ${ty.label}`,
+        value: truncate(ty.description ?? '—', 200),
+        inline: false,
+      })),
+    );
+  }
+
+  const components = [];
+  if (types.length) {
+    const menu = new StringSelectMenuBuilder()
+      .setCustomId('cfg:ticket:typepick')
+      .setPlaceholder('Choisis un type à modifier')
+      .addOptions(
+        types.map((ty) => ({
+          label: truncate(ty.label, 100),
+          value: ty.id,
+          ...(ty.description ? { description: truncate(ty.description, 100) } : {}),
+          ...(ty.emoji ? { emoji: ty.emoji } : {}),
+        })),
+      );
+    components.push(row(menu));
+  }
+  components.push(
+    row(
+      button('cfg:ticket:typeadd', 'Ajouter un type', ButtonStyle.Success, '➕'),
+      button(
+        'cfg:ticket:panelstyle:toggle',
+        selectStyle ? 'Affichage : Menu' : 'Affichage : Boutons',
+        ButtonStyle.Primary,
+        selectStyle ? '📋' : '🔘',
+      ),
+      button('cfg:ticket:view:main', '◀ Retour', ButtonStyle.Danger),
+    ),
+  );
+  return { embeds: [e], components };
+}
+
+// Vue d'un type : modifier / supprimer.
+function renderType(cfg, id) {
+  const ty = cfg.types.find((x) => x.id === id);
+  if (!ty) return renderTypes(cfg);
+  const e = embed()
+    .setTitle(`${ty.emoji ? ty.emoji + ' ' : ''}${ty.label}`)
+    .setDescription(ty.description ? truncate(ty.description, 300) : '_Pas de description_');
+  return {
+    embeds: [e],
+    components: [
+      row(
+        button(`cfg:ticket:typeedit:${id}`, 'Modifier', ButtonStyle.Primary, '✏️'),
+        button(`cfg:ticket:typedel:${id}`, 'Supprimer', ButtonStyle.Danger, '🗑️'),
+        button('cfg:ticket:view:types', '◀ Retour aux types', ButtonStyle.Secondary),
+      ),
+    ],
+  };
+}
+
+// Modale d'un type. "id" = "new" pour un ajout.
+function buildTypeModal(id, ty) {
+  const modal = new ModalBuilder()
+    .setCustomId(`cfg:ticket:typemodal:${id}`)
+    .setTitle(ty ? 'Modifier le type de ticket' : 'Nouveau type de ticket');
+  const fields = [
+    { key: 'label', label: 'Nom du type', max: 80, required: true, value: ty?.label, hint: 'Ex : Support, Plainte, Partenariat' },
+    { key: 'emoji', label: 'Emoji (optionnel)', max: 60, required: false, value: ty?.emoji, hint: 'Ex : 🛠️' },
+    {
+      key: 'description',
+      label: 'Description (optionnel)',
+      max: 100,
+      required: false,
+      value: ty?.description,
+      hint: 'Ex : Problème technique ou question',
+    },
+  ];
+  for (const f of fields) {
+    const input = new TextInputBuilder()
+      .setCustomId(f.key)
+      .setLabel(truncate(f.label, 45))
+      .setStyle(TextInputStyle.Short)
+      .setMaxLength(f.max)
+      .setPlaceholder(truncate(f.hint, 100))
+      .setRequired(f.required);
+    if (f.value) input.setValue(truncate(f.value, f.max));
+    modal.addComponents(new ActionRowBuilder().addComponents(input));
+  }
+  return modal;
+}
+
 // Aperçu : rendu réel des messages avec des valeurs d'exemple.
 function renderPreview(guild, cfg) {
-  const vars = { user: 'Alice', number: 1, channel: '#ticket-alice' };
+  const vars = { user: 'Alice', number: 1, channel: '#ticket-alice', type: 'Support' };
   const t = cfg.texts;
   const panel = embed()
     .setTitle(truncate(fmt(t.panel_title, vars), 256))
@@ -330,7 +444,7 @@ function renderPreview(guild, cfg) {
     content: '**Aperçu** (valeurs d’exemple) : voici ce que verront les membres.',
     embeds: [panel, welcome, messages],
     components: [
-      row(button('noop:panel', t.panel_button, ButtonStyle.Primary, '🎫').setDisabled(true)),
+      ...panelComponents(cfg, { disabled: true }).slice(0, 3),
       row(button('noop:close', t.close_button, ButtonStyle.Danger).setDisabled(true)),
       row(button('cfg:ticket:view:texts', '◀ Retour aux textes', ButtonStyle.Secondary)),
     ],
@@ -411,6 +525,39 @@ async function handleComponent(interaction) {
       return interaction.update(render(arg, guild));
     }
 
+    case 'typeadd': {
+      if (cfg.types.length >= MAX_TYPES) {
+        return interaction.reply(ephemeralPayload(`Maximum ${MAX_TYPES} types de ticket.`));
+      }
+      return interaction.showModal(buildTypeModal('new', null));
+    }
+
+    case 'typeedit': {
+      const ty = cfg.types.find((x) => x.id === arg);
+      if (!ty) return interaction.update(render('types', guild));
+      return interaction.showModal(buildTypeModal(arg, ty));
+    }
+
+    case 'typedel': {
+      cfg.types = cfg.types.filter((x) => x.id !== arg);
+      save(guild.id, cfg);
+      return interaction.update(render('types', guild));
+    }
+
+    case 'typepick': {
+      return interaction.update(render(`type:${interaction.values[0]}`, guild));
+    }
+
+    case 'type': {
+      return interaction.update(render(`type:${arg}`, guild));
+    }
+
+    case 'panelstyle': {
+      cfg.panelStyle = cfg.panelStyle === 'select' ? 'buttons' : 'select';
+      save(guild.id, cfg);
+      return interaction.update(render('types', guild));
+    }
+
     case 'mode': {
       cfg.textMode = cfg.textMode === 'select' ? 'buttons' : 'select';
       save(guild.id, cfg);
@@ -487,10 +634,43 @@ async function handleComponent(interaction) {
   }
 }
 
+// Emoji Unicode (seul), emoji personnalisé <:nom:id> ou <a:nom:id>, ou emoji keycap (1️⃣).
+const EMOJI_RE = /^(<a?:\w+:\d+>|[0-9#*]\uFE0F?\u20E3|(\p{Extended_Pictographic}|\p{Regional_Indicator}){1,2}(\uFE0F|\u200D|\p{Emoji_Modifier}|\p{Extended_Pictographic})*)$/u;
+
+async function handleTypeModal(interaction, guild, id) {
+  const cfg = cfgOf(guild.id);
+  const label = interaction.fields.getTextInputValue('label').trim();
+  const emoji = interaction.fields.getTextInputValue('emoji').trim() || undefined;
+  const description = interaction.fields.getTextInputValue('description').trim() || undefined;
+  if (!label) return;
+  if (emoji && !EMOJI_RE.test(emoji)) {
+    return interaction.reply(ephemeralPayload('Emoji invalide : mets un seul emoji (ex : 🛠️), sans texte autour.'));
+  }
+
+  if (id === 'new') {
+    if (cfg.types.length >= MAX_TYPES) {
+      return interaction.reply(ephemeralPayload(`Maximum ${MAX_TYPES} types de ticket.`));
+    }
+    cfg.types.push({ id: newTypeId(), label, emoji, description });
+  } else {
+    const ty = cfg.types.find((x) => x.id === id);
+    if (!ty) return interaction.reply(ephemeralPayload('Ce type de ticket n’existe plus.'));
+    ty.label = label;
+    ty.emoji = emoji;
+    ty.description = description;
+  }
+  save(guild.id, cfg);
+
+  await interaction.deferUpdate();
+  return interaction.editReply(render('types', guild));
+}
+
 async function handleModal(interaction) {
   const guild = interaction.guild;
   if (!guild) return;
-  const id = interaction.customId.split(':')[3];
+  const parts = interaction.customId.split(':');
+  if (parts[2] === 'typemodal') return handleTypeModal(interaction, guild, parts[3]);
+  const id = parts[3];
   const group = GROUP_BY_ID[id];
   const keys = group ? group.keys : [id];
   if (!keys.every((k) => TEXT_BY_KEY[k])) return;
@@ -603,12 +783,48 @@ async function saveAsset(guild, kind, attachment) {
 // Panneau public + ouverture / fermeture des tickets
 // ---------------------------------------------------------------------------
 
+// Composants du panneau public.
+//  - aucun type : un bouton "Ouvrir un ticket" (comportement d'origine)
+//  - types en boutons ou en menu déroulant (style choisi dans la config)
+function panelComponents(cfg, { disabled = false } = {}) {
+  const t = cfg.texts;
+  const types = cfg.types ?? [];
+
+  if (!types.length) {
+    const b = button('tkt:open', t.panel_button, ButtonStyle.Primary, '🎫');
+    return [row(disabled ? b.setDisabled(true) : b)];
+  }
+
+  if (cfg.panelStyle === 'select') {
+    const menu = new StringSelectMenuBuilder()
+      .setCustomId('tkt:open-select')
+      .setPlaceholder(truncate(t.panel_button, 100))
+      .addOptions(
+        types.map((ty) => ({
+          label: truncate(ty.label, 100),
+          value: ty.id,
+          ...(ty.description ? { description: truncate(ty.description, 100) } : {}),
+          ...(ty.emoji ? { emoji: ty.emoji } : {}),
+        })),
+      );
+    if (disabled) menu.setDisabled(true);
+    return [row(menu)];
+  }
+
+  const buttons = types.map((ty) => {
+    const b = button(`tkt:open:${ty.id}`, ty.label, ButtonStyle.Primary, ty.emoji);
+    return disabled ? b.setDisabled(true) : b;
+  });
+  const rows = [];
+  for (let i = 0; i < buttons.length; i += 5) rows.push(row(...buttons.slice(i, i + 5)));
+  return rows;
+}
+
 async function publishPanel(guild, cfg, channel) {
   const t = cfg.texts;
   const e = embed().setTitle(t.panel_title).setDescription(t.panel_description).setFooter({ text: t.panel_footer });
   if (cfg.image && cfg.assets.image?.url) e.setImage(cfg.assets.image.url);
-  const btn = button('tkt:open', t.panel_button, ButtonStyle.Primary, '🎫');
-  await channel.send({ embeds: [e], components: [row(btn)] });
+  await channel.send({ embeds: [e], components: panelComponents(cfg) });
 }
 
 async function findOpenTicket(guild, cfg, userId) {
@@ -632,7 +848,7 @@ function slugify(str) {
     .replace(/^-|-$/g, '');
 }
 
-async function openTicket(interaction) {
+async function openTicket(interaction, typeId) {
   const guild = interaction.guild;
   const user = interaction.user;
   const cfg = cfgOf(guild.id);
@@ -640,6 +856,10 @@ async function openTicket(interaction) {
   const displayName = interaction.member?.displayName ?? user.username;
 
   if (!cfg.enabled) return interaction.reply(ephemeralPayload(t.msg_disabled));
+  const type = typeId ? cfg.types.find((x) => x.id === typeId) : null;
+  if (typeId && !type) {
+    return interaction.reply(ephemeralPayload('Ce type de ticket n’existe plus. Demande au staff de republier le panneau.'));
+  }
   if (openingUsers.has(user.id)) return interaction.reply(ephemeralPayload('⏳ Ton ticket est en cours de création.'));
 
   openingUsers.add(user.id);
@@ -655,7 +875,7 @@ async function openTicket(interaction) {
 
     cfg.counter += 1;
     const number = cfg.counter;
-    const vars = { user: displayName, number, channel: '' };
+    const vars = { user: displayName, number, channel: '', type: type?.label ?? '' };
     const name = truncate(slugify(fmt(t.channel_name, vars)), 100) || `ticket-${number}`;
 
     const me = guild.members.me;
@@ -690,7 +910,7 @@ async function openTicket(interaction) {
       name,
       type: ChannelType.GuildText,
       parent: cfg.categoryId ?? undefined,
-      topic: `Ticket de ${user.tag ?? user.username} (${user.id})`,
+      topic: `Ticket ${type ? type.label + ' ' : ''}de ${user.tag ?? user.username} (${user.id})`,
       permissionOverwrites: overwrites,
     });
 
@@ -746,8 +966,11 @@ async function closeTicket(interaction) {
 // Boutons publics du panneau (customId "tkt:...")
 async function handlePublicInteraction(interaction) {
   if (!interaction.guild) return;
-  if (interaction.customId === 'tkt:open') return openTicket(interaction);
-  if (interaction.customId === 'tkt:close') return closeTicket(interaction);
+  const id = interaction.customId;
+  if (id === 'tkt:close') return closeTicket(interaction);
+  if (id === 'tkt:open') return openTicket(interaction, null);
+  if (id.startsWith('tkt:open:')) return openTicket(interaction, id.slice('tkt:open:'.length));
+  if (id === 'tkt:open-select') return openTicket(interaction, interaction.values[0]);
 }
 
 function registerEvents(client) {

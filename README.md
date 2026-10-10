@@ -113,6 +113,16 @@ ils survivent aux redéploiements et redémarrages.
 
 ## Utiliser les tickets
 
+### Plusieurs types de ticket (catégories)
+
+Dans **Ticket → 🗂️ Types de ticket**, tu peux ajouter jusqu'à 25 types (ex. Support, Plainte, Partenariat),
+chacun avec un nom, un emoji optionnel et une description optionnelle.
+
+- **Affichage** : bouton « Affichage » pour choisir **Boutons** (un bouton par type) ou **Menu déroulant**
+  (un menu avec tous les types) sur le panneau.
+- **Sans type**, le panneau garde un seul bouton « Ouvrir un ticket ».
+- Dans les textes du ticket, la variable `{type}` contient le nom du type choisi (ex. `ticket-{type}-{user}`).
+
 1. Dans `/config` → Ticket → **📌 Publier le panneau** → choisis un salon.
 2. Les membres cliquent sur le bouton du panneau : un salon privé est créé, visible par eux et par le bot.
 3. Le bouton **Fermer le ticket** supprime le salon 5 secondes après.
