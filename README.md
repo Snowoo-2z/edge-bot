@@ -120,6 +120,9 @@ chacun avec un nom, un emoji optionnel et une description optionnelle.
 
 - **Affichage** : bouton « Affichage » pour choisir **Boutons** (un bouton par type) ou **Menu déroulant**
   (un menu avec tous les types) sur le panneau.
+- **Rôle à ping** : pour chaque type, le bouton **🔔 Rôle à ping** permet de choisir un rôle. À chaque ouverture
+  de ticket de ce type, ce rôle est mentionné dans le salon. Le rôle doit être *mentionnable* (Paramètres du rôle) ou le bot
+  doit avoir la permission *Mentionner @everyone, @here et tous les rôles*.
 - **Sans type**, le panneau garde un seul bouton « Ouvrir un ticket ».
 - Dans les textes du ticket, la variable `{type}` contient le nom du type choisi (ex. `ticket-{type}-{user}`).
 

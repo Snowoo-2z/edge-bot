@@ -7,6 +7,7 @@ const {
   MessageFlags,
   ModalBuilder,
   PermissionFlagsBits,
+  RoleSelectMenuBuilder,
   StringSelectMenuBuilder,
   TextInputBuilder,
   TextInputStyle,
@@ -181,6 +182,7 @@ function countOpen(guild, cfg) {
 function render(view, guild) {
   const cfg = cfgOf(guild.id);
   if (view.startsWith('type:')) return renderType(cfg, view.slice('type:'.length));
+  if (view.startsWith('typerole:')) return renderTypeRole(cfg, view.slice('typerole:'.length));
   switch (view) {
     case 'types':
       return renderTypes(cfg);
@@ -327,7 +329,7 @@ function renderTypes(cfg) {
     e.addFields(
       types.map((ty) => ({
         name: `${ty.emoji ?? '•'} ${ty.label}`,
-        value: truncate(ty.description ?? '—', 200),
+        value: truncate([ty.description, ty.roleId ? `🔔 <@&${ty.roleId}>` : null].filter(Boolean).join('\n') || '—', 200),
         inline: false,
       })),
     );
@@ -369,14 +371,42 @@ function renderType(cfg, id) {
   if (!ty) return renderTypes(cfg);
   const e = embed()
     .setTitle(`${ty.emoji ? ty.emoji + ' ' : ''}${ty.label}`)
-    .setDescription(ty.description ? truncate(ty.description, 300) : '_Pas de description_');
+    .setDescription(ty.description ? truncate(ty.description, 300) : '_Pas de description_')
+    .addFields({ name: 'Rôle à ping', value: ty.roleId ? `<@&${ty.roleId}>` : 'Aucun', inline: false });
   return {
     embeds: [e],
     components: [
       row(
         button(`cfg:ticket:typeedit:${id}`, 'Modifier', ButtonStyle.Primary, '✏️'),
+        button(`cfg:ticket:typerole:${id}`, 'Rôle à ping', ButtonStyle.Secondary, '🔔'),
         button(`cfg:ticket:typedel:${id}`, 'Supprimer', ButtonStyle.Danger, '🗑️'),
-        button('cfg:ticket:view:types', '◀ Retour aux types', ButtonStyle.Secondary),
+        button('cfg:ticket:view:types', '◀ Retour', ButtonStyle.Secondary),
+      ),
+    ],
+  };
+}
+
+// Vue de sélection du rôle à mentionner pour un type.
+function renderTypeRole(cfg, id) {
+  const ty = cfg.types.find((x) => x.id === id);
+  if (!ty) return renderTypes(cfg);
+  const menu = new RoleSelectMenuBuilder()
+    .setCustomId(`cfg:ticket:typerolepick:${id}`)
+    .setPlaceholder('Choisis le rôle à mentionner')
+    .setMinValues(1)
+    .setMaxValues(1);
+  const e = embed().setTitle(`🔔 Rôle à ping : ${ty.label}`).setDescription(
+    'Ce rôle sera mentionné dans le salon à chaque ouverture de ticket de ce type.\n' +
+      'Pour que la mention fonctionne, le rôle doit être **mentionnable** (Paramètres du rôle) ' +
+      'ou le bot doit avoir la permission *Mentionner @everyone, @here et tous les rôles*.',
+  );
+  return {
+    embeds: [e],
+    components: [
+      row(menu),
+      row(
+        button(`cfg:ticket:typerolecl:${id}`, 'Aucun rôle', ButtonStyle.Danger, '🗑️'),
+        button(`cfg:ticket:type:${id}`, '◀ Retour', ButtonStyle.Secondary),
       ),
     ],
   };
@@ -550,6 +580,27 @@ async function handleComponent(interaction) {
 
     case 'type': {
       return interaction.update(render(`type:${arg}`, guild));
+    }
+
+    case 'typerolepick': {
+      const ty = cfg.types.find((x) => x.id === arg);
+      if (!ty) return interaction.update(render('types', guild));
+      ty.roleId = interaction.values[0];
+      save(guild.id, cfg);
+      return interaction.update(render(`type:${arg}`, guild));
+    }
+
+    case 'typerolecl': {
+      const ty = cfg.types.find((x) => x.id === arg);
+      if (ty) {
+        delete ty.roleId;
+        save(guild.id, cfg);
+      }
+      return interaction.update(render(`type:${arg}`, guild));
+    }
+
+    case 'typerole': {
+      return interaction.update(render(`typerole:${arg}`, guild));
     }
 
     case 'panelstyle': {
@@ -925,10 +976,10 @@ async function openTicket(interaction, typeId) {
     if (cfg.gif && cfg.assets.gif?.url) welcome.setImage(cfg.assets.gif.url);
 
     await channel.send({
-      content: `<@${user.id}>`,
+      content: [`<@${user.id}>`, type?.roleId ? `<@&${type.roleId}>` : null].filter(Boolean).join(' '),
       embeds: [welcome],
       components: [row(button('tkt:close', t.close_button, ButtonStyle.Danger))],
-      allowedMentions: { users: [user.id] },
+      allowedMentions: { users: [user.id], roles: type?.roleId ? [type.roleId] : [] },
     });
 
     return interaction.editReply(ephemeralPayload(fmt(t.msg_opened, vars)));
