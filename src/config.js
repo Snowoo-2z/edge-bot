@@ -2,9 +2,15 @@ const { MessageFlags } = require('discord.js');
 const { embed, moduleSelectRow, ephemeralPayload } = require('./ui');
 const { MODULE_LIST } = require('./modules/registry');
 const ticket = require('./modules/ticket');
+const embedModule = require('./modules/embed');
+const welcome = require('./modules/welcome');
 
 // Modules réellement implémentés (id -> module).
-const MODULES = { [ticket.ID]: ticket };
+const MODULES = {
+  [ticket.ID]: ticket,
+  [embedModule.ID]: embedModule,
+  [welcome.ID]: welcome,
+};
 
 // Panneau d'accueil de /config : choix du module.
 function rootPayload() {

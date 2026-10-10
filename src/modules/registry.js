@@ -7,6 +7,18 @@ const MODULE_LIST = [
     emoji: '🎫',
     description: 'Panneau de tickets, images/GIF et textes modifiables',
   },
+  {
+    id: 'embed',
+    label: 'Créateur d’embed',
+    emoji: '🧩',
+    description: 'Construire un embed étape par étape, sauver des modèles, l’envoyer',
+  },
+  {
+    id: 'welcome',
+    label: 'Bienvenue',
+    emoji: '👋',
+    description: 'Carte de bienvenue violette envoyée à chaque arrivée',
+  },
 ];
 
 module.exports = { MODULE_LIST };

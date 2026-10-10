@@ -13,6 +13,7 @@
     "node": ">=18.17"
   },
   "dependencies": {
+    "@napi-rs/canvas": "^1.0.11",
     "@supabase/supabase-js": "^2.117.3",
     "discord.js": "^14.27.0"
   }

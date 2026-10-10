@@ -6,7 +6,7 @@ Bot Discord **Edge** : une seule commande de configuration, `/config`, qui ouvre
 ## Fonctionnement de `/config`
 
 1. `/config` ouvre un panneau privé (visible seulement par toi).
-2. Tu choisis le **module** dans le menu déroulant (actuellement : **🎫 Ticket**).
+2. Tu choisis le **module** dans le menu déroulant : **🎫 Ticket**, **🧩 Créateur d’embed**, **👋 Bienvenue**.
 3. Tu configures avec les boutons :
    - **Module / Image / GIF** : boutons ON (vert) / OFF (gris), un clic = bascule.
    - **📁 Catégorie** : catégorie où seront créés les tickets.
@@ -37,6 +37,42 @@ Variables utilisables dans les textes :
 - **Image** (ON) : affichée sur le panneau « Ouvrir un ticket ».
 - **GIF** (ON) : affiché dans le salon du ticket, dans le message d'accueil.
 
+## Créateur d'embed
+
+Dans `/config` → **🧩 Créateur d’embed**, tu construis un embed pièce par pièce, avec un **aperçu en direct** dans le panneau.
+Tous les embeds sont violets.
+
+- **✏️ Titre + lien**, **📝 Description**, **👤 Auteur & pied** : une fenêtre par partie.
+- **🖼️ Images** : URL d'image (grande image) et URL de miniature. Les URL doivent commencer par `https://`.
+  L'import de fichier n'est pas proposé : héberge l'image ailleurs et colle son lien.
+- **➕ Champ** / **🗑️ Champ** : ajoute un champ (nom, valeur, « en ligne » = `oui` pour côte à côte) ou supprime-en un. 25 max.
+- **💾 Modèle** / **📂 Modèles** : sauvegarde le brouillon sous un nom, recharge-le ou supprime-le. 10 modèles max.
+- **📤 Envoyer** : choisis le salon ; l'embed y est publié tel quel. Le bot a besoin de la permission
+  *Envoyer des messages* et *Intégrer des liens* dans ce salon.
+- **🧹 Vider** : efface le brouillon (les modèles sont conservés).
+
+## Bienvenue
+
+Dans `/config` → **👋 Bienvenue** : à chaque arrivée d'un membre, le bot envoie dans le salon choisi un message
+suivi d'une **carte de bienvenue violette** (image PNG générée par le bot, 1000×400, avec l'avatar du membre).
+
+- **Module** : ON / OFF. **Avatar** : affiché ou masqué sur la carte.
+- **📍 Salon** : choisis le salon d'arrivée.
+- **✏️ Textes** : titre et sous-titre de l'image, message au-dessus de l'image.
+- **👁️ Aperçu** : génère la carte avec ton compte, visible seulement par toi.
+
+Variables utilisables dans les textes :
+- `{user}` : pseudo sur l'image ; mention du membre dans le message
+- `{server}` : nom du serveur
+- `{count}` : numéro du membre (nombre de membres du serveur)
+
+Par défaut : titre « Bienvenue {user} ! », sous-titre « Membre n°{count} · {server} ».
+
+> **À activer dans le portail Discord** : *Bot* → *Privileged Gateway Intents* → **SERVER MEMBERS INTENT**.
+> Sans lui, le bot refuse de se connecter (le module Bienvenue reçoit les arrivées grâce à cet intent).
+
+Les polices (Inter, licence SIL OFL) sont incluses dans `assets/fonts/`. Aucun fichier n'est à installer.
+
 ## Installation
 
 Prérequis : Node.js 18.17 ou plus récent.
@@ -47,8 +83,8 @@ Sur le [Discord Developer Portal](https://discord.com/developers/applications) :
 
 1. **New Application** → donne un nom (ex. « Edge »).
 2. **Bot** → **Reset Token** → copie le token.
-3. **Bot** → section *Privileged Gateway Intents* → active **MESSAGE CONTENT INTENT**.
-   (Indispensable pour recevoir les pièces jointes lors de l'import d'image / GIF.)
+3. **Bot** → section *Privileged Gateway Intents* → active **MESSAGE CONTENT INTENT**
+   (pièces jointes lors de l'import d'image / GIF) et **SERVER MEMBERS INTENT** (arrivée des membres, module Bienvenue).
 4. **General Information** → copie l'**Application ID** (c'est le `CLIENT_ID`).
 5. **OAuth2 → URL Generator** : coche les scopes `bot` et `applications.commands`, puis les permissions
    *View Channels*, *Send Messages*, *Manage Channels*, *Embed Links*, *Attach Files*, *Read Message History*.
@@ -143,11 +179,15 @@ src/
   keepalive.js          auto-ping toutes les 10 min (anti-veille)
   config.js             commande /config et routage vers les modules
   deploy-commands.js    enregistrement de la commande auprès de Discord
-supabase/schema.sql     tables et bucket à créer dans Supabase
   store.js              stockage Supabase (réglages + bucket d'images)
   ui.js                 helpers d'embeds (violet), boutons, menus
+  welcome-image.js      génération de la carte de bienvenue (PNG)
   modules/registry.js   liste des modules affichés dans le menu
   modules/ticket.js     module Ticket (panneau, tickets, textes, images/GIF)
+  modules/embed.js      module Créateur d'embed (brouillon, modèles, envoi)
+  modules/welcome.js    module Bienvenue (réglages, aperçu, arrivées)
+assets/fonts/           polices Inter (carte de bienvenue)
+supabase/schema.sql     tables et bucket à créer dans Supabase
 ```
 
 Ajouter un module : créer `src/modules/<id>.js` (avec `render`, `handleComponent`, `handleModal`),

@@ -1,6 +1,7 @@
 const { Client, GatewayIntentBits, Events } = require('discord.js');
 const { handleConfigCommand, handleConfigInteraction } = require('./config');
 const ticket = require('./modules/ticket');
+const welcome = require('./modules/welcome');
 const { ephemeralPayload } = require('./ui');
 const { startServer } = require('./server');
 const { startKeepAlive } = require('./keepalive');
@@ -18,7 +19,13 @@ const token = process.env.DISCORD_TOKEN;
 
 // MessageContent : nécessaire pour recevoir les pièces jointes (import image / GIF).
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
+  // GuildMembers : nécessaire pour l'arrivée des membres (module Bienvenue). Intent privilégié à activer.
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
+  ],
 });
 
 client.once(Events.ClientReady, (c) => {
@@ -46,6 +53,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 });
 
 ticket.registerEvents(client);
+welcome.registerEvents(client);
 
 // Serveur HTTP (health check Render) + auto-ping anti-veille.
 startServer(() => ({ bot: client.isReady() ? 'connected' : 'connecting' }));
