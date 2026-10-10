@@ -178,10 +178,26 @@ async function start(client: Client<true>, modules: EdgeModule[], onProgress?: (
   return { client, ctx, dispatch, sched, drift, disabled, db };
 }
 
+/**
+ * Un code d'erreur Discord seul ne sert a rien a distance : on dit quoi regler.
+ * 50013 = « Missing Permissions » = presque toujours la position du role Edge dans la hierarchie,
+ * ou une autorisation de salon ou le role n'est pas cite.
+ */
+export function decrire(e: unknown): string {
+  const err = e as { message?: string; code?: number };
+  const msg = err?.message ?? String(e);
+  if (err?.code === 50013 || /missing permissions/i.test(msg)) {
+    return msg + ' — permission manquante pour le rôle Edge : vérifie sa position (Server Settings →'
+      + ' Roles → Edge juste sous ⚔️│ Modérateur) et qu’il est bien autorisé dans le salon visé'
+      + ' (la liste complète des écarts est dans /audit structure)';
+  }
+  return err?.code ? `${msg} (code API ${err.code})` : msg;
+}
+
 function safeRun(scope: string, fn?: () => unknown, once?: boolean): Promise<void> {
   return Promise.resolve()
     .then(async () => { await fn?.(); })
-    .catch((e: Error) => { log.error(`${scope}${once ? ' (once)' : ''} : ${e.message}`); });
+    .catch((e: unknown) => { log.error(`${scope}${once ? ' (once)' : ''} : ${decrire(e)}`); });
 }
 
 /** Une dependance manquante => on coupe le module, on ne plante pas le bot. */

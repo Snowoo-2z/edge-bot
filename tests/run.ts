@@ -671,6 +671,20 @@ test('le logger survit a une methode arrachee a son objet (le boot-loop de Rende
   for (const n of ['a', 'b', 'c']) choix(n)('dérive');
 });
 
+test('le manifeste ne donne pas deux fois la même couleur de rôle ( ma propre police le reprochait)', () => {
+  // `npm run dry` affichait « [police] couleurs de rôles dupliquées » A PROPOS DU MANIFESTE
+  // lui-meme : manager et mod partageaient #E67E22. Un audit qui engueule son propre plan,
+  // ca use la confiance dans les 23 autres lignes du rapport.
+  const vus = new Map<string, string>();
+  for (const r of ROLE_DEFS) {
+    if (!r.color) continue;
+    const avant = vus.get(r.color.toLowerCase());
+    assert.equal(avant, undefined, `${avant} et ${r.name} ont tous les deux ${r.color}`);
+    vus.set(r.color.toLowerCase(), r.name);
+  }
+  assert.ok(vus.size >= ROLE_DEFS.length - 2, 'trop peu de couleurs distinctes pour être un hasard');
+});
+
 /* ------------------------------------------------------------------ schema SQL vs code */
 test('schéma : le code ne touche aucune table ni colonne que les migrations ne déclarent pas', () => {
   const r = auditerSchema('.');

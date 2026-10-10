@@ -4,6 +4,7 @@
  * On stocke l'ID du message dans kv_store -> aucune dependance a un canal de config.
  */
 import type { TextChannel } from 'discord.js';
+import { PermissionFlagsBits } from 'discord.js';
 import type { Ctx } from './module.js';
 
 export interface PanelSpec {
@@ -29,6 +30,16 @@ export async function ensurePanel(ctx: Ctx, spec: PanelSpec): Promise<'created' 
     } catch {
       /* message supprime : on repart en creation */
     }
+  }
+  // Un panneau que Edge n'a pas le droit d'ecrire ne doit pas remonter un « Missing Permissions »
+  // nu : on dit quel salon, quelle case cocher, et le bot continue. (Render, 2026-10-10 —
+  // « rules : Missing Permissions », « selfroles : Missing Permissions », sans rien d'autre.)
+  const moi = ctx.guild.members.me;
+  const perms = moi ? spec.channel.permissionsFor(moi) : null;
+  if (perms && (!perms.has(PermissionFlagsBits.ViewChannel) || !perms.has(PermissionFlagsBits.SendMessages))) {
+    const manque = perms.has(PermissionFlagsBits.ViewChannel) ? 'Envoyer des messages' : 'Voir le salon';
+    ctx.log.warn(`panneau « ${spec.key} » non publié dans #${spec.channel.name} : il manque « ${manque} » au rôle Edge ici (Server Settings → Roles, ou les autorisations du salon) → /audit structure liste tout`);
+    return 'missing';
   }
   const sent = await spec.channel.send(body as never);
   await ctx.db.kv.set(kvKey, { id: sent.id, channel: spec.channel.id, hash });
