@@ -10,6 +10,7 @@ DECLARE
   t text;
   n bigint;
   attendues text[] := array[
+    'announcements',
     'applications',
     'automod_hits',
     'automod_rules',
@@ -72,6 +73,7 @@ DECLARE
   t text; out jsonb := '{}'; n bigint;
 BEGIN
   FOREACH t IN ARRAY array[
+    'announcements',
     'applications',
     'automod_hits',
     'automod_rules',

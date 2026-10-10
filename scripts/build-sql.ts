@@ -27,6 +27,72 @@ const morceaux = fichiers.map((f) => ({ nom: f, sql: readFileSync(join(MIG, f), 
 const corps = morceaux.map((m) => `-- ---- ${m.nom} ----\n${m.sql}`).join('\n\n');
 
 const tables = [...new Set([...corps.matchAll(/CREATE TABLE IF NOT EXISTS (?:public\.)?([a-z_][a-z0-9_]*)/g)].map((m) => m[1]!))].sort();
+
+/* -- Le fichier doit se retablir tout seul --------------------------------------------
+   Un collage interrompu dans l'editeur SQL laisse des tables a moitie creees : le coup
+   d'apres, « column opener_id does not exist » et l'utilisateur reste coche. On emit donc,
+   AVANT les CREATE TABLE, un bloc par table qui ajoute les colonnes manquantes a la table si
+   elle existe deja. Aucun DROP, aucune donnee touchee, les colonnes existantes sont laissees
+   telles quelles (elles gardent leur type, y compris si elles restent NOT NULL sans defaut). */
+const sansCommentaires = corps.replace(/--[^\n]*/g, '');
+const colonnesParTable = new Map<string, [string, string][]>();
+for (const m of sansCommentaires.matchAll(/CREATE TABLE IF NOT EXISTS (?:public\.)?([a-z_]+)\s*\(/g)) {
+  const nom = m[1]!;
+  let i = (m.index ?? 0) + m[0].length - 1;
+  let profondeur = 0;
+  const debut = i + 1;
+  while (i < sansCommentaires.length) {
+    const ch = sansCommentaires[i];
+    if (ch === '(') profondeur++;
+    else if (ch === ')') { profondeur--; if (profondeur === 0) break; }
+    i++;
+  }
+  const morceaux: string[] = [];
+  let cur = ''; let p2 = 0;
+  for (const ch of sansCommentaires.slice(debut, i)) {
+    if (ch === '(') p2++;
+    if (ch === ')') p2--;
+    if (ch === ',' && p2 === 0) { morceaux.push(cur); cur = ''; } else cur += ch;
+  }
+  morceaux.push(cur);
+  const cols: [string, string][] = [];
+  for (const morc of morceaux) {
+    const propre = morc.replace(/\s+/g, ' ').trim();
+    if (!propre || /^(PRIMARY KEY|UNIQUE|FOREIGN KEY|CHECK|CONSTRAINT|EXCLUDE)\b/i.test(propre)) continue;
+    const def = /^([a-z_]+) ([\s\S]*)$/.exec(propre);
+    if (def) cols.push([def[1]!, def[2]!.trim()]);
+  }
+  colonnesParTable.set(nom, cols);
+}
+if (colonnesParTable.size !== tables.length) throw new Error(`parseur de tables incomplet : ${colonnesParTable.size} blocs analyses pour ${tables.length} tables detectees`);
+
+/** Definition de colonne -> ce qui est sur a ajouter sur une table deja peuplee. */
+function pourReparation(def: string): string | null {
+  if (/\bPRIMARY KEY\b/i.test(def)) return null; // on ne peut pas poser une cle sur des lignes existantes
+  let d = def
+    .replace(/\s+REFERENCES\b[\s\S]*/gi, '')
+    .replace(/\s+CHECK\s*\([\s\S]*/gi, '')
+    .replace(/\s+NOT NULL\b/gi, '')
+    .replace(/\s+UNIQUE\b/gi, '')
+    .replace(/\bBIGSERIAL\b/gi, 'bigint')
+    .replace(/\bSMALLSERIAL\b/gi, 'smallint')
+    .replace(/\bSERIAL\b/gi, 'integer')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!d) return null;
+  if (!/^[a-z]/i.test(d)) return null; // type meconnu : on ne touche pas
+  return d;
+}
+
+const reparation = tables.map((t) => {
+  const lignes = (colonnesParTable.get(t) ?? []).map(([c, def]) => {
+    const type = pourReparation(def);
+    return type ? `  ALTER TABLE public.${t} ADD COLUMN IF NOT EXISTS ${c} ${type};` : null;
+  }).filter(Boolean) as string[];
+  if (!lignes.length) return null;
+  return `DO $alt$ BEGIN\n  IF to_regclass('public.${t}') IS NOT NULL THEN\n${lignes.join('\n')}\n  END IF;\nEND $alt$;`;
+}).filter(Boolean).join('\n\n');
+if (!reparation) throw new Error('aucune ligne de reparation generee : le parseur de colonnes ne voit rien');
 if (tables.length < 20) throw new Error(`liste de tables suspecte (${tables.length}) : le parseur de migrations a cassé`);
 
 const tout = morceaux.map((m) => m.sql).join('\n');
@@ -56,6 +122,17 @@ const sortie = `-- =============================================================
 
 SET search_path = public;
 
+-- ============================================================================
+-- Rattrapage : si une table existe deja (collage precedent interrompu, version precedente du
+-- schema), on lui ajoute les colonnes qui lui manquent. Les colonnes presentes ne sont pas
+-- modifiees, aucune donnee n'est ecrite. Les colonnes NOT NULL sont ajoutees WITHOUT contrainte
+-- NOT NULL : c'est Edge qui les renseigne a chaque ecriture.
+-- ============================================================================
+${reparation}
+
+-- ============================================================================
+-- Le schema lui-meme (idempotent).
+-- ============================================================================
 ${corps}
 
 -- ============================================================================

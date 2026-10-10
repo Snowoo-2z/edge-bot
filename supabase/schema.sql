@@ -4,7 +4,7 @@
 --
 -- · Idempotent : tu peux le relancer après chaque mise à jour, il ne détruit RIEN
 --   (CREATE ... IF NOT EXISTS partout, aucune DROP, aucun TRUNCATE).
--- · Il crée 23 tables, les index et 3 fonctions que Edge appelle par
+-- · Il crée 24 tables, les index et 3 fonctions que Edge appelle par
 --   l'API : edge_schema_check, edge_prune_events, edge_counts.
 -- · Après ce fichier, Edge n'a besoin que de SUPABASE_URL et SUPABASE_SERVICE_ROLE_KEY : il
 --   passe par l'API HTTP de Supabase, donc JAMAIS le mot de passe de la base ni un pooler.
@@ -13,6 +13,306 @@
 
 SET search_path = public;
 
+-- ============================================================================
+-- Rattrapage : si une table existe deja (collage precedent interrompu, version precedente du
+-- schema), on lui ajoute les colonnes qui lui manquent. Les colonnes presentes ne sont pas
+-- modifiees, aucune donnee n'est ecrite. Les colonnes NOT NULL sont ajoutees WITHOUT contrainte
+-- NOT NULL : c'est Edge qui les renseigne a chaque ecriture.
+-- ============================================================================
+DO $alt$ BEGIN
+  IF to_regclass('public.announcements') IS NOT NULL THEN
+  ALTER TABLE public.announcements ADD COLUMN IF NOT EXISTS channel_id BIGINT;
+  ALTER TABLE public.announcements ADD COLUMN IF NOT EXISTS author_id BIGINT;
+  ALTER TABLE public.announcements ADD COLUMN IF NOT EXISTS embed JSONB DEFAULT '{}';
+  ALTER TABLE public.announcements ADD COLUMN IF NOT EXISTS scheduled_at TIMESTAMPTZ;
+  ALTER TABLE public.announcements ADD COLUMN IF NOT EXISTS published_at TIMESTAMPTZ;
+  ALTER TABLE public.announcements ADD COLUMN IF NOT EXISTS message_id BIGINT;
+  ALTER TABLE public.announcements ADD COLUMN IF NOT EXISTS error TEXT;
+  ALTER TABLE public.announcements ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT now();
+  END IF;
+END $alt$;
+
+DO $alt$ BEGIN
+  IF to_regclass('public.applications') IS NOT NULL THEN
+  ALTER TABLE public.applications ADD COLUMN IF NOT EXISTS role_requested TEXT;
+  ALTER TABLE public.applications ADD COLUMN IF NOT EXISTS applicant_id BIGINT;
+  ALTER TABLE public.applications ADD COLUMN IF NOT EXISTS answers JSONB DEFAULT '{}';
+  ALTER TABLE public.applications ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'received';
+  ALTER TABLE public.applications ADD COLUMN IF NOT EXISTS reviewed_by BIGINT;
+  ALTER TABLE public.applications ADD COLUMN IF NOT EXISTS decided_at TIMESTAMPTZ;
+  ALTER TABLE public.applications ADD COLUMN IF NOT EXISTS trial_ends_at TIMESTAMPTZ;
+  ALTER TABLE public.applications ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT now();
+  END IF;
+END $alt$;
+
+DO $alt$ BEGIN
+  IF to_regclass('public.automod_hits') IS NOT NULL THEN
+  ALTER TABLE public.automod_hits ADD COLUMN IF NOT EXISTS rule_kind TEXT;
+  ALTER TABLE public.automod_hits ADD COLUMN IF NOT EXISTS user_id BIGINT;
+  ALTER TABLE public.automod_hits ADD COLUMN IF NOT EXISTS message_id BIGINT;
+  ALTER TABLE public.automod_hits ADD COLUMN IF NOT EXISTS channel_id BIGINT;
+  ALTER TABLE public.automod_hits ADD COLUMN IF NOT EXISTS detail TEXT;
+  ALTER TABLE public.automod_hits ADD COLUMN IF NOT EXISTS action_taken TEXT;
+  ALTER TABLE public.automod_hits ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT now();
+  END IF;
+END $alt$;
+
+DO $alt$ BEGIN
+  IF to_regclass('public.automod_rules') IS NOT NULL THEN
+  ALTER TABLE public.automod_rules ADD COLUMN IF NOT EXISTS kind TEXT;
+  ALTER TABLE public.automod_rules ADD COLUMN IF NOT EXISTS enabled BOOLEAN DEFAULT true;
+  ALTER TABLE public.automod_rules ADD COLUMN IF NOT EXISTS params JSONB DEFAULT '{}';
+  ALTER TABLE public.automod_rules ADD COLUMN IF NOT EXISTS action TEXT DEFAULT 'log';
+  ALTER TABLE public.automod_rules ADD COLUMN IF NOT EXISTS strikes INT DEFAULT 1;
+  END IF;
+END $alt$;
+
+DO $alt$ BEGIN
+  IF to_regclass('public.bot_events') IS NOT NULL THEN
+  ALTER TABLE public.bot_events ADD COLUMN IF NOT EXISTS kind TEXT;
+  ALTER TABLE public.bot_events ADD COLUMN IF NOT EXISTS payload JSONB DEFAULT '{}';
+  ALTER TABLE public.bot_events ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT now();
+  END IF;
+END $alt$;
+
+DO $alt$ BEGIN
+  IF to_regclass('public.cases') IS NOT NULL THEN
+  ALTER TABLE public.cases ADD COLUMN IF NOT EXISTS user_id BIGINT;
+  ALTER TABLE public.cases ADD COLUMN IF NOT EXISTS moderator_id BIGINT;
+  ALTER TABLE public.cases ADD COLUMN IF NOT EXISTS type TEXT;
+  ALTER TABLE public.cases ADD COLUMN IF NOT EXISTS reason TEXT;
+  ALTER TABLE public.cases ADD COLUMN IF NOT EXISTS duration_minutes INT;
+  ALTER TABLE public.cases ADD COLUMN IF NOT EXISTS dm_sent BOOLEAN DEFAULT false;
+  ALTER TABLE public.cases ADD COLUMN IF NOT EXISTS evidence_url TEXT;
+  ALTER TABLE public.cases ADD COLUMN IF NOT EXISTS message_url TEXT;
+  ALTER TABLE public.cases ADD COLUMN IF NOT EXISTS active BOOLEAN DEFAULT true;
+  ALTER TABLE public.cases ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT now();
+  ALTER TABLE public.cases ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
+  ALTER TABLE public.cases ADD COLUMN IF NOT EXISTS ticket_id BIGINT;
+  END IF;
+END $alt$;
+
+DO $alt$ BEGIN
+  IF to_regclass('public.events_rsvp') IS NOT NULL THEN
+  ALTER TABLE public.events_rsvp ADD COLUMN IF NOT EXISTS event_row BIGINT;
+  ALTER TABLE public.events_rsvp ADD COLUMN IF NOT EXISTS user_id BIGINT;
+  ALTER TABLE public.events_rsvp ADD COLUMN IF NOT EXISTS state TEXT;
+  END IF;
+END $alt$;
+
+DO $alt$ BEGIN
+  IF to_regclass('public.flags') IS NOT NULL THEN
+  ALTER TABLE public.flags ADD COLUMN IF NOT EXISTS enabled BOOLEAN;
+  ALTER TABLE public.flags ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now();
+  END IF;
+END $alt$;
+
+DO $alt$ BEGIN
+  IF to_regclass('public.giveaway_entries') IS NOT NULL THEN
+  ALTER TABLE public.giveaway_entries ADD COLUMN IF NOT EXISTS giveaway_id BIGINT;
+  ALTER TABLE public.giveaway_entries ADD COLUMN IF NOT EXISTS user_id BIGINT;
+  ALTER TABLE public.giveaway_entries ADD COLUMN IF NOT EXISTS weight NUMERIC(6,3) DEFAULT 1;
+  ALTER TABLE public.giveaway_entries ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT now();
+  END IF;
+END $alt$;
+
+DO $alt$ BEGIN
+  IF to_regclass('public.giveaways') IS NOT NULL THEN
+  ALTER TABLE public.giveaways ADD COLUMN IF NOT EXISTS message_id BIGINT;
+  ALTER TABLE public.giveaways ADD COLUMN IF NOT EXISTS channel_id BIGINT;
+  ALTER TABLE public.giveaways ADD COLUMN IF NOT EXISTS host_id BIGINT;
+  ALTER TABLE public.giveaways ADD COLUMN IF NOT EXISTS prize TEXT;
+  ALTER TABLE public.giveaways ADD COLUMN IF NOT EXISTS ends_at TIMESTAMPTZ;
+  ALTER TABLE public.giveaways ADD COLUMN IF NOT EXISTS winners_count INT DEFAULT 1;
+  ALTER TABLE public.giveaways ADD COLUMN IF NOT EXISTS requires_roles JSONB DEFAULT '[]';
+  ALTER TABLE public.giveaways ADD COLUMN IF NOT EXISTS min_days SMALLINT DEFAULT 0;
+  ALTER TABLE public.giveaways ADD COLUMN IF NOT EXISTS weights JSONB DEFAULT '{}';
+  ALTER TABLE public.giveaways ADD COLUMN IF NOT EXISTS ping BOOLEAN DEFAULT true;
+  ALTER TABLE public.giveaways ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'running';
+  ALTER TABLE public.giveaways ADD COLUMN IF NOT EXISTS ended_at TIMESTAMPTZ;
+  ALTER TABLE public.giveaways ADD COLUMN IF NOT EXISTS winner_ids JSONB DEFAULT '[]';
+  ALTER TABLE public.giveaways ADD COLUMN IF NOT EXISTS reroll_of BIGINT;
+  END IF;
+END $alt$;
+
+DO $alt$ BEGIN
+  IF to_regclass('public.invite_stats') IS NOT NULL THEN
+  ALTER TABLE public.invite_stats ADD COLUMN IF NOT EXISTS user_id BIGINT;
+  ALTER TABLE public.invite_stats ADD COLUMN IF NOT EXISTS code TEXT;
+  ALTER TABLE public.invite_stats ADD COLUMN IF NOT EXISTS used INT DEFAULT 0;
+  ALTER TABLE public.invite_stats ADD COLUMN IF NOT EXISTS month TEXT;
+  END IF;
+END $alt$;
+
+DO $alt$ BEGIN
+  IF to_regclass('public.kv_store') IS NOT NULL THEN
+  ALTER TABLE public.kv_store ADD COLUMN IF NOT EXISTS value JSONB;
+  ALTER TABLE public.kv_store ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now();
+  END IF;
+END $alt$;
+
+DO $alt$ BEGIN
+  IF to_regclass('public.level_rewards') IS NOT NULL THEN
+  ALTER TABLE public.level_rewards ADD COLUMN IF NOT EXISTS level INT;
+  ALTER TABLE public.level_rewards ADD COLUMN IF NOT EXISTS role_id BIGINT;
+  END IF;
+END $alt$;
+
+DO $alt$ BEGIN
+  IF to_regclass('public.members') IS NOT NULL THEN
+  ALTER TABLE public.members ADD COLUMN IF NOT EXISTS joined_at TIMESTAMPTZ DEFAULT now();
+  ALTER TABLE public.members ADD COLUMN IF NOT EXISTS xp INT DEFAULT 0;
+  ALTER TABLE public.members ADD COLUMN IF NOT EXISTS messages INT DEFAULT 0;
+  ALTER TABLE public.members ADD COLUMN IF NOT EXISTS voice_minutes INT DEFAULT 0;
+  ALTER TABLE public.members ADD COLUMN IF NOT EXISTS warn_points INT DEFAULT 0;
+  ALTER TABLE public.members ADD COLUMN IF NOT EXISTS last_hash TEXT;
+  ALTER TABLE public.members ADD COLUMN IF NOT EXISTS rules_accepted_at TIMESTAMPTZ;
+  ALTER TABLE public.members ADD COLUMN IF NOT EXISTS presented_at TIMESTAMPTZ;
+  ALTER TABLE public.members ADD COLUMN IF NOT EXISTS verified BOOLEAN DEFAULT false;
+  ALTER TABLE public.members ADD COLUMN IF NOT EXISTS flags JSONB DEFAULT '{}';
+  END IF;
+END $alt$;
+
+DO $alt$ BEGIN
+  IF to_regclass('public.partnerships') IS NOT NULL THEN
+  ALTER TABLE public.partnerships ADD COLUMN IF NOT EXISTS partner_name TEXT;
+  ALTER TABLE public.partnerships ADD COLUMN IF NOT EXISTS partner_guild_id BIGINT;
+  ALTER TABLE public.partnerships ADD COLUMN IF NOT EXISTS contact_id BIGINT;
+  ALTER TABLE public.partnerships ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'pending';
+  ALTER TABLE public.partnerships ADD COLUMN IF NOT EXISTS reciprocal BOOLEAN DEFAULT false;
+  ALTER TABLE public.partnerships ADD COLUMN IF NOT EXISTS member_count INT;
+  ALTER TABLE public.partnerships ADD COLUMN IF NOT EXISTS invite_code TEXT;
+  ALTER TABLE public.partnerships ADD COLUMN IF NOT EXISTS fails INT DEFAULT 0;
+  ALTER TABLE public.partnerships ADD COLUMN IF NOT EXISTS checks INT DEFAULT 0;
+  ALTER TABLE public.partnerships ADD COLUMN IF NOT EXISTS last_checked_at TIMESTAMPTZ;
+  ALTER TABLE public.partnerships ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT now();
+  ALTER TABLE public.partnerships ADD COLUMN IF NOT EXISTS note TEXT;
+  END IF;
+END $alt$;
+
+DO $alt$ BEGIN
+  IF to_regclass('public.polls') IS NOT NULL THEN
+  ALTER TABLE public.polls ADD COLUMN IF NOT EXISTS message_id BIGINT;
+  ALTER TABLE public.polls ADD COLUMN IF NOT EXISTS channel_id BIGINT;
+  ALTER TABLE public.polls ADD COLUMN IF NOT EXISTS author_id BIGINT;
+  ALTER TABLE public.polls ADD COLUMN IF NOT EXISTS question TEXT;
+  ALTER TABLE public.polls ADD COLUMN IF NOT EXISTS ends_at TIMESTAMPTZ;
+  ALTER TABLE public.polls ADD COLUMN IF NOT EXISTS closed BOOLEAN DEFAULT false;
+  END IF;
+END $alt$;
+
+DO $alt$ BEGIN
+  IF to_regclass('public.presentations') IS NOT NULL THEN
+  ALTER TABLE public.presentations ADD COLUMN IF NOT EXISTS user_id BIGINT;
+  ALTER TABLE public.presentations ADD COLUMN IF NOT EXISTS message_id BIGINT;
+  ALTER TABLE public.presentations ADD COLUMN IF NOT EXISTS answers JSONB DEFAULT '{}';
+  ALTER TABLE public.presentations ADD COLUMN IF NOT EXISTS verified BOOLEAN DEFAULT false;
+  ALTER TABLE public.presentations ADD COLUMN IF NOT EXISTS verified_by BIGINT;
+  ALTER TABLE public.presentations ADD COLUMN IF NOT EXISTS verified_at TIMESTAMPTZ;
+  ALTER TABLE public.presentations ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT now();
+  END IF;
+END $alt$;
+
+DO $alt$ BEGIN
+  IF to_regclass('public.reports') IS NOT NULL THEN
+  ALTER TABLE public.reports ADD COLUMN IF NOT EXISTS reporter_id BIGINT;
+  ALTER TABLE public.reports ADD COLUMN IF NOT EXISTS target_user_id BIGINT;
+  ALTER TABLE public.reports ADD COLUMN IF NOT EXISTS target_message_id BIGINT;
+  ALTER TABLE public.reports ADD COLUMN IF NOT EXISTS link TEXT;
+  ALTER TABLE public.reports ADD COLUMN IF NOT EXISTS reason TEXT;
+  ALTER TABLE public.reports ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'open';
+  ALTER TABLE public.reports ADD COLUMN IF NOT EXISTS ticket_id BIGINT;
+  ALTER TABLE public.reports ADD COLUMN IF NOT EXISTS founded BOOLEAN;
+  ALTER TABLE public.reports ADD COLUMN IF NOT EXISTS reviewed_by BIGINT;
+  ALTER TABLE public.reports ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT now();
+  END IF;
+END $alt$;
+
+DO $alt$ BEGIN
+  IF to_regclass('public.scheduled_events') IS NOT NULL THEN
+  ALTER TABLE public.scheduled_events ADD COLUMN IF NOT EXISTS guild_event_id BIGINT;
+  ALTER TABLE public.scheduled_events ADD COLUMN IF NOT EXISTS channel_id BIGINT;
+  ALTER TABLE public.scheduled_events ADD COLUMN IF NOT EXISTS creator_id BIGINT;
+  ALTER TABLE public.scheduled_events ADD COLUMN IF NOT EXISTS title TEXT;
+  ALTER TABLE public.scheduled_events ADD COLUMN IF NOT EXISTS starts_at TIMESTAMPTZ;
+  ALTER TABLE public.scheduled_events ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'scheduled';
+  ALTER TABLE public.scheduled_events ADD COLUMN IF NOT EXISTS reminded BOOLEAN DEFAULT false;
+  END IF;
+END $alt$;
+
+DO $alt$ BEGIN
+  IF to_regclass('public.scheduler_jobs') IS NOT NULL THEN
+  ALTER TABLE public.scheduler_jobs ADD COLUMN IF NOT EXISTS kind TEXT;
+  ALTER TABLE public.scheduler_jobs ADD COLUMN IF NOT EXISTS ref_key TEXT;
+  ALTER TABLE public.scheduler_jobs ADD COLUMN IF NOT EXISTS run_at TIMESTAMPTZ;
+  ALTER TABLE public.scheduler_jobs ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'pending';
+  ALTER TABLE public.scheduler_jobs ADD COLUMN IF NOT EXISTS locked_by TEXT;
+  ALTER TABLE public.scheduler_jobs ADD COLUMN IF NOT EXISTS payload JSONB DEFAULT '{}';
+  ALTER TABLE public.scheduler_jobs ADD COLUMN IF NOT EXISTS attempts INT DEFAULT 0;
+  ALTER TABLE public.scheduler_jobs ADD COLUMN IF NOT EXISTS done_at TIMESTAMPTZ;
+  ALTER TABLE public.scheduler_jobs ADD COLUMN IF NOT EXISTS last_error TEXT;
+  END IF;
+END $alt$;
+
+DO $alt$ BEGIN
+  IF to_regclass('public.selfroles_state') IS NOT NULL THEN
+  ALTER TABLE public.selfroles_state ADD COLUMN IF NOT EXISTS user_id BIGINT;
+  ALTER TABLE public.selfroles_state ADD COLUMN IF NOT EXISTS role_key TEXT;
+  ALTER TABLE public.selfroles_state ADD COLUMN IF NOT EXISTS enabled BOOLEAN;
+  ALTER TABLE public.selfroles_state ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now();
+  END IF;
+END $alt$;
+
+DO $alt$ BEGIN
+  IF to_regclass('public.suggestions') IS NOT NULL THEN
+  ALTER TABLE public.suggestions ADD COLUMN IF NOT EXISTS message_id BIGINT;
+  ALTER TABLE public.suggestions ADD COLUMN IF NOT EXISTS thread_id BIGINT;
+  ALTER TABLE public.suggestions ADD COLUMN IF NOT EXISTS author_id BIGINT;
+  ALTER TABLE public.suggestions ADD COLUMN IF NOT EXISTS title TEXT;
+  ALTER TABLE public.suggestions ADD COLUMN IF NOT EXISTS body TEXT;
+  ALTER TABLE public.suggestions ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'recu';
+  ALTER TABLE public.suggestions ADD COLUMN IF NOT EXISTS staff_note TEXT;
+  ALTER TABLE public.suggestions ADD COLUMN IF NOT EXISTS reviewed_by BIGINT;
+  ALTER TABLE public.suggestions ADD COLUMN IF NOT EXISTS votes_up INT DEFAULT 0;
+  ALTER TABLE public.suggestions ADD COLUMN IF NOT EXISTS votes_down INT DEFAULT 0;
+  ALTER TABLE public.suggestions ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT now();
+  END IF;
+END $alt$;
+
+DO $alt$ BEGIN
+  IF to_regclass('public.ticket_messages') IS NOT NULL THEN
+  ALTER TABLE public.ticket_messages ADD COLUMN IF NOT EXISTS ticket_id BIGINT;
+  ALTER TABLE public.ticket_messages ADD COLUMN IF NOT EXISTS author_id BIGINT;
+  ALTER TABLE public.ticket_messages ADD COLUMN IF NOT EXISTS author_name TEXT;
+  ALTER TABLE public.ticket_messages ADD COLUMN IF NOT EXISTS content TEXT;
+  ALTER TABLE public.ticket_messages ADD COLUMN IF NOT EXISTS attachments JSONB DEFAULT '[]';
+  ALTER TABLE public.ticket_messages ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT now();
+  END IF;
+END $alt$;
+
+DO $alt$ BEGIN
+  IF to_regclass('public.tickets') IS NOT NULL THEN
+  ALTER TABLE public.tickets ADD COLUMN IF NOT EXISTS channel_id BIGINT;
+  ALTER TABLE public.tickets ADD COLUMN IF NOT EXISTS opener_id BIGINT;
+  ALTER TABLE public.tickets ADD COLUMN IF NOT EXISTS type TEXT;
+  ALTER TABLE public.tickets ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'open';
+  ALTER TABLE public.tickets ADD COLUMN IF NOT EXISTS pinged_role TEXT;
+  ALTER TABLE public.tickets ADD COLUMN IF NOT EXISTS claimed_by BIGINT;
+  ALTER TABLE public.tickets ADD COLUMN IF NOT EXISTS intro TEXT;
+  ALTER TABLE public.tickets ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT now();
+  ALTER TABLE public.tickets ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ;
+  ALTER TABLE public.tickets ADD COLUMN IF NOT EXISTS closed_at TIMESTAMPTZ;
+  ALTER TABLE public.tickets ADD COLUMN IF NOT EXISTS close_reason TEXT;
+  ALTER TABLE public.tickets ADD COLUMN IF NOT EXISTS closed_by TEXT;
+  ALTER TABLE public.tickets ADD COLUMN IF NOT EXISTS transcript_url TEXT;
+  ALTER TABLE public.tickets ADD COLUMN IF NOT EXISTS pinged_after BOOLEAN DEFAULT false;
+  ALTER TABLE public.tickets ADD COLUMN IF NOT EXISTS last_message_at TIMESTAMPTZ;
+  END IF;
+END $alt$;
+
+-- ============================================================================
+-- Le schema lui-meme (idempotent).
+-- ============================================================================
 -- ---- 0001_init.sql ----
 -- Edge · Supabase Postgres. Un seul serveur => guild_id porté mais rarement filtré.
 CREATE TABLE IF NOT EXISTS members (
@@ -59,7 +359,9 @@ CREATE TABLE IF NOT EXISTS tickets (
   updated_at TIMESTAMPTZ,
   closed_at TIMESTAMPTZ,
   close_reason TEXT,
+  closed_by TEXT,                       -- pseudo de qui a fermé (libre, pas un snowflake)
   transcript_url TEXT,
+  pinged_after BOOLEAN NOT NULL DEFAULT false,
   last_message_at TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS tickets_open_idx ON tickets (opener_id) WHERE status <> 'closed';
@@ -122,6 +424,7 @@ CREATE TABLE IF NOT EXISTS reports (
   status TEXT NOT NULL DEFAULT 'open',
   ticket_id BIGINT,
   founded BOOLEAN,
+  reviewed_by BIGINT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -168,6 +471,7 @@ CREATE TABLE IF NOT EXISTS applications (
   answers JSONB NOT NULL DEFAULT '{}',
   status TEXT NOT NULL DEFAULT 'received', -- received | interview | accepted | rejected
   reviewed_by BIGINT,
+  decided_at TIMESTAMPTZ,
   trial_ends_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -232,6 +536,8 @@ CREATE TABLE IF NOT EXISTS presentations (
   message_id BIGINT,
   answers JSONB NOT NULL DEFAULT '{}',
   verified BOOLEAN NOT NULL DEFAULT false,
+  verified_by BIGINT,
+  verified_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -257,6 +563,22 @@ CREATE TABLE IF NOT EXISTS bot_events (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Annonces planifiees (module announcements). Oubliee dans la premiere version du schema : le
+-- module ecrivait ici, PostgREST/Postgres repondait « relation does not exist », et en memoire
+-- (dry-run) tout marchait. D'ou le test `npm test` « le code ne touche aucune table absente ».
+CREATE TABLE IF NOT EXISTS announcements (
+  id BIGSERIAL PRIMARY KEY,
+  channel_id BIGINT NOT NULL,
+  author_id BIGINT NOT NULL,
+  embed JSONB NOT NULL DEFAULT '{}',    -- { title, body, ping }
+  scheduled_at TIMESTAMPTZ,
+  published_at TIMESTAMPTZ,             -- NULL = en attente de publication
+  message_id BIGINT,
+  error TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS announcements_pending_idx ON announcements (scheduled_at) WHERE published_at IS NULL;
+
 CREATE TABLE IF NOT EXISTS flags (key TEXT PRIMARY KEY, enabled BOOLEAN NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
 CREATE TABLE IF NOT EXISTS kv_store (key TEXT PRIMARY KEY, value JSONB NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
 
@@ -273,6 +595,7 @@ DECLARE
   t text;
   n bigint;
   attendues text[] := array[
+    'announcements',
     'applications',
     'automod_hits',
     'automod_rules',
@@ -335,6 +658,7 @@ DECLARE
   t text; out jsonb := '{}'; n bigint;
 BEGIN
   FOREACH t IN ARRAY array[
+    'announcements',
     'applications',
     'automod_hits',
     'automod_rules',

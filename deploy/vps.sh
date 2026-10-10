@@ -48,6 +48,11 @@ echo "▸ fichier d'environnement"
 if [[ ! -f /etc/edge-bot.env ]]; then
   cat > /etc/edge-bot.env <<'ENV'
 DISCORD_TOKEN=
+# Base : l'API Supabase suffit (pas de mot de passe de base, rien a autoriser).
+# Colle d'abord supabase/schema.sql dans Supabase -> SQL Editor.
+SUPABASE_URL=
+SUPABASE_SERVICE_ROLE_KEY=
+# Optionnel : connexion Postgres directe, ignoree des que SUPABASE_URL est rempli.
 DATABASE_URL=
 GUILD_ID=1558076024778919946
 EDGE_REQUIRE_MESSAGE_CONTENT=true
@@ -55,7 +60,7 @@ EDGE_LOG_LEVEL=info
 ENV
   chmod 600 /etc/edge-bot.env
   chown root:root /etc/edge-bot.env
-  echo "  ⚠  edite /etc/edge-bot.env (token + DATABASE_URL) puis relance ce script"
+  echo "  ⚠  edite /etc/edge-bot.env (token + les 2 valeurs Supabase) puis relance ce script"
   echo "     nano /etc/edge-bot.env"
   exit 2
 fi

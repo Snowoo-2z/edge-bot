@@ -22,18 +22,68 @@ npm run build && npm start
 
 Sans token, `npm run dev` refuse de démarrer et te dit pourquoi (c'est voulu : pas de crash muet).
 
-### `.env`
+### Les variables d'environnement, une par une
 
-| variable | à quoi elle sert |
-| --- | --- |
-| `DISCORD_TOKEN` | Jeton (Developer Portal → Bot → Token). **Jamais** commité : `.env` est dans `.gitignore`. |
-| `GUILD_ID` | ID du serveur géré. Edge refuse tout ailleurs. Défaut : `1558076024778919946`. |
-| `SUPABASE_URL` | `https://<reference>.supabase.co` — la référence est dans l'URL du dashboard. **Voie recommandée** : Edge passe par l'API HTTP de Supabase, donc ni mot de passe de base, ni pooler, ni IP à autoriser. |
-| `SUPABASE_SERVICE_ROLE_KEY` | La clé **service_role** (celle qui commence par `eyJ…`, Project Settings → API → *Secret keys*). C'est la seule qui a le droit d'écrire. |
-| `DATABASE_URL` | *Optionnel, alternative* : URL Postgres directe (`postgres://…`) pour `pg`. Si `SUPABASE_URL` est rempli, il est ignoré. Les deux absents = Edge tourne en mémoire et le dit. |
-| `EDGE_DRY_RUN` | `true` = ne se connecte pas, simule la structure et rapporte. |
-| `EDGE_REQUIRE_MESSAGE_CONTENT` | `true` (défaut) = exige l'intent Message Content (automod, XP). À `false`, ces modules se désactivent et le reste marche. |
-| `EDGE_LOG_LEVEL` | `debug` / `info` / `warn` / `error`. |
+**Il en faut 4.** Le reste est du réglage fin. Sur Render : *ton service → Environment → Add
+Environment Variable* (saisis `Key` et `Value`, puis pour les deux premières clique le bouton
+**« Tooggle as secret »** pour que la valeur soit masquée) → **Save** : Render relance un
+déploiement tout seul, ~2 min.
+
+#### 1 · Obligatoires
+
+| variable | où trouver la valeur | si elle est fausse |
+| --- | --- | --- |
+| **`DISCORD_TOKEN`** | [discord.com/developers/applications](https://discord.com/developers/applications) → ton app → **Bot** (colonne de gauche) → *Reset Token* → *Copy*. **Affiché une seule fois.** | `DISCORD_TOKEN refusé` dans les logs, et rien d'autre ne démarre. Un token révoqué = le bot se déconnecte dans la minute. |
+| **`SUPABASE_URL`** | L'URL de ton projet, celle de la barre d'adresse du dashboard : `https://**abcdefghijklmnop**.supabase.co` → ne garde que `https://<réf>.supabase.co`. Même valeur ailleurs : *Project Settings → Data API & Authentication* (ou *API*) → **Project URL** / **Default** tab. | Edge ignore la base et démarre en mémoire : il écrit « config Supabase incomplète » et tu perds tout au redémarrage. |
+| **`SUPABASE_SERVICE_ROLE_KEY`** | *Project Settings → API Keys* → la ligne **`service_role`**, bouton *Reveal* puis *Copy* (sur les anciens projets : *Project Settings → API* → **Secret keys**). Elle commence par `eyJ…`. | 401/403 à la première écriture. Edge lit le **rôle dans le JWT** : si tu as pris la clé `anon`, il te le dit avant la première écriture au lieu d'essayer. |
+
+`GUILD_ID` a une valeur par défaut (`1558076024778919946`) : ne la change que si tu changes de
+serveur. Pour la relire : Discord (bureau) → *Paramètres → Avancé → Mode développeur* on → clic
+droit sur le nom du serveur → **Copier l'identifiant du serveur**.
+
+#### 2 · La base, options
+
+| variable | défaut | à quoi elle sert |
+| --- | --- | --- |
+| `SUPABASE_SCHEMA` | `public` | Uniquement si ton projet PostgREST expose un autre schéma (projet auto-hébergé, multi-tenant). Envoie alors aussi l'en-tête `Accept-Profile`/`Content-Profile`. |
+| `DATABASE_URL` | vide | **Alternative** à la voie API : une URL Postgres (`postgres://…`) pour `pg`. **Dès que `SUPABASE_URL` est rempli, cette variable est ignorée.** À laisser vide, sauf si tu veux `npm run db:migrate` automatique ou desagrée le pooler. |
+
+#### 3 · Comportement du bot
+
+| variable | défaut | effet |
+| --- | --- | --- |
+| `EDGE_REQUIRE_MESSAGE_CONTENT` | `true` | Demande l'intent *Message Content*. Si tu ne l'as **pas** activé dans le Developer Portal, passe-la à `false` : `automod`, `levels`, `antiraid` se coupent d'eux-mêmes et les 20 autres modules tournent (sinon Discord refuse la connexion). |
+| `EDGE_DRY_RUN` | `false` | `true` = ne se connecte pas, simule la structure et rapporte l'écart (équivalent de `npm run dry`). Utile sur Render pour valider la base sans toucher au serveur. |
+| `EDGE_LOG_LEVEL` | `info` | `debug` | `info` | `warn` | `error`. En `debug`, les logs Render deviennent bavards mais chaque décision de modération est tracée. |
+
+#### 4 · Sonde de vie et autoping (ne rien régler sur Render)
+
+| variable | défaut | effet |
+| --- | --- | --- |
+| `PORT` | **fourni par Render** (10000) | Edge y branche `/health`. **Ne le saisis surtout pas dans Render** : une valeur fixe et le routeur ne retrouve plus ton service → déploiement « en échec ». À mettre seulement si tu remontes un port à la main (Northflank : `PORT=8080`). |
+| `EDGE_HEALTH` | `false` | Force la sonde sur 8080 **en local**, pour la tester sans hébergeur (`curl localhost:8080/health`). |
+| `KEEPALIVE_URL` | déduit de `RENDER_EXTERNAL_URL` | Cible de l'autoping. Inutile sur Render. Sert sur un autre hébergeur, ou pour surveiller une supervision. |
+| `EDGE_KEEPALIVE_MINUTES` | `4` | Période de l'autoping. 4 min = cinq fois plus court que le seuil d'inactivité de Render (15 min). Ne descends pas sous 1. |
+
+Et **celles-là, tu ne les mets jamais** : la plateforme les injecte, Edge les lit tout seul —
+`RENDER`, `RENDER_EXTERNAL_URL`, `FLY_APP_NAME`, `RAILWAY_ENVIRONMENT_NAME`,
+`NORTHFLANK_APP_NAME`. Les définir à la main risque de faire croire à Edge qu'il est ailleurs.
+
+Une cinquième variable existe, **côté GitHub et non côté bot** : `EDGE_HEALTH_URL`, en *variable de
+dépôt* (Settings → Secrets and variables → **Actions** → *Variables repository*) = l'URL complète
+`https://<service>.onrender.com/health`. Elle sert au filet externe `deploy/autoping-github.yml`.
+
+#### Les trois pièges de saisie, dans l'ordre de fréquence
+
+1. **des guillemets ou un espace en trop.** Render ne retire ni `"` ni l'espace final : la clé
+   « `eyJx… ` » est invalide et 401. Colle la valeur brute, sans rien autour.
+2. **le préfixe en trop.** `Authorization: Bearer …` est ajouté par Edge : ne colle **ni**
+   `Bearer `, **ni** `apikey=` **ni** le chemin `/rest/v1` dans `SUPABASE_URL`.
+3. **la clé masquée non révélée.** Le bouton *Copy* de Supabase copie des `••••` s'il n'y a pas
+   eu de *Reveal* (et Render, une fois enregistré, ne montre plus une valeur `Secret`) : si tu
+   doutes, *Reset* la clé et ressaisis-la, le coût est de re-coller deux lignes.
+
+---
 
 ### Supabase : coller le SQL, coller la clé — pas de mot de passe de base
 

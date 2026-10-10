@@ -43,7 +43,9 @@ CREATE TABLE IF NOT EXISTS tickets (
   updated_at TIMESTAMPTZ,
   closed_at TIMESTAMPTZ,
   close_reason TEXT,
+  closed_by TEXT,                       -- pseudo de qui a fermé (libre, pas un snowflake)
   transcript_url TEXT,
+  pinged_after BOOLEAN NOT NULL DEFAULT false,
   last_message_at TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS tickets_open_idx ON tickets (opener_id) WHERE status <> 'closed';
@@ -106,6 +108,7 @@ CREATE TABLE IF NOT EXISTS reports (
   status TEXT NOT NULL DEFAULT 'open',
   ticket_id BIGINT,
   founded BOOLEAN,
+  reviewed_by BIGINT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -152,6 +155,7 @@ CREATE TABLE IF NOT EXISTS applications (
   answers JSONB NOT NULL DEFAULT '{}',
   status TEXT NOT NULL DEFAULT 'received', -- received | interview | accepted | rejected
   reviewed_by BIGINT,
+  decided_at TIMESTAMPTZ,
   trial_ends_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -216,6 +220,8 @@ CREATE TABLE IF NOT EXISTS presentations (
   message_id BIGINT,
   answers JSONB NOT NULL DEFAULT '{}',
   verified BOOLEAN NOT NULL DEFAULT false,
+  verified_by BIGINT,
+  verified_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -240,6 +246,22 @@ CREATE TABLE IF NOT EXISTS bot_events (
   payload JSONB NOT NULL DEFAULT '{}',
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Annonces planifiees (module announcements). Oubliee dans la premiere version du schema : le
+-- module ecrivait ici, PostgREST/Postgres repondait « relation does not exist », et en memoire
+-- (dry-run) tout marchait. D'ou le test `npm test` « le code ne touche aucune table absente ».
+CREATE TABLE IF NOT EXISTS announcements (
+  id BIGSERIAL PRIMARY KEY,
+  channel_id BIGINT NOT NULL,
+  author_id BIGINT NOT NULL,
+  embed JSONB NOT NULL DEFAULT '{}',    -- { title, body, ping }
+  scheduled_at TIMESTAMPTZ,
+  published_at TIMESTAMPTZ,             -- NULL = en attente de publication
+  message_id BIGINT,
+  error TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS announcements_pending_idx ON announcements (scheduled_at) WHERE published_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS flags (key TEXT PRIMARY KEY, enabled BOOLEAN NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
 CREATE TABLE IF NOT EXISTS kv_store (key TEXT PRIMARY KEY, value JSONB NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT now());

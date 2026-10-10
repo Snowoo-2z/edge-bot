@@ -14,6 +14,7 @@ import { at, bar, fmtDur, levelFromXp, parseDuration, slug, truncate, xpForLevel
 import { atLeast, canPingEveryone, canPingRole, canSeeChannel, canSelfAssign, canSpeakIn, effectivePerms, INVARIANTS, topLevel } from '../src/core/permmodel.js';
 import { ASSIGNABLE_ROLES, BOT_PERMISSIONS, CATEGORY_DEFS, CHANNEL_DEFS, PERM_NAMES, ROLE_DEFS, TICKET_OPTIONS, expectedAcl, roleDef } from '../src/manifest.js';
 import { Db } from '../src/db/db.js';
+import { auditerSchema, lireTables, schemaDesMigrations } from './schema.js';
 import { MODULES } from '../src/modules/index.js';
 import { driftReport, resolveStructure } from '../src/core/structure.js';
 import { fakeGuild } from '../src/dryrun/fake.js';
@@ -651,6 +652,34 @@ test('supabase/schema.sql est bien la copie a jour de migrations/*.sql (+ les 3 
   const sql = gen.split('\n').filter((l: string) => !l.trim().startsWith('--')).join('\n');
   assert.ok(!/DROP TABLE|DROP COLUMN|TRUNCATE|\bDELETE FROM [a-z_]+;/.test(sql.replace(/DELETE FROM bot_events\n  GET|DELETE FROM bot_events WHERE created_at < p_older_than;/, '')), 'le fichier a coller ne doit rien detruire (le menage passe par edge_prune_events)');
   assert.ok(gen.includes("NOTIFY pgrst, 'reload schema'"), 'sinon PostgREST ne voit pas les tables neuves');
+});
+
+/* ------------------------------------------------------------------ schema SQL vs code */
+test('schéma : le code ne touche aucune table ni colonne que les migrations ne déclarent pas', () => {
+  const r = auditerSchema('.');
+  assert.ok(r.tablesVue >= 24, `le parseur ne voit que ${r.tablesVue} tables`);
+  assert.ok(r.fichiersVus > 40, `peu de fichiers scannés (${r.fichiersVus}) : l audit serait vide`);
+  assert.ok(r.colonnesVerifiees > 150, `audit trop timide : ${r.colonnesVerifiees} colonnes verifiées`);
+  console.log(`      ${r.tablesVue} tables · ${r.fichiersVus} fichiers scannés · ${r.colonnesVerifiees} colonnes vérifiées`);
+  assert.deepEqual(r.problemes, [], `\n${r.problemes.join('\n')}`);
+});
+
+test('schéma : index, clés étrangères et compteurs de l API sont cohérents', () => {
+  const { tables, sql } = schemaDesMigrations();
+  const brut = sql.replace(/--[^\n]*/g, '');
+  for (const m of brut.matchAll(/CREATE (?:UNIQUE )?INDEX IF NOT EXISTS ([a-z_0-9]+) ON (?:public\.)?([a-z_]+)(?: ONLY)?\s*\(([^)]*)\)/g)) {
+    const cols = tables.get(m[2]!) ?? [];
+    for (const c of m[3]!.match(/[a-z_]+/g) ?? []) {
+      if (['lower', 'now', 'coalesce', 'asc', 'desc', 'nulls', 'first', 'last'].includes(c)) continue;
+      assert.ok(cols.includes(c), `index ${m[1]} : ${m[2]}.${c} n existe pas`);
+    }
+  }
+  assert.ok(tables.has('announcements'), 'la table announcements doit exister : le module l écrit');
+  assert.ok((tables.get('tickets') ?? []).includes('opener_id'), 'tickets.opener_id : la colonne qui a fait echouer le collage dans Supabase');
+  for (const c of ['closed_by', 'pinged_after']) assert.ok((tables.get('tickets') ?? []).includes(c), `tickets.${c} écrit par le module tickets`);
+  for (const c of ['verified_by', 'verified_at']) assert.ok((tables.get('presentations') ?? []).includes(c), `presentations.${c} écrit par le module presentation`);
+  assert.ok((tables.get('applications') ?? []).includes('decided_at'), 'applications.decided_at écrit par recruitment');
+  assert.ok((tables.get('reports') ?? []).includes('reviewed_by'), 'reports.reviewed_by écrit par reports');
 });
 
 /* ------------------------------------------------------------------ lanceur */
