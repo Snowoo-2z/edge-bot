@@ -51,8 +51,11 @@ if (env.port === 0) log.debug('pas de PORT => sonde HTTP fermée (normal en loca
 let reveil: (() => void) | null = null;
 if (env.keepaliveUrl) {
   reveil = startKeepalive(env.keepaliveUrl, env.keepaliveMs, (m) => log.info(m));
-  log.info(`keep-alive toutes les ${Math.round(env.keepaliveMs / 60_000)} min vers ${env.keepaliveUrl}`);
+  log.info(`autoping toutes les ${Math.round(env.keepaliveMs / 60_000)} min → ${env.keepaliveUrl}`);
+} else if (env.platform !== 'local') {
+  log.info(`aucune URL publique fournie par ${env.platform} : pas d'autoping interne — le workflow d'autoping (deploy/autoping-github.yml, a copier dans .github/workflows/) suffit à te réveiller`);
 }
+if (env.port > 0) log.info(`plateforme détectée : ${env.platform} · sonde sur le port ${env.port}`);
 
 const arreter = async (sig: string): Promise<void> => {
   log.info(`${sig} : arrêt propre (sonde fermée, ordonnanceur coupé, commandes laissées en place).`);

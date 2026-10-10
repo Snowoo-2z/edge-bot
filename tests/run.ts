@@ -19,7 +19,7 @@ import { fakeGuild } from '../src/dryrun/fake.js';
 import { inviteUrl } from '../src/core/client.js';
 import { fr } from '../src/core/copy.js';
 import { startHealth, startKeepalive, statusOf } from '../src/core/health.js';
-import { env } from '../src/env.js';
+import { env, resolveKeepalive, resolvePort } from '../src/env.js';
 
 type Test = { name: string; fn: () => void | Promise<void> };
 const tests: Test[] = [];
@@ -386,6 +386,8 @@ test('sonde HTTP : /health repond meme avant la connexion, /ready dit la verite'
   assert.equal(body.raison, 'connexion à Discord…');
   assert.equal(body.base, 'absente', 'sans DATABASE_URL, la base est « absente », pas « ko »');
   assert.equal(typeof body.ramMb, 'number', 'la RAM est affichée : sur 512 Mo gratuits, un OOMkiller silencieux sinon');
+  assert.equal(body.plateforme, 'local', 'Edge dit sur quelle plateforme il croit etre');
+  assert.equal(body.autoping, null, 'sans URL publique, pas d autoping : le filet externe (GitHub Actions) prend le relais');
   assert.match((await page.text()).trim(), /Edge démarre/);
   assert.equal((await fetch('http://127.0.0.1:18099/admin')).status, 404, 'aucune route utile pour un curieux');
   await h!.close();
@@ -426,6 +428,26 @@ test('keep-alive : ping immediat puis arret net (le minuteur ne survit pas a un 
   await new Promise((r) => setTimeout(r, 120));
   assert.equal(n, apres, 'stop() coupe vraiment le reveil : pas de timer zombie a la fermeture');
   srv.close();
+});
+
+/* ------------------------------------------------------------------ hebergement */
+test('deploy : le port d écoute suit la plateforme, sans rien demander a personne', () => {
+  assert.equal(resolvePort({ PORT: '10000' }), 10_000, 'Render/Railway/Northflank fournissent PORT');
+  assert.equal(resolvePort({ RENDER: 'true' }), 10_000, 'Render sans PORT => son port de routage par defaut');
+  assert.equal(resolvePort({ PORT: '8080', RENDER: 'true' }), 8_080, 'PORT explicite gagne, meme chez Render');
+  assert.equal(resolvePort({ EDGE_HEALTH: true }), 8_080, 'EDGE_HEALTH=true ouvre 8080 en local');
+  assert.equal(resolvePort({}), 0, 'local sans config => AUCUN port ouvert');
+  assert.equal(resolvePort({ PORT: '0' }), 0, 'PORT=0 = explicitement ferme');
+  assert.equal(resolvePort({ PORT: 'aberrant' }), 0, 'un PORT pourri hors plateforme = pas de sonde, jamais NaN');
+  assert.equal(resolvePort({ PORT: 'aberrant', RENDER: 'true' }), 10_000, 'chez Render on retombe sur son port par defaut : la sonde ne doit jamais disparaitre');
+});
+
+test('deploy : autoping derive de RENDER_EXTERNAL_URL => zero reglage chez Render', () => {
+  assert.equal(resolveKeepalive({ RENDER_EXTERNAL_URL: 'https://edge-bot.onrender.com' }), 'https://edge-bot.onrender.com/health');
+  assert.equal(resolveKeepalive({ RENDER_EXTERNAL_URL: 'https://edge-bot.onrender.com/' }), 'https://edge-bot.onrender.com/health', 'la barre finale ne doit pas doubler');
+  assert.equal(resolveKeepalive({ KEEPALIVE_URL: 'https://exemple.tld/ping', RENDER_EXTERNAL_URL: 'https://edge-bot.onrender.com' }), 'https://exemple.tld/ping', 'le réglage manuel prime');
+  assert.equal(resolveKeepalive({ RENDER_EXTERNAL_URL: 'edge-bot.onrender.com' }), undefined, 'sans schéma http, on ne ping pas n’importe quoi');
+  assert.equal(resolveKeepalive({}), undefined, 'hors Render et sans réglage => pas d autoping, le workflow GitHub prend le relais');
 });
 
 /* ------------------------------------------------------------------ lanceur */

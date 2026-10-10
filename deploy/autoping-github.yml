@@ -1,0 +1,64 @@
+# Fichier a COPIER dans .github/workflows/edge-autoping.yml (le depot n'autorise pas
+# l'agent a ecrire dans .github/, donc il vit ici) :
+#   mkdir -p .github/workflows && cp deploy/autoping-github.yml .github/workflows/edge-autoping.yml
+# ou, sans ligne de commande : github.com > ton repo > Add file > Create a new file >
+# nomme-le exactement .github/workflows/edge-autoping.yml > colle le contenu > commit.
+# Il ne part qu'une fois place sous .github/workflows/ et pousse sur la branche par defaut.
+name: autoping-edge
+
+# Filet EXTERNE pour les plans gratuits qui dorment sans trafic entrant (Render free).
+# Le bot se ping deja lui-meme tant qu'il est eveille (RENDER_EXTERNAL_URL => KEEPALIVE_URL),
+# mais un process DEJA endormi a son minuteur gele avec lui : seule une requete venant du
+# dehors le reveille. GitHub Actions le fait gratuitement, toutes les 5 minutes.
+#
+# Regler une seule fois (et c'est optionnel) :
+#   repo > Settings > Secrets and variables > Actions > Variables repository
+#   nom  : EDGE_HEALTH_URL      valeur : https://<ton-service>.onrender.com/health
+#
+# A savoir : GitHub suspend les workflows planifies d'un repo inactif depuis 60 jours.
+# Un push (ou n'importe quelle activite) une fois par mois suffit a garder la veille.
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch: {}
+
+permissions: {}
+concurrency:
+  group: edge-autoping
+  cancel-in-progress: true
+
+jobs:
+  ping:
+    name: Reveiller Edge
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: GET ${{ vars.EDGE_HEALTH_URL }}
+        env:
+          URL: ${{ vars.EDGE_HEALTH_URL }}
+        run: |
+          set -u
+          if [ -z "${URL:-}" ]; then
+            echo "EDGE_HEALTH_URL non defini dans les variables du depot : je ne fais rien."
+            echo "Ce n'est pas bloquant (Edge se maintient eveille lui-meme), mais sans ce filet"
+            echo "un redemarrage a froid ou un crash-loop peut laisser le service endormi."
+            exit 0
+          fi
+          # Un service gratuit qui vient de s'endormir met ~50 s a se reveiller : le proxy Render
+          # garde la connexion ouverte jusque-la, d'ou le -m 90 (surtout pas 10 s).
+          for i in 1 2 3; do
+            code=$(curl -sS -o corps.txt -m 90 -w '%{http_code}' "$URL" 2>/dev/null || echo 000)
+            echo "tentative $i -> HTTP $code"
+            if [ "$code" = "200" ]; then
+              echo "--- etat d'Edge ---"
+              cat corps.txt 2>/dev/null || true
+              echo
+              exit 0
+            fi
+            sleep 20
+          done
+          echo "::warning::Edge n'a pas repondu sur $URL apres 3 tentatives. Regarde les logs cote hebergeur (systemctl status edge-bot / journalctl -u edge-bot, ou le dashboard Render)."
+          # Toujours exit 0 volontairement : un workflow planifie qui echoue 3 fois de suite
+          # est DESACTIVE par GitHub, et le bot ne se reveille plus du tout sans qu'on le sache.
+          exit 0

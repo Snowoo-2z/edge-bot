@@ -1,17 +1,25 @@
-# Blueprint Render : bouton "New +" > Blueprint > ce repo, sur le plan gratuit.
-# Attention : le plan gratuit ENDORT un service qui ne recoit pas de trafic ENTRANT, et
-# un process endormi ne peut pas se reveiller lui-meme. Mets un sondeur EXTERNE sur
-# /health (UptimeRobot gratuit, 5 min) — ou prends Northflank, dont le Sandbox ne dort pas.
+# Blueprint Render : "New +" > Blueprint > ce repo, sur le plan gratuit.
+# Le plan gratuit endort un service qui ne recoit PAS de trafic ENTRANT ; deux etages le
+# tiennent eveille :
+#   1) interne (automatique) : Render injecte RENDER_EXTERNAL_URL, Edge se tape son propre
+#      /health toutes les 4 min => l'horloge d'inactivite de Render ne va jamais au bout.
+#      Aucun reglage ici. KEEPALIVE_URL ne sert qu'a changer cette URL ou cette frequence.
+#   2) externe (filet)       : deploy/autoping-github.yml, a copier dans
+#      .github/workflows/edge-autoping.yml, reveille le service deja endormi (redemarrage,
+#      crash, deploy rate) toutes les 5 min depuis GitHub Actions. Regle ensuite la variable
+#      de depot EDGE_HEALTH_URL = https://<service>.onrender.com/health.
+# Ne regle PAS PORT : Render le fournit (defaut 10000) et la sonde s'y accroche tout seul.
+# Runtime docker alternatif : `runtime: docker` et supprime buildCommand/startCommand
+# (le Dockerfile du repo fait les deux, ecoute $PORT, tourne en non-root).
 services:
   - type: web
     name: edge-bot
     plan: free
     runtime: node
-    region: fra
+    region: frankfurt   # seules valeurs du blueprint spec : oregon, ohio, virginia, frankfurt, singapore
     buildCommand: npm ci && npm run build
     startCommand: node dist/index.js
     healthCheckPath: /health
-    autoDeploy: true
     envVars:
       - key: NODE_VERSION
         value: "22"

@@ -114,7 +114,7 @@ la première seconde, `GET /ready` seulement quand Discord et la base sont bons.
 | **Northflank** (plan **Sandbox**) | **oui**, vérifié sur leur page de prix : « *Always-on-compute — no sleeping :)* », 2 services + 1 base + 2 cron gratuits | **Le successeur direct de Koyeb : c'est lui qu'il te faut.** CB demandée pour vérifier l'identité (0 € débité). Il build depuis le `Dockerfile` du repo : aucun fichier de config à écrire. |
 | **Oracle Cloud — Always Free** | oui : VM ARM 2 OCPU / 12 Go à vie (rabaissée en juin 2026) | Le plus solide, et le seul gratuit qu'**aucun rachat ne peut te retirer**. CB + un peu de Linux. `sudo bash deploy/vps.sh`. |
 | **Un Raspberry Pi ou un vieux PC portable** | oui, 0 €, et ça dort jamais si tu le laisses branché | `deploy/vps.sh` fait exactement ça. C'est l'option « je ne donne ma CB à personne ». |
-| **Render** (free) | oui, **sans CB**, 750 h/mois | Dort après 15 min sans trafic **entrant**. Utilisable **avec un pingeur externe** (UptimeRobot gratuit, 5 min) — voir plus bas. |
+| **Render** (free) | oui, **sans CB**, 512 Mo, 750 h/mois | Dort après 15 min sans trafic entrant — **mais Edge est déjà câblé pour ça** : autoping interne (Render lui donne son URL) + workflow GitHub toutes les 5 min. C'est l'option choisie ici, voir plus bas. |
 | **Railway** | essai 5 $ (30 jours), puis 1 $/mois | 1 $/mois ne couvre pas un 24/7 : compte ~5 $/mois. Le déploiement le plus simple, si tu veux en finir en 5 minutes. |
 | **Fly.io** | non : plus d'allocation gratuite (essai 2 h de VM), CB | ~2 $/mois. `fly.toml` fourni, avec `auto_stop_machines = "off"` (sans ça, il s'endort). |
 | **Koyeb** | **non — fermé** | Racheté par Mistral le 17 février 2026 : le plan Starter gratuit est supprimé pour les nouveaux, entrée à 29 $/mois + CB (empreinte de 29 $). Les anciens comptes Starter gardent leurs conditions. |
@@ -150,17 +150,62 @@ la première seconde, `GET /ready` seulement quand Discord et la base sont bons.
    (Paris/Francfort) et relance : c'est un souci de quota, pas de config.
 8. Ouvre l'URL du service suivie de `/health` : `"pret": true` = les commandes arrivent.
 
-### Si tu ne veux donner ta CB nulle part : Render + UptimeRobot
+### Render (gratuit, sans CB) — le chemin que j'ai câblé en priorité
 
-- Render → *New +* → **Web Service** → le repo → Runtime **Docker** → région **Francfort** →
-  instance **Free** → les mêmes variables d'env (Render fournit `PORT` tout seul) →
-  **Health Check Path** = `/health`.
-- **Le point qui make ou break** : un service **endormi ne peut pas se réveiller tout seul**
-  (son propre minuteur est gelé avec lui). `KEEPALIVE_URL` ne sert donc **pas** à ça —
-  il faut un ping **venu de l'extérieur** : UptimeRobot (gratuit) → *Add New Monitor* →
-  *HTTP(s)* → `https://<ton-service>.onrender.com/health` → 5 min.
-- Résultat : ~1 minute de froid au réveil, puis le bot répond. Ça marche, mais c'est du
-  bricolage ; Northflank ou un Pi à la maison font ça mieux et pour le même prix.
+Deux couches d'autoping, **aucun réglage à faire de ta part** pour la première :
+
+1. **Interne** : Render injecte `RENDER_EXTERNAL_URL` (l'URL publique du service). Edge la
+   détecte tout seul et se tape `…/health` **toutes les 4 minutes** → l'horloge d'inactivité
+   de Render (15 min) ne va jamais au bout, et le service reste éveillé. Tu le vois dans les
+   logs : `autoping toutes les 4 min → https://<service>.onrender.com/health`.
+2. **Externe** (le filet) : un process *déjà* endormi a son minuteur gelé avec lui, donc
+   lui-même ne peut pas le réveiller. C'est le rôle de
+   **`deploy/autoping-github.yml`** (a copier dans `.github/workflows/edge-autoping.yml`) :
+   GitHub, gratuitement, appelle `/health` toutes les 5 minutes et réveille le service apres
+   un redemarrage, un crash ou un deploiement rate. Sans copie, le fichier dort : il ne casse
+   rien. Pour l'installer :
+   1) `mkdir -p .github/workflows && cp deploy/autoping-github.yml .github/workflows/edge-autoping.yml && git push`
+      (ou via le site : *Add file → Create a new file*, chemin exact `.github/workflows/edge-autoping.yml`) ;
+   2) *Settings → Secrets and variables → Actions → Variables repository* →
+      **`EDGE_HEALTH_URL`** = `https://<ton-service>.onrender.com/health`.
+
+En chiffres : instance free = **0,1 CPU / 512 Mo**, et Edge au repos en occupe **~87 Mo**
+(`/health` → `ramMb`) ; 750 h/mois de temps d'instance, un service 24/7 en consomme 744.
+Ça passe, sans marge : **ne crée pas un second service gratuit sur le même compte.**
+
+Pas-à-pas :
+
+1. Developer Portal → ton app → **Bot** : coche `Server Members Intent`, `Message Content
+   Intent`, `Guild Moderation Intent` → copie le **token**.
+2. Render → **New + → Web Service** → connecte `Snowoo-2z/edge-bot` (branche `main`).
+3. **Runtime : Node** (ou **Docker** si tu préfères l'image — les deux marchent, le repo a
+   les deux configs). Render lit `render.yaml` tout seul : région **`frankfurt`** (seules
+   valeurs possibles : `oregon`, `ohio`, `virginia`, `frankfurt`, `singapore`), plan
+   **`free`** (0,1 CPU / 512 Mo), build `npm ci && npm run build`, start
+   `node dist/index.js`, health check `/health`.
+4. **Environment variables** (les deux `sync: false` du blueprint te seront demandés) :
+   ```
+   DISCORD_TOKEN   = <ton token>
+   DATABASE_URL    = <Supabase → Connection string → session pooler, port 5432>
+   GUILD_ID        = 1558076024778919946
+   EDGE_REQUIRE_MESSAGE_CONTENT = true
+   ```
+   **Ne touche pas à `PORT`** : Render le fournit (défaut 10000) et Edge écoute dessus.
+5. **Create Web Service** → attends ~2 min → ouvre `https://<service>.onrender.com/health`.
+   `"pret": true` = les commandes `/edge` `/aide` `/ticket` répondent dans Discord.
+6. Si au bout d'un moment le bot semble muet : `curl https://<service>.onrender.com/ready`
+   et regarde les logs. Un `503` avec `"raison"` te dit exactement quoi (base injoignable,
+   serveur pas visible, Discord coupé) — ce n'est presque jamais l'endormissement, maintenant.
+
+Deux choses qui font gagner des heures :
+
+- **Le health check ne peut pas te trahir** : Edge ouvre son port *avant* de se connecter à
+  Discord, donc `/health` répond 200 dès que le conteneur démarre, même si Discord est en
+  panne ou si tu n'as pas encore invité le bot. Pas de déploiement marqué « échoué » pour
+  rien, pas de redémarrages en boucle, donc pas de commandes slash qui sautent.
+- **Ne mets pas `PORT` dans les variables** : Render le fournit (défaut 10000) et Edge écoute
+  dessus automatiquement. Le mettre à la main avec une valeur bidon est la panne n°1 de ce
+  type de déploiement.
 
 ### VPS gratuit (Oracle) ou machine à la maison
 

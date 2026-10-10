@@ -11,6 +11,7 @@
  * Rien ici ne fuit un secret : pas de token, pas d'URL de base, pas de variable d'env.
  */
 import { createServer, get as httpGet, type Server } from 'node:http';
+import { env } from '../env.js';
 import type { Boot } from './client.js';
 
 export interface Status {
@@ -29,6 +30,12 @@ export interface Status {
   uptimeS: number;
   /** Octets residentiels — sur un plan gratuit a 512 Mo, c'est la premiere chose a regarder. */
   ramMb: number;
+  /** Plateforme devinee d apres les variables d'env (render, fly, railway, northflank, local). */
+  plateforme: string;
+  /** URL que Edge se tape a lui-meme pour ne pas s'endormir (null = pas d'autoping). */
+  autoping: string | null;
+  /** Minutes entre deux autoping. */
+  autopingMin: number;
   version: string;
 }
 
@@ -60,6 +67,9 @@ export function statusOf(b: Boot | null, whyNotReady?: string): Status {
     ordonnanceur: false,
     uptimeS: Math.round(process.uptime()),
     ramMb: Math.round(process.memoryUsage().rss / 1_048_576),
+    plateforme: env.platform ?? 'local',
+    autoping: env.keepaliveUrl ?? null,
+    autopingMin: Math.round((env.keepaliveMs ?? 240_000) / 60_000),
     version: process.env.npm_package_version ?? '0.1.0',
   };
   if (!b) return { ...base, raison: whyNotReady ?? 'démarrage' };
@@ -92,7 +102,7 @@ export function startHealth(opts: HealthOpts): HealthHandle | null {
     try {
       st = await withTimeout(Promise.resolve(opts.status()), TIMEOUT_MS);
     } catch (e) {
-      st = { vivant: true, pret: false, raison: `état indisponible: ${(e as Error).message}`, base: 'ko', modulesActifs: 0, modulesCoupes: [], jobs: 0, ordonnanceur: false, uptimeS: Math.round(process.uptime()), ramMb: 0, version: '0.0.0' };
+      st = { vivant: true, pret: false, raison: `état indisponible: ${(e as Error).message}`, base: 'ko', modulesActifs: 0, modulesCoupes: [], jobs: 0, ordonnanceur: false, uptimeS: Math.round(process.uptime()), ramMb: 0, plateforme: env.platform ?? 'local', autoping: env.keepaliveUrl ?? null, autopingMin: 0, version: '0.0.0' };
     }
     const json = (code: number, body: unknown): void => {
       const data = JSON.stringify(body);
@@ -103,7 +113,7 @@ export function startHealth(opts: HealthOpts): HealthHandle | null {
     if (url === '/ready') return json(st.pret ? 200 : 503, st);
     if (url === '/' || url === '/edge') {
       const ligne = st.pret
-        ? `Edge · ${st.tag} · ${st.serveur} · ${st.membres} membres · ${st.modulesCoupes.length ? `${st.modulesCoupes.length} module(s) coupé(s)` : 'tous les modules actifs'} · base ${st.base} · ${st.ramMb} Mo · uptime ${Math.floor(st.uptimeS / 3600)}h${String(Math.floor((st.uptimeS % 3600) / 60)).padStart(2, '0')}m`
+        ? `Edge · ${st.tag} · ${st.serveur} · ${st.membres} membres · ${st.modulesCoupes.length ? `${st.modulesCoupes.length} module(s) coupé(s)` : 'tous les modules actifs'} · base ${st.base} · ${st.ramMb} Mo · ${st.plateforme}${st.autoping ? ` · autoping ${st.autopingMin} min` : ''} · uptime ${Math.floor(st.uptimeS / 3600)}h${String(Math.floor((st.uptimeS % 3600) / 60)).padStart(2, '0')}m`
         : `Edge démarre… (${st.raison ?? 'connexion'})`;
       res.writeHead(st.pret ? 200 : 503, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
       return void res.end(`${ligne}\n`);
