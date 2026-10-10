@@ -3,7 +3,10 @@
 // - Sinon : enregistrement global (peut prendre jusqu'à 1 h à apparaître).
 const { REST, Routes, SlashCommandBuilder, PermissionFlagsBits } = require('discord.js');
 
-const { DISCORD_TOKEN, CLIENT_ID, GUILD_ID } = process.env;
+const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
+// Accepte CLIENT_ID ou DISCORD_CLIENT_ID (les deux noms sont courants).
+const CLIENT_ID = process.env.CLIENT_ID || process.env.DISCORD_CLIENT_ID;
+const GUILD_ID = process.env.GUILD_ID;
 if (!DISCORD_TOKEN || !CLIENT_ID) {
   console.error("DISCORD_TOKEN et CLIENT_ID sont requis (variables d'environnement).");
   process.exit(1);

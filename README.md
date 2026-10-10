@@ -85,7 +85,7 @@ npm start
    | Variable | Obligatoire | Valeur |
    |---|---|---|
    | `DISCORD_TOKEN` | oui | token du bot Discord |
-   | `CLIENT_ID` | oui | Application ID de Discord |
+   | `CLIENT_ID` (ou `DISCORD_CLIENT_ID`) | oui | Application ID de Discord |
    | `GUILD_ID` | non | ID du serveur (commande `/config` immédiate) |
    | `SUPABASE_URL` | oui | URL du projet Supabase |
    | `SUPABASE_SERVICE_ROLE_KEY` | oui | clé service_role Supabase |
