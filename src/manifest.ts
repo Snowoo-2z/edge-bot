@@ -59,7 +59,7 @@ export const ROLE_DEFS: readonly RoleDef[] = [
   { key: 'membre',          name: '👤│ Membre',                  order: 4,  color: '#95A5A6', hoist: false, mentionable: false, perms: [] },
   { key: 'animateur',       name: '🎉│ Animateur',               order: 5,  color: '#FEE75C', hoist: true,  mentionable: false, perms: ['ManageEvents', 'MuteMembers', 'MoveMembers', 'ManageMessages', 'ManageThreads', 'MentionEveryone'] },
   { key: 'helper',          name: '🧰│ Helper',                  order: 6,  color: '#3498DB', hoist: true,  mentionable: false, perms: [], protected: true },
-  { key: 'manager',         name: '💼│ Manager Partenariat',     order: 7,  color: '#1ABC9C', hoist: true,  mentionable: false, perms: ['MentionEveryone'], protected: true },
+  { key: 'manager',         name: '💼│ Manager Partenariat',     order: 7,  color: '#9B59B6', hoist: true,  mentionable: false, perms: ['MentionEveryone'], protected: true },
   { key: 'mod',             name: '⚔️│ Modérateur',              order: 8,  color: '#E67E22', hoist: true,  mentionable: false, perms: ['ViewAuditLog', 'ManageMessages', 'ManageThreads', 'ModerateMembers', 'KickMembers', 'BanMembers'], protected: true },
   { key: 'admin',           name: '🛡️│ Administrateur',          order: 9,  color: '#ED4245', hoist: true,  mentionable: false, perms: ['Administrator'], protected: true },
   { key: 'fondateur',       name: '👑│ Fondateur',               order: 10, color: '#FFD700', hoist: true,  mentionable: false, perms: ['Administrator'], protected: true },
