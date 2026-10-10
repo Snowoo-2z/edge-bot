@@ -1,6 +1,6 @@
 /** Demarrage d'Edge : client, structure, BDD, modules, commandes, listeners, ordonnanceur. */
 import { ActivityType, Client, GatewayIntentBits, Partials } from 'discord.js';
-import { env } from '../env.js';
+import { dbUrlProblem, env } from '../env.js';
 import {
   BOT_PERMISSIONS, GUILD_ID, type CategoryKey, type ChannelKey, type PermName, type RoleKey,
   categoryDef, channelDef, roleDef,
@@ -98,8 +98,10 @@ async function start(client: Client<true>, modules: EdgeModule[], onProgress?: (
   if (!guild.available) { await guild.fetch(); }
 
   onProgress?.('base de données…');
-  const db = env.DATABASE_URL ? Db.pool(env.DATABASE_URL) : Db.memory();
-  if (!db.isPersisted) log.warn('DATABASE_URL absente => stockage en mémoire uniquement (tout se perd au restart).');
+  const souci = dbUrlProblem(env.DATABASE_URL);
+  if (souci) log.error(`DATABASE_URL invalide : ${souci}\n   → Edge démarre quand même, en mémoire : tout est oublié au redémarrage (tickets, points, giveaways, dossiers).`);
+  const db = env.DATABASE_URL && !souci ? Db.pool(env.DATABASE_URL) : Db.memory();
+  if (!db.isPersisted) log.warn(souci ? 'stockage en mémoire (DATABASE_URL rejetée).' : 'DATABASE_URL absente => stockage en mémoire uniquement (tout se perd au restart).');
   else await migrate(db);
 
   const s = resolveStructure(guild);

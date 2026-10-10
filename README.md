@@ -27,14 +27,39 @@ Sans token, `npm run dev` refuse de démarrer et te dit pourquoi (c'est voulu : 
 | --- | --- |
 | `DISCORD_TOKEN` | Jeton (Developer Portal → Bot → Token). **Jamais** commité : `.env` est dans `.gitignore`. |
 | `GUILD_ID` | ID du serveur géré. Edge refuse tout ailleurs. Défaut : `1558076024778919946`. |
-| `DATABASE_URL` | Chaîne Postgres de Supabase (Project settings → Database → Connection string). Vide = Edge tourne sans stockage et coupe proprement les modules qui en ont besoin. |
+| `DATABASE_URL` | **URL de connexion Postgres** de Supabase (Project settings → Database → *Connection string*). **Pas** une clé `service_role`/`anon` : `pg` parle le protocole Postgres, pas le HTTP de l'API. Vide (ou mal formée) = Edge tourne en mémoire et le dit dans les logs. |
 | `EDGE_DRY_RUN` | `true` = ne se connecte pas, simule la structure et rapporte. |
 | `EDGE_REQUIRE_MESSAGE_CONTENT` | `true` (défaut) = exige l'intent Message Content (automod, XP). À `false`, ces modules se désactivent et le reste marche. |
 | `EDGE_LOG_LEVEL` | `debug` / `info` / `warn` / `error`. |
 
-**Supabase** : prends la chaîne **session pooler** (port 5432) plutôt que transaction pooler (6543) —
-le port 6543 casse les requêtes préparées. Le compte `postgres` / `service_role` est correct ici :
-c'est un bot serveur-à-serveur, pas un front.
+### Supabase : la bonne chaîne, pas la clé
+
+`DATABASE_URL` doit ressembler à **une des deux lignes suivantes** (les deux marchent, Edge
+détecte le pooler tout seul) :
+
+```
+# 1) Connexion DIRECTE — sans pooler, ce que tu demandes
+postgres://postgres:[MOT_DE_PASSE]@db.[REFERENCE].supabase.co:5432/postgres
+
+# 2) Transaction pooler (port 6543) — si les IP de Render te jouent des tours
+postgres://postgres.[REFERENCE]:[MOT_DE_PASSE]@aws-0-eu-central-1.pooler.supabase.com:6543/postgres
+```
+
+Le piège, c'est **quel mot de passe**. Celui de la **base** : dashboard Supabase →
+*Project Settings → Database → Reset database password* → tu en choisis un → tu le colles dans
+l'URL. La clé **`service_role`** (une longue chaîne qui commence par `eyJ…`) sert à l'API REST et
+à `supabase-js` : pour `pg`, elle ne veut rien dire. Edge la reconnaît désormais et écrit
+exactement ça dans les logs au lieu d'un « invalid connection » obscur — et il démarre quand même,
+en mémoire, pour que tu puisses tester pendant que tu corriges.
+
+Avec la connexion **directe** (5432), deux réglages d'un clic côté Supabase, sinon Render se fait
+jeter : *Project Settings → Database → Network limits* → **« Allow IPv4 connections »** activé, et
+**pas d'IP allowlist** restrictive (Render n'a pas d'IP fixe). Edge ouvre au plus 4 connexions ;
+la limite gratuite est plus large que ça. Le port 6543, lui, marche avec l'allowlist fermée —
+c'est la roue de secours, pas le choix par défaut.
+
+Sans base du tout, Edge tourne aussi : tickets, points et giveaways fonctionnent, mais
+**tout est oublié au redémarrage**. C'est utile pour la première heure, pas pour vivre dessus.
 
 ### Dans le Developer Portal
 

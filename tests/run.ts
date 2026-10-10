@@ -19,7 +19,7 @@ import { fakeGuild } from '../src/dryrun/fake.js';
 import { inviteUrl } from '../src/core/client.js';
 import { fr } from '../src/core/copy.js';
 import { startHealth, startKeepalive, statusOf } from '../src/core/health.js';
-import { env, resolveKeepalive, resolvePort } from '../src/env.js';
+import { dbUrlProblem, env, resolveKeepalive, resolvePort } from '../src/env.js';
 
 type Test = { name: string; fn: () => void | Promise<void> };
 const tests: Test[] = [];
@@ -448,6 +448,41 @@ test('deploy : autoping derive de RENDER_EXTERNAL_URL => zero reglage chez Rende
   assert.equal(resolveKeepalive({ KEEPALIVE_URL: 'https://exemple.tld/ping', RENDER_EXTERNAL_URL: 'https://edge-bot.onrender.com' }), 'https://exemple.tld/ping', 'le réglage manuel prime');
   assert.equal(resolveKeepalive({ RENDER_EXTERNAL_URL: 'edge-bot.onrender.com' }), undefined, 'sans schéma http, on ne ping pas n’importe quoi');
   assert.equal(resolveKeepalive({}), undefined, 'hors Render et sans réglage => pas d autoping, le workflow GitHub prend le relais');
+});
+
+test('autoping : une URL https ne doit JAMAIS faire tomber Edge (la panne du deploy Render)', async () => {
+  // Le 2026-10-10, un http.get sur l'URL publique (https) levait ERR_INVALID_PROTOCOL
+  // au demarrage : le bot mourait avant meme de se connecter a Discord.
+  const logs: string[] = [];
+  let leve = false;
+  try {
+    const stop = startKeepalive('https://edge-bot.onrender.com/health', 60_000, (m) => logs.push(m));
+    stop();
+  } catch { leve = true; }
+  assert.equal(leve, false, 'startKeepalive ne doit jamais lever, meme sur un reseau bouché');
+  await new Promise((r) => setTimeout(r, 800));
+  assert.ok(logs.every((m) => m.includes('le bot tourne quand même')), `tonnage calme attendu : ${logs.join(' | ')}`);
+});
+
+test('autoping : une URL vide ou absurde est signalee, pas laissee trainer en rejet non gère', async () => {
+  const logs: string[] = [];
+  let leve = false;
+  try { startKeepalive('pas-une-url', 60_000, (m) => logs.push(m))(); } catch { leve = true; }
+  assert.equal(leve, false);
+  await new Promise((r) => setTimeout(r, 400));
+  assert.ok(logs.length >= 1, 'c est dit une fois, puis plus rien');
+});
+
+test('DATABASE_URL : on explique au lieu de laisser pg cracher « invalid connection »', () => {
+  const jwt = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.' + 'a'.repeat(40) + '.' + 'b'.repeat(40);
+  assert.match(dbUrlProblem(jwt) ?? '', /service_role/, 'une clé API collée dans DATABASE_URL = le cas le plus fréquent');
+  assert.match(dbUrlProblem('https://xyz.supabase.co/rest/v1/') ?? '', /postgres:\/\//);
+  assert.match(dbUrlProblem('postgres://postgres:@localhost:5432/postgres') ?? '', /local/i);
+  assert.match(dbUrlProblem('postgres://postgres:mdp@db.x.supabase.co:5433/postgres') ?? '', /5433/);
+  assert.match(dbUrlProblem('postgres://postgres:mdp@db.x.supabase.co/postgres') ?? '', /^$/, 'sans port = direct 5432 implicite, donc on ne grogne pas');
+  assert.equal(dbUrlProblem('postgres://postgres:mdp@db.x.supabase.co:5432/postgres'), null, 'direct : nickel');
+  assert.equal(dbUrlProblem('postgresql://postgres:[m@dp]@aws-0-eu-central-1.pooler.supabase.com:6543/postgres'), null, 'transaction pooler 6543 : nickel');
+  assert.equal(dbUrlProblem(undefined), null, 'absent = pas une erreur, juste pas de stockage');
 });
 
 /* ------------------------------------------------------------------ lanceur */

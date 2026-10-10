@@ -81,6 +81,27 @@ export const env = {
 /** La valeur par défaut de EDGE_REQUIRE_MESSAGE_CONTENT est un booléen zod transformé ; on relit la brute. */
 export const rawRequireContent = process.env.EDGE_REQUIRE_MESSAGE_CONTENT;
 
+/**
+ * Un mauvais `DATABASE_URL` est la panne n°1 d'un deploiement, et pg repond alors une ligne
+ * illegible (« invalid connection » ou « parse errors in connection string »). On regarde la
+ * FORME de la valeur, on ne se prononce jamais sur le mot de passe.
+ * Renvoie null si rien n'est suspect.
+ */
+export function dbUrlProblem(raw: string | undefined | null): string | null {
+  if (!raw) return null;
+  const s = raw.trim();
+  const points = (s.match(/\./g) ?? []).length;
+  if (/^eyJ/i.test(s) && points >= 2) {
+    return "on dirait une clé d'API Supabase (JWT `service_role`/`anon`). pg ne parle pas HTTP : il lui faut une URL `postgres://…` avec le MOT DE PASSE de la base (Project settings → Database → Reset database password), pas une clé.";
+  }
+  if (!/^postgres(ql)?:\/\//i.test(s)) return 'should start with `postgres://` (Render appelle ça « Connection string »).';
+  if (!s.includes('@')) return 'il manque `@hote:port/nom` — format attendu : postgres://postgres:<mot_de_passe>@<hote>:5432/postgres.';
+  if (/@(localhost|127\.0\.0\.1|0\.0\.0\.0)[:/]/i.test(s)) return 'le serveur est local : depuis Render cette base est injoignable. Utilise la Connection string Supabase (hote publique).';
+  const port = s.match(/:(\d{1,5})\//)?.[1];
+  if (port && port !== '5432' && port !== '6543') return `port ${port} : Supabase sert 5432 (direct + session pooler) ou 6543 (transaction pooler).`;
+  return null;
+}
+
 export function assertRunnable(): void {
   if (!env.dryRun && !env.hasToken) {
     throw new Error('DISCORD_TOKEN manquant. Mets-le dans .env, ou lance `npm run dry` pour simuler sans token.');

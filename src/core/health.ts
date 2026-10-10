@@ -10,7 +10,7 @@
  *
  * Rien ici ne fuit un secret : pas de token, pas d'URL de base, pas de variable d'env.
  */
-import { createServer, get as httpGet, type Server } from 'node:http';
+import { createServer, type Server } from 'node:http';
 import { env } from '../env.js';
 import type { Boot } from './client.js';
 
@@ -139,20 +139,23 @@ export function startHealth(opts: HealthOpts): HealthHandle | null {
  */
 export function startKeepalive(url: string, everyMs = 4 * 60_000, log?: (msg: string) => void): () => void {
   let dejaAverti = false;
+  const avertir = (msg: string): void => {
+    if (dejaAverti) return;
+    dejaAverti = true;
+    try { log?.(msg); } catch { /* une boucle de reveil ne fait pas tomber Edge */ }
+  };
   const ping = (): void => {
-    const req = httpGet(url, (res) => {
-      res.resume();
-      if (!dejaAverti && res.statusCode && res.statusCode >= 400) {
-        dejaAverti = true;
-        log?.(`keep-alive répond ${res.statusCode} — vérifie KEEPALIVE_URL`);
-      }
-    });
-    req.setTimeout(10_000, () => req.destroy(new Error('timeout')));
-    req.on('error', () => {
-      if (dejaAverti) return;
-      dejaAverti = true;
-      log?.(`keep-alive injoignable (${url}) — je réessaie en silence`);
-    });
+    try {
+      // fetch (et pas http.get) : l'URL publique d'un hebergeur est en https, et un
+      // http.get sur du https lève ERR_INVALID_PROTOCOL AVANT meme le premier essai.
+      // Ce detail a fait echouer un deploiement Render le 2026-10-10 -- d'ou le try/catch
+      // global : cet etage est decoratif, il n'a aucun droit de tuer le bot.
+      void fetch(url, { signal: AbortSignal.timeout(15_000), redirect: 'follow', headers: { 'user-agent': 'edge-bot/0.1 autoping' } })
+        .then((r) => { if (!r.ok) avertir(`autoping : ${url} a répondu ${r.status} — vérifie KEEPALIVE_URL (le bot tourne quand même)`); })
+        .catch((e: unknown) => avertir(`autoping injoignable (${e instanceof Error ? e.name : 'erreur'}) — je réessaie en silence, le bot tourne quand même`));
+    } catch (e) {
+      avertir(`autoping impossible (${url}) : ${(e as Error).message}`);
+    }
   };
   const timer = setInterval(ping, Math.max(60_000, everyMs));
   timer.unref?.();
