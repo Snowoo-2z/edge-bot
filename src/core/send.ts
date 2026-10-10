@@ -77,7 +77,9 @@ export const embed = (o: EmbedOpts): EmbedBuilder => {
   if (o.title) e.setTitle(truncate(o.title, 250));
   if (o.desc) e.setDescription(truncate(o.desc, 4000));
   if (o.url) e.setURL(o.url);
-  if (o.fields?.length) e.addFields(o.fields.slice(0, 25).map((f) => ({ name: truncate(f.name, 250), value: truncate(f.value, 1000), inline: !!f.inline })));
+  // Un nom ou une valeur vides font rejeter le message entier par Discord (et le validateur de
+  // discord.js le dit avant nous, avec « Received one or more errors »). Un tiret, c'est lisible.
+  if (o.fields?.length) e.addFields(o.fields.slice(0, 25).map((f) => ({ name: truncate(f.name, 250) || '—', value: truncate(f.value, 1000) || '—', inline: !!f.inline })));
   const pied = o.footer ?? style.pied;
   if (pied) e.setFooter({ text: truncate(pied, 200), ...(o.footerIcon ? { iconURL: o.footerIcon } : {}) });
   if (o.author) e.setAuthor({ name: truncate(o.author, 250) });

@@ -8,7 +8,7 @@ import { bits } from '../core/perms.js';
 import { inviteUrl } from '../core/client.js';
 import { at, fmtDur } from '../core/ui.js';
 import { ensurePanel } from '../core/panels.js';
-import { configCommande, configComposants, resyncCommandes } from '../core/config-ui.js';
+import { commandeConfig, configCommande, configComposants, resyncCommandes, vueTableau } from '../core/config-ui.js';
 import { fr } from '../core/copy.js';
 
 export const botadmin: EdgeModule = {
@@ -18,6 +18,12 @@ export const botadmin: EdgeModule = {
   /** Le tableau de bord de /edge config : menus et boutons, réservés au staff. */
   components: (ctx) => configComposants(ctx, MODULES),
   commands: () => [
+    {
+      // La porte d'entree pour tout le monde : une commande, zero option, tout le reste au clic.
+      data: commandeConfig(),
+      guard: { min: 'admin' },
+      run: async (c: Ctx, i) => void (await i.editReply(await vueTableau(c, MODULES))),
+    },
     {
       data: new SlashCommandBuilder().setName('edge')
         .setDescription('Piloter Edge (couper un module, voir la santé, resynchroniser)')

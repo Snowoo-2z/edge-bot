@@ -954,6 +954,53 @@ test('les menus d’Edge assainissent leurs `value` (le « Invalid Form Body » 
   }
 });
 
+test('/config : une commande sans option, un module, un réglage — et rien à retaper', async () => {
+  const { commandeConfig, choixModules, vueModule } = await import('../src/core/config-ui.js');
+  const data = commandeConfig().toJSON();
+  assert.equal(data.name, 'config', 'le nom de la commande est la seule chose a retenir');
+  assert.equal((data.options ?? []).length, 0, '/config ne doit AUCUNE option : un module se choisit dans le menu, pas a la souris du clavier');
+  assert.ok((data.description ?? '').length <= 100, 'la description est ce que voit le membre dans la liste des commandes');
+  assert.match(data.description ?? String(), /clique|clic/i, 'la description doit promettre le clic, sinon on croit qu il faut taper');
+
+  const choix = choixModules(MODULES);
+  assert.equal(choix.length, MODULES.length + 1, 'general + chaque module : un module absent est un module irreglable');
+  assert.ok(choix.length <= 25, `${choix.length} options : Discord plafonne a 25 et rejetterait le message`);
+  for (const o of choix) {
+    assert.equal(valeurOption(o.value), o.value, `l option « ${o.value} » sera refusee par Discord`);
+    assert.ok(o.name.length <= 100, `libelle trop long : ${o.name}`);
+    assert.ok(o.name.length > 2, `libelle vide pour la valeur « ${o.value} » : introuvable dans le menu`);
+  }
+
+  // la vue d'un module ne doit plus rien demander a recopier
+  const db = Db.memory();
+  const registre = construireRegistre(MODULES);
+  registre.set('general', new Map(REGLAGES_GENERAL.map((d) => [d.cle, d])));
+  const c = { db, cfg: new Config(db, registre), guild: { name: 'EdgeMode' }, disabled: new Map() } as never;
+  const vue = await vueModule(c, MODULES, 'welcome', false);
+  const texte = JSON.stringify(vue.embeds);
+  assert.ok(!texte.includes('/edge config regler'), 'un champ qui impose de recopier une commande = la plainte du joueur d a cote');
+  assert.match(texte, /2️⃣/, 'la vue doit dire ou cliquer ensuite');
+  assert.ok(vue.components.length <= 5, `${vue.components.length} rangees : Discord plafonne a 5 et rejette tout`);
+  type Brut = { type?: number; options?: { label?: string; value?: string; description?: string }[] };
+  // les builders discord.js gardent tout dans `.data` : on passe par toJSON(), comme le fera l'API.
+  const brut = <T,>(x: unknown): T => {
+    const f = (x as { toJSON?: () => T }).toJSON;
+    return typeof f === 'function' ? f.call(x) : (x as T);
+  };
+  const menus = (vue.components as unknown[])
+    .flatMap((r) => brut<{ components?: unknown[] }>(r).components ?? [])
+    .map((x) => brut<Brut>(x));
+  for (const opt of menus.flatMap((x) => x.options ?? [])) {
+    assert.ok(opt.label && opt.value, `option de menu incomplete : ${JSON.stringify(opt)}`);
+    if (opt.description !== undefined) assert.ok(opt.description.length >= 1 && opt.description.length <= 100, `description refusee par Discord : « ${opt.description} »`);
+  }
+  for (const f of (vue.embeds as unknown[]).flatMap((e) => brut<{ fields?: { name?: string; value?: string }[] }>(e).fields ?? [])) {
+    assert.ok(f.name && f.value, `champ d'embed vide (Discord rejette le message entier) : ${JSON.stringify(f)}`);
+  }
+  assert.ok(menus.some((x) => x.type === 3), 'le menu des reglages doit etre pose la, sous les yeux');
+  assert.equal(menus.filter((x) => x.type === 2).length, 5, 'couper, reinitialiser, exporter, avance, retour : les 5 boutons connus de la vue module');
+});
+
 /* ------------------------------------------------------------------ lanceur */
 let echecs = 0;
 for (const t of tests) {

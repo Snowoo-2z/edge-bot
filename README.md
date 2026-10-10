@@ -163,29 +163,29 @@ qui te le dit si tu t'es trompé de cran.
 | `recruitment` | `/recrutement poste｜lister｜candidater｜retirer` — formulaire, verdict en MP, relance à J+30 |
 | `levels` | `/rang voir｜top｜reglages` — XP sans cooldown, comme demandé |
 | `voice` | `/vocal top｜temp｜inactivite｜couper` — mute (pas kick) les absents, supprime les salons ⌛ restés vides |
-| `botadmin` | `/edge module｜config｜flag｜sante｜structure｜panneaux｜stats｜invite｜maintenance` — `/edge config` est la console de personnalisation |
+| `botadmin` | `/config` (la console de personnalisation, tout au clic) · `/edge module｜config｜flag｜sante｜structure｜panneaux｜stats｜invite｜maintenance` |
 | `help` | `/aide [module]` — le mode d'emploi de chaque module, directement dans Discord |
 
-### Personnaliser (`/edge config`)
+### Personnaliser : `/config`
 
-**Rien à retenir, tout à cliquer.** `/edge config`, tout court, ouvre le tableau de bord :
+**Une commande, aucune option.** Tape `/config` : le tableau de bord s'ouvre. Trois gestes, pas un champ à retenir :
 
-1. premier menu → le module (ou ⚙️ *Général* pour le style et les journaux) ;
-2. second menu → **✏️ le réglage à changer**, avec sa valeur actuelle dans la description ;
-3. Edge ouvre **le contrôle qui va avec le type** : zone de texte pré-remplie pour un message ou un
-   salon de bienvenue, **liste des salons du serveur** pour déplacer un journal, **liste des rôles**
-   pour une exemption, deux boutons **✅ oui / 🚫 non** pour un interrupteur, menu d'options pour un choix.
+1. **1️⃣** le menu du bas liste les modules (⚙️ *Général* = le style et les journaux) ;
+2. **2️⃣** le second menu liste les réglages de ce module, **avec leur valeur actuelle** en description ;
+3. **3️⃣** Edge ouvre le contrôle qui va avec le type : zone de texte pré-remplie pour un message,
+   **liste des salons du serveur** pour déplacer un journal, **liste des rôles** pour une exemption,
+   deux boutons **✅ oui / 🚫 non** pour un interrupteur, menu d'options pour un choix.
 
-Les boutons au-dessus font le reste : 🔕 couper / ✅ rallumer le module, 🧹 réinitialiser ses réglages,
-📤 exporter. Couper un module **retire aussi sa slash command** du serveur ; rien n'est supprimé en base,
-ses tickets, ses niveaux et ses réglages t'attendent si tu le rallumes. Et depuis `/aide`, chaque fiche
-de module a son bouton ⚙️ : plus besoin de savoir que la config s'appelle `/edge config`.
+Un seul écran, quatre boutons : 🔕 couper / ✅ rallumer le module (couper retire aussi sa slash
+command), 🧹 remettre ses réglages à zéro, 📤 exporter en JSON, 🔍 afficher les réglages avancés.
 
-Le clavier reste disponible — et c'est même le seul chemin pour un texte de 1800 caractères collé
-depuis un fichier :
+Rien n'est supprimé en base quand tu coupes un module : ses tickets, ses niveaux et ses réglages
+t'attendent si tu le rallumes. Depuis `/aide`, chaque fiche de module a aussi son bouton ⚙️.
+
+Le clavier reste disponible — c'est même le seul chemin pour coller un texte de 1800 caractères
+depuis un fichier, et pour l'import JSON :
 
 ```
-/edge config tableau                                  ← le menu, à la souris
 /edge config voir welcome                             ← la liste des réglages d'un module
 /edge config regler welcome message Bienvenue {membre}, sur {serveur} !
 /edge config regler general salon_moderation <#id-du-salon>
@@ -218,7 +218,14 @@ réglages `flags` écrivent dans la même table que `/edge flag` : les deux chem
 
 Pour un réglage que tu veux et qui n'est pas là, c'est dix lignes dans le module (une déclaration
 `reglages: [{ cle, type, label, aide, defaut }]` et une lecture `await c.reglages('x').num('y')`) — la
-commande, le menu, la modale, la validation, l'export et le test anti-réglage-décoratif suivent tout seuls.
+commande `/config`, le menu 2️⃣, la modale, la validation, l'export et le test anti-réglage-décoratif
+suivent tout seuls.
+
+Un test `npm test` surveille précisément ce qui a rendu la config pénible : `/config` doit rester
+**sans aucune option**, le menu doit contenir les 24 groupes (pas un de plus que le plafond Discord),
+aucun champ ne doit te demander de recopier une commande, et **aucune option de menu ne doit avoir une
+description vide** — ce dernier cas faisait rejeter le message entier par l'API (`Salut !` vidé de son
+texte de MP suffisait à ouvrir la vue sans rien afficher).
 
 ### Le bug qui a tué `/aide`, et son filet
 
@@ -250,7 +257,7 @@ entier sans redémarrer. Sauf `bot.maintenance`, tous sont aussi visibles et ré
 
 ```bash
 npm run typecheck   # 0 erreur
-npm test            # 58 tests purs : barèmes, tirage pondéré, détecteurs, permissions, structure, registre
+npm test            # 59 tests purs : barèmes, tirage pondéré, détecteurs, permissions, structure, registre
                     #   db (les 3 moteurs : mémoire, pg, API Supabase), sonde HTTP, autoping
 npm run dry         # 8 scénarios de serveur (conforme, salon renommé, rôle oublié, fuite @everyone…)
 ```

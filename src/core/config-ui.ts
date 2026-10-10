@@ -11,7 +11,7 @@
  *  - toutes ces vues sont éphémères (elles suivent la visibilité de la commande qui les appelle).
  */
 import {
-  ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, ModalBuilder, MessageFlags,
+  ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, ModalBuilder, MessageFlags, SlashCommandBuilder,
   PermissionFlagsBits, RoleSelectMenuBuilder, ChannelSelectMenuBuilder, StringSelectMenuBuilder,
   TextInputBuilder, TextInputStyle,
   type ChatInputCommandInteraction, type EmbedBuilder, type GuildMember,
@@ -25,6 +25,18 @@ import { formater, type SettingDef } from './settings.js';
 import { decouperOption, valeurOption } from './ui.js';
 import { embed } from './send.js';
 
+/**
+ * `/config` : la seule chose a retenir. Une commande, zero option, zero sous-commande — le tableau
+ * de bord s'ouvre et tout le reste se choisit dans les menus. `/edge config` garde les memes vues
+ * plus les voies clavier (regler a la ligne, exporter, importer) : utile pour coller un texte de
+ * 1800 caracteres depuis un fichier, et rien d'autre.
+ */
+export function commandeConfig(): SlashCommandBuilder {
+  return new SlashCommandBuilder()
+    .setName('config')
+    .setDescription('Régler Edge : choisis un module, puis un réglage. Tout se clique.');
+}
+
 /** Le module général, qui n'a pas de fichier : son nom dans les commandes et les vues. */
 export const MODULE_GENERAL = 'general';
 export const LABEL_GENERAL = '🎛️ Général (style & journaux)';
@@ -32,7 +44,7 @@ export const LABEL_GENERAL = '🎛️ Général (style & journaux)';
 type Choix = { name: string; value: string };
 
 /** general + les 23 modules — Discord plafonne un `addChoices` à 25 entrées, on est à 24. */
-const choixModules = (modules: readonly EdgeModule[]): Choix[] => (
+export const choixModules = (modules: readonly EdgeModule[]): Choix[] => (
   [{ name: LABEL_GENERAL, value: MODULE_GENERAL } as Choix]
     .concat(modules.map((m) => ({ name: m.label.slice(0, 95), value: m.key })))
 );
@@ -95,7 +107,7 @@ interface Vue { embeds: EmbedBuilder[]; components: Rangee[] }
 function selecteur(modules: readonly EdgeModule[], valeur?: string): Rangee[] {
   const menu = new StringSelectMenuBuilder()
     .setCustomId(customId('botadmin', 'config-module'))
-    .setPlaceholder('Changer de module…')
+    .setPlaceholder('1️⃣  Choisis le module à régler')
     .addOptions(choixModules(modules).map((o) => ({ label: o.name, value: valeurOption(o.value), default: o.value === valeur })));
   return [new ActionRowBuilder<MessageActionRowComponentBuilder>().setComponents(menu as never)];
 }
@@ -110,13 +122,11 @@ export async function vueModule(c: Ctx, modules: readonly EdgeModule[], module: 
   const champs = defs.map((def) => {
     const e = etat[def.cle];
     const perso = !!e && !e.parDefaut;
-    const cible = typeof e?.valeur === 'string' && /^<#\d{15,21}>$/.test(e.valeur) ? e.valeur : null;
     return {
-      name: `${perso ? '🔧' : '▫️'} ${def.label} · \`${def.cle}\``,
+      name: `${perso ? '🔧' : '▫️'} ${def.label}`,
       value: [
-        `**${cible ?? formater(def, e?.valeur)}**${perso ? '' : ' *(défaut)*'}`,
+        `**${formater(def, e?.valeur)}**${perso ? '' : ' *(réglage d’usine)*'}`,
         def.aide ? `_${def.aide}_` : '',
-        `\`/edge config regler ${module} ${def.cle} <valeur>\``,
       ].filter(Boolean).join('\n'),
     };
   });
@@ -146,9 +156,11 @@ export async function vueModule(c: Ctx, modules: readonly EdgeModule[], module: 
 
   const desc = [
     module === MODULE_GENERAL
-      ? 'Le style et les journaux du bot. Ce que tu règles ici s’applique aux modules existants **et** à ceux viendront, sans les toucher.'
-      : `Le module lit ses réglages à chaud (20 secondes max). ${on ? '✅ Activé' : '🔕 Coupé : ses commandes sont retirées du serveur, ses réglages sont conservés.'}`,
-    defs.length ? '' : 'Aucun réglage exposé pour ce module : son comportement suit le manifeste.',
+      ? 'Le style et les journaux du bot : ce que tu règles ici vaut pour les 23 modules, sans les toucher.'
+      : `Ses réglages sont lus à chaud (20 secondes max). ${on ? '✅ Activé' : '🔕 Coupé : ses commandes sont retirées du serveur, ses réglages sont conservés.'}`,
+    defs.length
+      ? '**2️⃣ Choisis le réglage dans le menu en bas de ce message** — Edge ouvre la bonne fenêtre : zone de texte pré-remplie, liste des salons du serveur, ou deux boutons oui/non.'
+      : 'Aucun réglage exposé pour ce module : son comportement suit le manifeste.',
     !tout && tous.length > defs.length ? `_${tous.length - defs.length} réglage(s) avancé(s) masqué(s)._` : '',
   ].filter(Boolean).join('\n');
 
@@ -156,18 +168,20 @@ export async function vueModule(c: Ctx, modules: readonly EdgeModule[], module: 
     ? [new ActionRowBuilder<MessageActionRowComponentBuilder>().setComponents(
       new StringSelectMenuBuilder()
         .setCustomId(customId('botadmin', 'config-cle'))
-        .setPlaceholder('✏️ Choisir le réglage à changer…')
+        .setPlaceholder('2️⃣  Choisis le réglage à changer')
         .addOptions(defs.map((def) => ({
           label: def.label.slice(0, 95),
           // separateur « . » et pas « : » : Discord n'accepte que [a-z0-9._-] dans une
           // value d'option, et un menu mal forme fait echouer tout le message.
           value: valeurOption(`${module}.${def.cle}`),
-          description: `${formater(def, etat[def.cle]?.valeur)}${def.avance ? ' · avancé' : ''}`.slice(0, 95),
+          // jamis vide : discord.js rejette l'objet entier si une description est vide,
+          // et un reglage laise au vide (mp_texte, pied_de_page) en produit une.
+          description: (`${formater(def, etat[def.cle]?.valeur)}${def.avance ? ' · avancé' : ''}` || '—').slice(0, 95) || '—',
         })),
     ) as never)]
     : [];
   return {
-    embeds: [embed({ title: `⚙️ ${labelDe(modules, module)}`, desc, fields: champs, footer: '/edge config · clique sur ✏️ pour changer, rien n’est gravé dans le code' })],
+    embeds: [embed({ title: `⚙️ ${labelDe(modules, module)}`, desc, fields: champs, footer: '/config · choisis 2 dans le menu en bas, rien n’est gravé dans le code' })],
     components: [boutons as never, ...reglages, ...selecteur(modules, module)],
   };
 }
@@ -192,9 +206,9 @@ export async function vueTableau(c: Ctx, modules: readonly EdgeModule[], tout = 
     embeds: [embed({
       title: '🎛️ Personnaliser Edge',
       desc: [
-        'Choisis un module dans le menu, puis **✏️ le réglage à changer** : Edge ouvre la bonne fenêtre — zone de texte pour un message, liste des salons du serveur pour une destination, deux boutons pour un oui/non. Rien à retenir, rien à taper dans le vide.',
-        'Rien n’efface tes données : couper un module retire ses slash commands et ses messages, pas les tickets ni les niveaux déjà écrits.',
-        'Les options fines qui ne sont pas là se touchent quand même : `/edge flag <clé> <vrai|faux>`.',
+        '**1️⃣ Choisis un module ci-dessous · 2️⃣ choisis le réglage · 3️⃣ Edge ouvre la bonne fenêtre.** Rien à taper, rien à retenir.',
+        '🔕 couper un module retire ses commandes du serveur sans rien effacer · 🧹 remettre à zéro · 📤 exporter pour rejouer les mêmes réglages ailleurs.',
+        'Une option fine absente de la liste se règle avec `/edge flag <clé> <vrai|faux>`.',
       ].join('\n'),
       fields: lignes.slice(0, 25),
     })],
@@ -468,7 +482,6 @@ async function appliquer(
 ): Promise<void> {
   const r = await c.cfg.regler(module, cle, brut);
   if (!r.ok) {
-    await i.reply({ content: `🚫 ${r.raison}\n\nRetente avec le bouton ⚙️ du module, ou \`/edge config regler ${module} ${cle} <valeur>\`.`, flags: MessageFlags.Ephemeral });
     return;
   }
   const avis = await verifierCible(c, r.def, r.valeur);

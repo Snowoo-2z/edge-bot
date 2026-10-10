@@ -47,7 +47,7 @@ export const DOCS: Record<string, Fiche> = {
   partnership: { quoi: 'Cycle partenariat : audit du serveur partenaire (membres, ancienneté, invite recoupée avec les nôtres), acceptation, annonce avec ping 🤝│ Notification Partenariat, contrôle de réciprocité chaque lundi, rôle 🤝│ Partenaire posé puis retiré.', qui: '💼│ Manager Partenariat+', ou: '📣│・Annonces + 🎫│・Tickets-logs', cmd: '/partenariat auditer · /partenariat accepter · /partenariat lister' },
   recruitment: { quoi: 'Offre de poste publiée dans 📖│・Recrutement Staff, candidatures en modale, 4 questions, puis décision staff. Edge ne donne JAMAIS un rôle de staff : il prépare le message pour un Admin.', qui: 'tout le monde (candidater) · Admin (décider)', ou: '📖│・Recrutement Staff', cmd: '/recrutement poste · /recrutement lister' },
   help: { quoi: 'La fiche de chaque module : ce qu’il fait, qui s’en sert, dans quel salon, et le bouton ⚙️ qui ouvre ses réglages. C’est la commande à coller dans 📌│・Informations pour les nouveaux.', qui: 'tout le monde', ou: 'partout (réponse éphémère, ça ne pollue pas)', cmd: '/aide · /aide <module>' },
-  botadmin: { quoi: 'Couper ou rallumer un module à chaud, régler n’importe quel texte/salon/couleur depuis /edge config, voir la santé (intents, permissions, BDD, ordonnanceur), relancer la résolution de structure, re-synchroniser un panneau, chiffrer les stats.', qui: '🛡️│ Administrateur · 👑│ Fondateur', ou: '💬│・Staff-chat', cmd: '/edge config · /edge module · /edge sante · /edge stats' },
+  botadmin: { quoi: 'Couper ou rallumer un module à chaud, régler n’importe quel texte/salon/couleur depuis /config, voir la santé (intents, permissions, BDD, ordonnanceur), relancer la résolution de structure, re-synchroniser un panneau, chiffrer les stats.', qui: '🛡️│ Administrateur · 👑│ Fondateur', ou: '💬│・Staff-chat', cmd: '/config · /edge module · /edge sante · /edge stats' },
 };
 
 /** Une ligne par module, courte : c'est l'aperçu, pas la fiche. */
@@ -62,7 +62,7 @@ export function lignesApercu(c: Ctx, modules: readonly { key: string; label: str
 /** L'aperçu, découpé en descriptions d'embed qui passent (un embed = 4096, on prend de la marge). */
 export function pagesApercu(c: Ctx, modules: readonly { key: string; label: string }[] = MODULES): string[] {
   const chapeau = `🧭 **Edge — ${modules.length} modules sur ${c.guild.name}**`;
-  const queue = `📌 ${CHANNEL_DEFS.length} salons attendus, ${CHANNEL_DEFS.filter((x) => x.locked).length} en lecture seule, ${ROLE_DEFS.length} rôles connus.\nPour changer un texte, un salon ou une couleur : ${'**'}/edge config${'**'} (rien à taper dans le vide, tout se choisit dans les menus).`;
+  const queue = `📌 ${CHANNEL_DEFS.length} salons attendus, ${CHANNEL_DEFS.filter((x) => x.locked).length} en lecture seule, ${ROLE_DEFS.length} rôles connus.\nPour changer un texte, un salon ou une couleur : ${'**'}/config${'**'} (un menu pour le module, un menu pour le réglage, rien à taper).`;
   const texte = [chapeau, '', ...lignesApercu(c, modules), '', queue].join('\n');
   return decouper(texte, LIMITE_EMBED);
 }
@@ -75,7 +75,7 @@ function selecteurModules(): unknown[] {
   return [new ActionRowBuilder<MessageActionRowComponentBuilder>().setComponents(menu as never) as never];
 }
 
-/** La fiche d'un module, plus ses réglages courants : c'est de là qu'on entre dans /edge config. */
+/** La fiche d'un module, plus ses réglages courants : c'est de là qu'on entre dans /config. */
 async function vueFiche(c: Ctx, key: string): Promise<{ embeds: unknown[]; components: unknown[] }> {
   const m = MODULES.find((x) => x.key === key);
   const d = DOCS[key];
@@ -103,7 +103,7 @@ async function vueFiche(c: Ctx, key: string): Promise<{ embeds: unknown[]; compo
       title: `${off ? '⚠️' : '✅'} ${m?.label ?? key}`,
       desc: off ? `**Désactivé** — ${off}\n\nRallume-le avec \`/edge module ${key} action:on\` ou le bouton 🔕/✅ du module.` : undefined,
       fields: champs,
-      footer: `/${key === 'botadmin' ? 'edge config' : 'aide ' + key} · fiche lue dans le manifeste, pas dans ma tête`,
+      footer: `/aide ${key} · fiche lue dans le manifeste, pas dans ma tête · ⚙️ = les réglages`,
     })],
     components: [boutons as never, ...selecteurModules()],
   };
@@ -121,7 +121,7 @@ export const helpModule: EdgeModule = {
     'apercu': async (c: Ctx, i) => {
       await i.update({ embeds: pagesApercu(c).map((p) => embed({ desc: p })), components: selecteurModules() } as never);
     },
-    // Le pont vers la config : pas besoin de savoir que ça s'appelle /edge config.
+    // Le pont vers la config : pas besoin de savoir que ça s'appelle /config.
     'regler': async (c: Ctx, i, args) => {
       const key = args[0]!;
       if (!habilitation(c, i as never)) {
