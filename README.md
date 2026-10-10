@@ -161,7 +161,7 @@ la première seconde, `GET /ready` seulement quand Discord et la base sont bons.
 5. **Advanced → Environment variables** :
    ```
    DISCORD_TOKEN   = <ton token>
-   DATABASE_URL    = <Supabase → Connection string → session pooler, port 5432>
+   DATABASE_URL    = <Supabase → Project Settings → Database → Connection string, directe 5432 : postgres://postgres:[MOT_DE_PASSE]@db.[REF].supabase.co:5432/postgres — le mot de passe de la BASE, pas une clé>
    GUILD_ID        = 1558076024778919946
    EDGE_REQUIRE_MESSAGE_CONTENT = true
    PORT            = 8080
@@ -211,7 +211,7 @@ Pas-à-pas :
 4. **Environment variables** (les deux `sync: false` du blueprint te seront demandés) :
    ```
    DISCORD_TOKEN   = <ton token>
-   DATABASE_URL    = <Supabase → Connection string → session pooler, port 5432>
+   DATABASE_URL    = <Supabase → Project Settings → Database → Connection string, directe 5432 : postgres://postgres:[MOT_DE_PASSE]@db.[REF].supabase.co:5432/postgres — le mot de passe de la BASE, pas une clé>
    GUILD_ID        = 1558076024778919946
    EDGE_REQUIRE_MESSAGE_CONTENT = true
    ```
