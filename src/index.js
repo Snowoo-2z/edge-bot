@@ -1,9 +1,11 @@
-require('dotenv').config();
+require('dotenv').config({ quiet: true });
 
 const { Client, GatewayIntentBits, Events } = require('discord.js');
 const { handleConfigCommand, handleConfigInteraction } = require('./config');
 const ticket = require('./modules/ticket');
 const { ephemeralPayload } = require('./ui');
+const { startServer } = require('./server');
+const { startKeepAlive } = require('./keepalive');
 
 const token = process.env.DISCORD_TOKEN;
 if (!token) {
@@ -42,4 +44,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
 ticket.registerEvents(client);
 
-client.login(token);
+// Serveur HTTP (health check Render) + auto-ping anti-veille.
+startServer(() => ({ bot: client.isReady() ? 'connected' : 'connecting' }));
+startKeepAlive();
+
+client.login(token).catch((err) => {
+  console.error('Connexion à Discord impossible (token invalide ou réseau) :', err.message);
+  process.exit(1);
+});

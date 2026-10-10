@@ -72,11 +72,46 @@ Les réglages sont sauvegardés dans `data/store.json` et les fichiers importés
 > Les administrateurs du serveur voient tous les salons (comportement Discord normal).
 > Pour donner accès à un rôle staff, il faut ajuster les permissions de la catégorie dans Discord.
 
+## Déploiement sur Render
+
+Le bot tourne comme **web service** Render (le serveur HTTP sert le health check `/health`).
+
+### Mise en place
+
+1. Pousse le code sur GitHub (branche `main` de préférence).
+2. Sur [Render](https://dashboard.render.com) : **New → Blueprint** et choisis le dépôt `edge-bot`.
+   Render lit `render.yaml` et crée le service `edge-bot`.
+3. Renseigne les variables secrètes demandées :
+   - `DISCORD_TOKEN` : token du bot
+   - `CLIENT_ID` : Application ID
+   - `GUILD_ID` (optionnel) : ID du serveur pour un enregistrement instantané de `/config`
+4. Lance le déploiement. La commande de build est `npm ci && npm run deploy` (enregistre `/config`),
+   et la commande de démarrage est `npm start`.
+
+Ou sans Blueprint : **New → Web Service**, runtime Node, build `npm ci && npm run deploy`,
+start `npm start`, health check path `/health`, puis les mêmes variables d'environnement.
+
+### Anti-veille (auto-ping)
+
+Le plan gratuit de Render met le service en veille après environ 15 min sans requête entrante,
+et une connexion WebSocket Discord ne compte pas comme trafic. Le bot s'envoie donc lui-même une
+requête `GET /health` sur son URL publique (`RENDER_EXTERNAL_URL`, fournie automatiquement par Render)
+**toutes les 10 minutes**. Rien à configurer. Les logs affichent `[keepalive] … → 200`.
+
+### Données (important)
+
+Sans disque persistant, Render efface le système de fichiers à chaque redéploiement ou redémarrage :
+les réglages (`store.json`) et les images/GIF importés seraient perdus.
+Pour les conserver : ajoute un **Render Disk** (plan payant) et décommente la section `disk` /
+`DATA_DIR` dans `render.yaml`.
+
 ## Structure
 
 ```
 src/
   index.js              point d'entrée, routage des interactions
+  server.js             serveur HTTP (/health) pour Render
+  keepalive.js          auto-ping toutes les 10 min (anti-veille)
   config.js             commande /config et routage vers les modules
   deploy-commands.js    enregistrement de la commande auprès de Discord
   store.js              sauvegarde JSON (data/store.json)

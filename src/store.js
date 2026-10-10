@@ -1,7 +1,8 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-const DATA_DIR = path.join(__dirname, '..', 'data');
+// DATA_DIR permet de pointer vers un disque persistant (ex. Render Disk).
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
 const FILE = path.join(DATA_DIR, 'store.json');
 
 let data = load();
