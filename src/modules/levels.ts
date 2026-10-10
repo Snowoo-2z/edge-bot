@@ -19,6 +19,13 @@ const DAY = 86_400_000;
 export const levels: EdgeModule = {
   key: 'levels',
   label: 'XP & niveaux',
+  reglages: [
+    {
+      cle: 'annonces', module: 'levels', type: 'booleen', label: 'Annoncer les passages de palier',
+      aide: 'Un ricochet dans 📈│・Niveau à chaque palier. Éteint par défaut : les niveaux montent en silence, le classement et les rôles restent à jour.',
+      defaut: false, base: 'flags', cleBase: 'levels.announce',
+    },
+  ],
   needs: { content: true },
   listeners: () => [
     {

@@ -17,6 +17,18 @@ let snapshot = new Map<string, Snap>();
 export const invites: EdgeModule = {
   key: 'invites',
   label: 'Invitations & parrainage',
+  reglages: [
+    {
+      cle: 'role_auto', module: 'invites', type: 'booleen', label: 'Rôle Partenaire automatique',
+      aide: 'Allumé, Edge donne 💼│・Partenaire tout seul aux 50 invites nettes. Éteint (réglage d’usine) = le classement tourne, c’est le staff qui décide.',
+      defaut: false, base: 'flags', cleBase: 'invites.allowSelf',
+    },
+    {
+      cle: 'annonces', module: 'invites', type: 'booleen', label: 'Annoncer les records',
+      aide: 'Un message dans 💬│・Notification Partenariat à chaque nouveau leader.',
+      defaut: false, base: 'flags', cleBase: 'invites.announce',
+    },
+  ],
   needs: { channels: ['invitations'], perms: ['ManageGuild'] },
   sync: async (c: Ctx) => { await resync(c); c.log.info(`suivi d'invitations : ${snapshot.size} lien(s) sous surveillance`); },
   listeners: () => [

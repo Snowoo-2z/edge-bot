@@ -20,6 +20,13 @@ const active = new Map<string, number>();
 export const voice: EdgeModule = {
   key: 'voice',
   label: 'Vocal',
+  reglages: [
+    {
+      cle: 'ejection_inactive', module: 'voice', type: 'booleen', label: 'Éjecter les salons vocaux inactifs',
+      aide: 'Edge supprime un salon temporaire qu’il a créé quand plus personne n’y parle.',
+      defaut: true, base: 'flags', cleBase: 'voice.kickIdle',
+    },
+  ],
   needs: { channels: [...WATCHED, ...EXEMPT], categories: ['vocal'], perms: ['MoveMembers'] },
   listeners: () => [
     {

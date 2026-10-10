@@ -4,7 +4,7 @@
 --
 -- · Idempotent : tu peux le relancer après chaque mise à jour, il ne détruit RIEN
 --   (CREATE ... IF NOT EXISTS partout, aucune DROP, aucun TRUNCATE).
--- · Il crée 24 tables, les index et 3 fonctions que Edge appelle par
+-- · Il crée 25 tables, les index et 3 fonctions que Edge appelle par
 --   l'API : edge_schema_check, edge_prune_events, edge_counts.
 -- · Après ce fichier, Edge n'a besoin que de SUPABASE_URL et SUPABASE_SERVICE_ROLE_KEY : il
 --   passe par l'API HTTP de Supabase, donc JAMAIS le mot de passe de la base ni un pooler.
@@ -170,6 +170,16 @@ DO $alt$ BEGIN
   ALTER TABLE public.members ADD COLUMN IF NOT EXISTS presented_at TIMESTAMPTZ;
   ALTER TABLE public.members ADD COLUMN IF NOT EXISTS verified BOOLEAN DEFAULT false;
   ALTER TABLE public.members ADD COLUMN IF NOT EXISTS flags JSONB DEFAULT '{}';
+  END IF;
+END $alt$;
+
+DO $alt$ BEGIN
+  IF to_regclass('public.module_settings') IS NOT NULL THEN
+  ALTER TABLE public.module_settings ADD COLUMN IF NOT EXISTS module_key TEXT;
+  ALTER TABLE public.module_settings ADD COLUMN IF NOT EXISTS cle TEXT;
+  ALTER TABLE public.module_settings ADD COLUMN IF NOT EXISTS valeur JSONB;
+  ALTER TABLE public.module_settings ADD COLUMN IF NOT EXISTS updated_by TEXT;
+  ALTER TABLE public.module_settings ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now();
   END IF;
 END $alt$;
 
@@ -609,6 +619,7 @@ DECLARE
     'kv_store',
     'level_rewards',
     'members',
+    'module_settings',
     'partnerships',
     'polls',
     'presentations',
@@ -672,6 +683,7 @@ BEGIN
     'kv_store',
     'level_rewards',
     'members',
+    'module_settings',
     'partnerships',
     'polls',
     'presentations',
@@ -694,6 +706,21 @@ BEGIN
   RETURN out;
 END $fn$;
 
+-- ---- 0003_reglages.sql ----
+-- Edge · les reglages personnalises (/edge config). Un module peut tout debrancher sans
+-- retoucher le code : une ligne par reglage, la valeur en JSONB (le type est dans le code).
+-- C'est la table que complete la voie « flags » (booleens, deja la depuis le debut) et
+-- « kv_store » (les reglages nes avant celle-ci) : /edge config sait ou lire, pas toi.
+CREATE TABLE IF NOT EXISTS module_settings (
+  module_key TEXT NOT NULL,
+  cle TEXT NOT NULL,
+  valeur JSONB NOT NULL,
+  updated_by TEXT,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (module_key, cle)
+);
+CREATE INDEX IF NOT EXISTS module_settings_module_idx ON module_settings (module_key);
+
 -- ============================================================================
 -- Empêche « npm run db:migrate » (mode connexion directe) de rejouer ce fichier :
 -- les migrations sont marquées comme appliquées.
@@ -701,6 +728,7 @@ END $fn$;
 CREATE TABLE IF NOT EXISTS schema_migrations (name TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now());
 INSERT INTO schema_migrations (name) VALUES ('0001_init.sql') ON CONFLICT (name) DO NOTHING;
 INSERT INTO schema_migrations (name) VALUES ('0002_edge_functions.sql') ON CONFLICT (name) DO NOTHING;
+INSERT INTO schema_migrations (name) VALUES ('0003_reglages.sql') ON CONFLICT (name) DO NOTHING;
 
 -- PostgREST doit recharger son cache de schéma pour voir les tables et fonctions neuves.
 NOTIFY pgrst, 'reload schema';

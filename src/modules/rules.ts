@@ -29,6 +29,13 @@ let rulesText = DEFAULT_RULES;
 export const rules: EdgeModule = {
   key: 'rules',
   label: 'Règlement & acceptation',
+  reglages: [
+    {
+      cle: 'portail', module: 'rules', type: 'booleen', label: 'Verrouiller tant que le règlement n’est pas accepté',
+      aide: 'Le gros bouton sous 📌│・Règlement. Éteint (réglage d’usine) = le panneau reste, l’acceptation donne le rôle, mais personne n’est bloqué à l’entrée.',
+      defaut: false, base: 'flags', cleBase: 'rules.gate',
+    },
+  ],
   needs: { channels: ['reglement'] },
   sync: async (c: Ctx) => { rulesText = truncate((await c.db.kv.get<string>('rules:text')) ?? DEFAULT_RULES, 1800); },
   panels: async (ctx: Ctx) => {

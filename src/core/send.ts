@@ -2,7 +2,7 @@
 import {
   EmbedBuilder, type AttachmentBuilder, type GuildMember, type Message, type TextChannel, ChannelType,
 } from 'discord.js';
-import { COLORS, type ChannelKey, type RoleKey } from '../manifest.js';
+import { CHANNEL_DEFS, COLORS, type ChannelKey, type RoleKey } from '../manifest.js';
 import type { Ctx } from './module.js';
 import { emit, type LogKind } from './logs.js';
 import { roleIds } from './perms.js';
@@ -17,6 +17,25 @@ export function mustText(ctx: Ctx, k: ChannelKey): TextChannel {
   const c = text(ctx, k);
   if (!c) throw new Error(`salon texte indisponible : ${k}`);
   return c;
+}
+
+/**
+ * Un reglage de type « salon » peut donner soit une cle du manifeste (`modLogs`), soit un
+ * identifiant Discord (`1234…` ou `<#1234…>`). On resout les deux, et on retombe sur le salon
+ * prevu par le manifeste si le choix pointe dans le vide — un reglage casse ne doit jamais
+ * couper une fonctionnalite.
+ */
+export async function canalSelon(ctx: Ctx, brut: unknown, defaut: ChannelKey): Promise<TextChannel> {
+  const cle = typeof brut === 'string' ? brut.trim().replace(/^<#|>$/g, '') : '';
+  if (/^\d{15,21}$/.test(cle)) {
+    const direct = ctx.guild.channels.cache.get(cle) ?? await ctx.guild.channels.fetch(cle).catch(() => null);
+    if (direct && direct.type === ChannelType.GuildText) return direct;
+    ctx.log.warn(`salon ${cle} regle mais introuvable : je reviens a ${defaut}`);
+  } else if (cle && CHANNEL_DEFS.some((d) => d.key === cle)) {
+    const trouve = text(ctx, cle as ChannelKey);
+    if (trouve) return trouve;
+  }
+  return mustText(ctx, defaut);
 }
 
 export const roleMention = (ctx: Ctx, k: RoleKey): string => `<@&${roleIds(ctx.s.idx, k)}>`;
@@ -38,19 +57,29 @@ export async function say(
       components: opts.components as never,
       files: opts.files,
       reply: opts.replyTo ? { messageReference: opts.replyTo } : undefined,
-      allowedMentions: { parse: opts.roles?.length ? ['users', 'roles'] : ['users'], repliedUser: false },
+      allowedMentions: { parse: opts.roles?.length && style.pingsRoles ? ['users', 'roles'] : ['users'], repliedUser: false },
     })
     .catch((e: Error) => { ctx.log.warn(`envoi raté dans ${k} : ${e.message}`); return null; });
 }
 
+/**
+ * Le style global, pose par /edge config (general.couleur, general.pied_de_page,
+ * general.pings_roles). Un module qui passe une couleur explicite la garde : ici on ne
+ * definit que le defaut, jamais on n'ecrase un choix local.
+ */
+let style: { couleur?: number; pied?: string; pingsRoles: boolean } = { pingsRoles: true };
+export const definirStyle = (s: Partial<typeof style>): void => { style = { ...style, ...s }; };
+export const lireStyle = (): Readonly<typeof style> => style;
+
 export interface EmbedOpts { title?: string; desc?: string; color?: number; fields?: { name: string; value: string; inline?: boolean }[]; footer?: string; footerIcon?: string; image?: string; thumbnail?: string; author?: string; url?: string }
 export const embed = (o: EmbedOpts): EmbedBuilder => {
-  const e = new EmbedBuilder().setColor(o.color ?? COLORS.edge);
+  const e = new EmbedBuilder().setColor(o.color ?? style.couleur ?? COLORS.edge);
   if (o.title) e.setTitle(truncate(o.title, 250));
   if (o.desc) e.setDescription(truncate(o.desc, 4000));
   if (o.url) e.setURL(o.url);
   if (o.fields?.length) e.addFields(o.fields.slice(0, 25).map((f) => ({ name: truncate(f.name, 250), value: truncate(f.value, 1000), inline: !!f.inline })));
-  if (o.footer) e.setFooter({ text: truncate(o.footer, 200), ...(o.footerIcon ? { iconURL: o.footerIcon } : {}) });
+  const pied = o.footer ?? style.pied;
+  if (pied) e.setFooter({ text: truncate(pied, 200), ...(o.footerIcon ? { iconURL: o.footerIcon } : {}) });
   if (o.author) e.setAuthor({ name: truncate(o.author, 250) });
   if (o.image) e.setImage(o.image);
   if (o.thumbnail) e.setThumbnail(o.thumbnail);

@@ -713,6 +713,146 @@ test('schéma : index, clés étrangères et compteurs de l API sont cohérents'
   assert.ok((tables.get('reports') ?? []).includes('reviewed_by'), 'reports.reviewed_by écrit par reports');
 });
 
+/* ------------------------------------------------------------------ reglages (/edge config) */
+import { construireRegistre, formater, invariantsRegistre, normaliser, REGLAGES_GENERAL, store, valider, Config, type SettingDef } from '../src/core/settings.js';
+
+const def = (o: Partial<SettingDef>): SettingDef => ({ cle: 'x', module: 'test', type: 'chaine', label: 'Un réglage', defaut: '', ...o } as SettingDef);
+
+test('réglages : chaque type accepte le bon format et refuse le reste, en français', () => {
+  assert.deepEqual(valider(def({ type: 'chaine', maxLen: 10 }), '  bonjour  '), { ok: true, valeur: 'bonjour' });
+  assert.equal(valider(def({ type: 'chaine', maxLen: 4 }), 'beaucoup trop long').ok, false);
+  assert.equal(valider(def({ type: 'chaine' }), 'deux\nlignes').ok, false, 'un texte à la ligne doit passer par le type « texte »');
+  assert.equal(valider(def({ type: 'texte' }), 'une\nligne\naussi').ok, true, '« texte » accepte les sauts de ligne');
+  assert.deepEqual(valider(def({ type: 'nombre', min: 1, max: 10 }), '7'), { ok: true, valeur: 7 });
+  assert.deepEqual(valider(def({ type: 'nombre' }), '2,5'), { ok: true, valeur: 2.5 }, 'la virgule française est admise');
+  const refuse = valider(def({ type: 'nombre', min: 1 }), '0');
+  assert.ok(!refuse.ok, 'hors bornes : refusé');
+  const horsSujet = valider(def({ type: 'nombre' }), 'bientôt');
+  assert.ok(!horsSujet.ok && horsSujet.raison === 'nombre attendu, reçu « bientôt »', 'la raison est écrite pour un humain');
+  assert.deepEqual(valider(def({ type: 'couleur' }), 'vert'), { ok: true, valeur: '#2ECC71' }, 'les noms de couleur marchent');
+  assert.deepEqual(valider(def({ type: 'couleur' }), '#1abc9c'), { ok: true, valeur: '#1ABC9C' });
+  assert.equal(valider(def({ type: 'couleur' }), 'arc-en-ciel').ok, false);
+  for (const [entree, valeur] of [['oui', true], ['non', false], ['vrai', true], ['0', false], ['on', true], ['couper', false]] as [string, boolean][]) {
+    assert.deepEqual(valider(def({ type: 'booleen' }), entree), { ok: true, valeur }, `« ${entree} » doit se lire ${valeur}`);
+  }
+  assert.equal(valider(def({ type: 'booleen' }), 'peut-etre').ok, false);
+  assert.deepEqual(valider(def({ type: 'salon' }), '<#1558076024778919946>'), { ok: true, valeur: '1558076024778919946' });
+  assert.deepEqual(valider(def({ type: 'role' }), '1558076024778919946'), { ok: true, valeur: '1558076024778919946' });
+  assert.equal(valider(def({ type: 'salon' }), '#-discussion').ok, false, 'un nom de salon n est pas un identifiant');
+  assert.deepEqual(valider(def({ type: 'duree' }), '1h30'), { ok: true, valeur: 5_400_000 });
+  assert.deepEqual(valider(def({ type: 'liste' }), 'a, b ; c'), { ok: true, valeur: ['a', 'b', 'c'] });
+  assert.equal(valider(def({ type: 'liste', max: 1 }), 'a, b').ok, false);
+  const choix = def({ type: 'choix', choix: [{ nom: 'Discret', valeur: 'discret' }, { nom: 'Bruyant', valeur: 'bruyant' }] as { nom: string; valeur: string }[] });
+  assert.deepEqual(valider(choix, 'bruyant'), { ok: true, valeur: 'bruyant' });
+  assert.match((valider(choix, 'n importe quoi') as { raison: string }).raison, /Discret \/ Bruyant/);
+  assert.equal(formater(def({ type: 'booleen' }), true), '✅ oui');
+  assert.equal(formater(def({ type: 'duree' }), 90_000), '90 s');
+  assert.equal(normaliser(def({ type: 'nombre', min: 1, max: 10 }), 99), 10, 'une valeur sortie de la base est bornée, pas rejetée');
+});
+
+test('réglages : le registre est cohérent, et chaque réglage exposé est vraiment lu par son module', () => {
+  const registre = construireRegistre(MODULES);
+  registre.set('general', new Map(REGLAGES_GENERAL.map((d) => [d.cle, d])));
+  const fichiers = readdirSync('src/modules').filter((f) => f.endsWith('.ts'));
+  const source = (module: string): string => {
+    if (module === 'general') return ['src/core/client.ts', 'src/core/send.ts', 'src/core/config-ui.ts'].map((f) => readFileSync(f, 'utf8')).join('\n');
+    const direct = fichiers.find((f) => f.replace(/\.ts$/, '') === module);
+    const trouve = direct ?? fichiers.find((f) => readFileSync(`src/modules/${f}`, 'utf8').includes(`key: '${module}'`));
+    assert.ok(trouve, `aucun fichier de module pour « ${module} » : le test ne peut pas prouver que le réglage est lu`);
+    return readFileSync(`src/modules/${trouve}`, 'utf8');
+  };
+  const pb = invariantsRegistre(registre, source);
+  assert.deepEqual(pb, [], `\n${pb.join('\n')}`);
+  const nb = [...registre.values()].reduce((a, m) => a + m.size, 0);
+  assert.ok(nb >= 16, `seulement ${nb} réglages exposés : la personnalisation promise n est pas là`);
+  assert.ok(registre.get('general')!.has('salon_moderation'), 'les journaux doivent être déplaçables sans code');
+  assert.ok(registre.get('welcome')!.has('message'), 'le texte de bienvenue doit être dans /edge config, pas seulement dans /bienvenue texte');
+});
+
+test('réglages : un défaut déclaré == le fallback réellement lu au pied du mur (sinon « oublier » armerait ce qui ne l’était pas)', () => {
+  const registre = construireRegistre(MODULES);
+  registre.set('general', new Map(REGLAGES_GENERAL.map((d) => [d.cle, d])));
+  const source = ['src/core/client.ts', 'src/core/send.ts', ...readdirSync('src/modules').filter((f) => f.endsWith('.ts')).map((f) => `src/modules/${f}`)]
+    .map((f) => readFileSync(f, 'utf8')).join('\n');
+  const drapeaux = new Map<string, boolean>();
+  for (const m of source.matchAll(/flags\.isOn\(\s*'([^']+)',\s*(true|false)\s*\)/g)) drapeaux.set(m[1]!, m[2] === 'true');
+  for (const defs of registre.values()) {
+    for (const def of defs.values()) {
+      if (def.base !== 'flags') continue;
+      const cle = (def.cleBase ?? def.cle).replace(/\{module\}/g, def.module);
+      // Soit le module lit le flag lui-meme avec son propre fallback (log:* est lu par la couche
+      // de reglages, donc le defaut declare EST la source de verite), soit il n'y a rien a croiser.
+      if (!drapeaux.has(cle)) continue;
+      assert.equal(def.defaut, drapeaux.get(cle), `${def.module}.${def.cle} : le défaut affiché par /edge config (${def.defaut}) difère du comportement réel (${drapeaux.get(cle)}) — « oublier » changerait donc le comportement du module`);
+    }
+  }
+  assert.ok(drapeaux.size >= 7, `seulement ${drapeaux.size} flags littéraux trouvés : le test ne regarde plus rien`);
+  // L'autre sens, celui qui compte pour « je veux tout modifier » : un flag qui change un
+  // comportement ne doit jamais rester un reglage clandestin, invisible dans /edge config.
+  // (log:* et module:* sont des cles composees : les premieres vivent dans general, les
+  // secondes dans /edge module couper — verifiees par les deux tests precedents.)
+  const declares = new Set<string>();
+  for (const defs of registre.values()) for (const def of defs.values()) declares.add((def.cleBase ?? def.cle).replace(/\{module\}/g, def.module));
+  for (const cle of drapeaux.keys()) {
+    assert.ok(declares.has(cle), `le flag « ${cle} » change un comportement mais n'est déclaré dans aucun module : ajoute-le a ses reglages (base: flags)`);
+  }
+});
+
+test('réglages : régler / lire / oublier / exporter, sur la vraie couche de stockage', async () => {
+  const db = Db.memory();
+  const defs: SettingDef[] = [
+    def({ cle: 'message', module: 'test', type: 'texte', label: 'Texte', defaut: 'par défaut', base: 'kv', cleBase: 'test:texte' }),
+    def({ cle: 'actif', module: 'test', type: 'booleen', label: 'Actif', defaut: true, base: 'flags', cleBase: 'test.actif' }),
+    def({ cle: 'max', module: 'test', type: 'nombre', label: 'Maximum', defaut: 3, min: 1, max: 5 }),
+    def({ cle: 'secret', module: 'test', type: 'chaine', label: 'Avancé', defaut: 'x', avance: true }),
+  ];
+  const registre = construireRegistre([{ key: 'test', label: 'Test', reglages: defs }]);
+  const cfg = new Config(db, registre);
+  const vue = cfg.pour('test');
+
+  assert.equal(await vue.texte('message'), 'par défaut', 'non réglé = le défaut déclaré');
+  assert.equal(await vue.num('max'), 3);
+  assert.equal(await vue.bool('actif'), true);
+
+  assert.ok((await cfg.regler('test', 'max', '9')).ok === false, 'hors bornes : refusé');
+  const r = await cfg.regler('test', 'max', '4');
+  assert.ok(r.ok && r.valeur === 4);
+  assert.equal(await vue.num('max'), 4, 'la valeur réglée est lue immédiatement');
+  const ligne = await db.one('module_settings', { module_key: 'test', cle: 'max' });
+  assert.equal(Number(ligne?.valeur), 4, `la valeur doit vivre en base, pas seulement en cache : ${JSON.stringify(ligne)}`);
+
+  // les reglages historiques touchent l emplacement existant, pas une copie
+  await cfg.regler('test', 'actif', 'faux');
+  assert.equal(await db.flags.isOn('test.actif', true), false, 'un réglage « flags » doit écrire dans flags');
+  await cfg.regler('test', 'message', 'salut {membre}');
+  assert.equal(await db.kv.get<string>('test:texte'), 'salut {membre}', 'un réglage « kv » doit écrire dans kv_store');
+
+  // le cache de 20 s est reel : une ecriture par-derriere ne se voit qu apres invalidation
+  assert.equal(await vue.texte('message'), 'salut {membre}', 'premiere lecture = le cache se remplit');
+  await db.kv.set('test:texte', 'écrit à la main');
+  assert.equal(await vue.texte('message'), 'salut {membre}', 'le cache doit protéger la base des lectures répétées');
+  cfg.invalider('test');
+  assert.equal(await vue.texte('message'), 'écrit à la main');
+
+  const exporte = await cfg.exporter('test');
+  assert.deepEqual(Object.keys(exporte).sort(), ['actif', 'max', 'message'], 'exporter ne sort que ce qui a été réglé');
+  const importE = await cfg.importer('test', { max: '2', inconnu: 1, actif: true });
+  assert.deepEqual(importE.poses, ['max', 'actif']);
+  assert.equal(importE.refuses[0]?.[0], 'inconnu');
+  assert.equal(await vue.num('max'), 2);
+
+  await cfg.oublier('test', 'max');
+  assert.equal(await vue.num('max'), 3, 'oublier = revenir au défaut');
+  await cfg.reinitialiser('test');
+  assert.equal(await db.flags.isOn('test.actif', true), true, 'réinitialiser remet le défaut, y compris sur un flag');
+  assert.equal(await vue.texte('message'), 'par défaut');
+  assert.deepEqual(await store.lire(db, defs[2]!), null, 'la ligne module_settings est bien parties');
+
+  const tout = await cfg.tout('test');
+  assert.ok(Object.values(tout).every((e) => e.parDefaut), 'tout est revenu au défaut');
+  assert.ok(tout['secret']!.def.avance, 'un réglage avancé reste accessible, il est juste masqué par défaut');
+});
+
 /* ------------------------------------------------------------------ lanceur */
 let echecs = 0;
 for (const t of tests) {

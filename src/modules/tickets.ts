@@ -39,14 +39,24 @@ export const tickets: EdgeModule = {
     categories: ['tickets'], channels: ['ticketOpen', 'ticketLogs'],
     roles: [...TICKET_ACCESS], perms: ['ManageChannels', 'ViewChannel', 'SendMessages', 'ManageRoles'],
   },
+  reglages: [
+    {
+      cle: 'message_panneau', module: 'tickets', type: 'texte', label: 'Texte du panneau d’ouverture',
+      aide: 'Le paragraphe explicatif au-dessus du menu des motifs. Le menu et les motifs viennent du manifeste.',
+      defaut: 'Choisis le motif dans le menu : Edge crée un salon privé pour toi et va chercher la bonne personne. Personne d’autre ne le voit.',
+      maxLen: 900,
+    },
+  ],
+
   panels: async (ctx: Ctx) => {
+    const intro = (await ctx.reglages('tickets').str('message_panneau')) || '';
     await ensurePanel(ctx, {
       key: 'tickets',
       channel: mustText(ctx, 'ticketOpen'),
       build: () => ({
         content: [
           '🎫 **Ouvrir un ticket**',
-          'Choisis le motif dans le menu : Edge crée un salon privé pour toi et va chercher la bonne personne. Personne d’autre ne le voit.',
+          intro,
           TICKET_OPTIONS.map((o) => `• ${o.label}${o.description ? ` — ${o.description}` : ''}`).join('\n'),
           'Un seul ticket ouvert à la fois. Pour préciser un truc sensible, écris-le directement dedans.',
         ].join('\n'),

@@ -19,6 +19,13 @@ const LOCK_PERMS: PermName[] = ['SendMessages', 'SendMessagesInThreads', 'AddRea
 export const antiraid: EdgeModule = {
   key: 'antiraid',
   label: 'Anti-raid',
+  reglages: [
+    {
+      cle: 'blocage_auto', module: 'antiraid', type: 'booleen', label: 'Sanction automatique',
+      aide: 'Éteint (le réglage d’usine) = Edge alerte mais ne frappe plus tout seul : verrouiller un serveur entier est trop lourd pour être actif sans feu vert. Allumé, les paliers automatiques s’arment.',
+      defaut: false, base: 'flags', cleBase: 'antiraid.auto',
+    },
+  ],
   needs: { categories: ['grotte', 'activites'], roles: ['membre'], perms: ['ManageChannels'] },
   listeners: () => [
     {

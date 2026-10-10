@@ -26,6 +26,13 @@ const EVENTS: [string, AuditLogEvent][] = [
 export const audit: EdgeModule = {
   key: 'audit',
   label: 'Audit de structure & de ping',
+  reglages: [
+    {
+      cle: 'publication', module: 'audit', type: 'booleen', label: 'Publier les rapports de structure',
+      aide: 'Non = /audit structure répond seulement en privé, rien n’est posté dans 📋│・Audit-staff.',
+      defaut: true, base: 'flags', cleBase: 'audit.post',
+    },
+  ],
   needs: { roles: ['mod'], channels: ['auditStaff'], perms: ['ViewAuditLog'] },
   jobs: () => [
     {

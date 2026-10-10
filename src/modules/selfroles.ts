@@ -26,14 +26,24 @@ export const selfroles: EdgeModule = {
   key: 'selfroles',
   label: 'Rôles à choisir soi-même',
   needs: { roles: [...SELF_ASSIGNABLE_ROLES], channels: ['selfroles'] },
+  reglages: [
+    {
+      cle: 'message_panneau', module: 'selfroles', type: 'texte', label: 'Texte du panneau des rôles',
+      aide: 'Le paragraphe au-dessus du menu. La liste des rôles, elle, est fixée par le manifeste (/edge structure).',
+      defaut: 'Sur ce serveur, personne ne peut pinguer @everyone. Les rôles ci-dessous sont les seuls que tu ajoutes toi-même pour recevoir une notif.',
+      maxLen: 900,
+    },
+  ],
+
   panels: async (ctx: Ctx) => {
+    const intro = (await ctx.reglages('selfroles').str('message_panneau')) || '';
     await ensurePanel(ctx, {
       key: 'selfroles',
       channel: mustText(ctx, 'selfroles'),
       build: () => ({
         content: [
           '🎭 **Tes notifications**',
-          'Sur ce serveur, personne ne peut pinguer @everyone. Les rôles ci-dessous sont les seuls que tu ajoutes toi-même pour recevoir une notif.',
+          intro,
           'Un menu, un choix, c’est réversible à tout moment. Et non, ça ne donne aucun droit sur le serveur.',
         ].join('\n'),
         components: [new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(

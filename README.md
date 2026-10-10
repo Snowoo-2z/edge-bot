@@ -163,14 +163,57 @@ qui te le dit si tu t'es trompé de cran.
 | `recruitment` | `/recrutement poste｜lister｜candidater｜retirer` — formulaire, verdict en MP, relance à J+30 |
 | `levels` | `/rang voir｜top｜reglages` — XP sans cooldown, comme demandé |
 | `voice` | `/vocal top｜temp｜inactivite｜couper` — mute (pas kick) les absents, supprime les salons ⌛ restés vides |
-| `botadmin` | `/edge module｜flag｜sante｜structure｜panneaux｜stats｜invite｜maintenance` |
+| `botadmin` | `/edge module｜config｜flag｜sante｜structure｜panneaux｜stats｜invite｜maintenance` — `/edge config` est la console de personnalisation |
 | `help` | `/aide [module]` — le mode d'emploi de chaque module, directement dans Discord |
+
+### Personnaliser (`/edge config`)
+
+`/edge config tableau` ouvre un menu : tu choisis le module, tu vois **tout ce qui est réglable** dessus,
+et tu changes la valeur sans retaper une commande. Les mêmes boutons coupent ou rallument un module — et
+couper un module **retire aussi sa slash command** du serveur. Rien n'est supprimé en base : ses tickets,
+ses niveaux et ses réglages t'attendent si tu le rallumes.
+
+```
+/edge config tableau                                  ← le menu, à la souris
+/edge config voir welcome                             ← la liste des réglages d'un module
+/edge config regler welcome message Bienvenue {membre}, sur {serveur} !
+/edge config regler general salon_moderation <#id-du-salon>
+/edge config regler welcome delai 15                  ← 15 s avant de saluer l'arrivant
+/edge config oublier welcome delai                    ← revenir au défaut
+/edge config reinitialiser tickets                    ← tout remettre à zéro pour un module
+/edge config exporter welcome                         ← un JSON à recoller sur un autre serveur
+/edge config importer welcome {"message":"Bienvenue !"}
+```
+
+Ce qui est exposé aujourd'hui :
+
+| Groupe | Réglages |
+| --- | --- |
+| `general` | couleur des embeds, pied de page, autoriser ou non les pings de rôles, **le salon de chacun des 4 journaux**, et les 4 bascules d'écriture |
+| `welcome` | message de bienvenue (mêmes `{placeholders}` que `/bienvenue texte`), salon d'accueil, délai avant le message, message privé d'accueil |
+| `tickets`, `selfroles` | le texte du panneau au-dessus du menu — republication immédiate dans le salon |
+| `antiraid`, `rules`, `levels`, `invites`, `voice`, `audit` | leurs interrupteurs (les flags historiques), listés ici au lieu d'être à deviner |
+
+Un réglage **non listé n'existe pas**, et c'est `npm test` qui l'impose : chaque réglage déclaré doit être
+réellement lu par son module, chaque flag lu par un module doit être déclaré, et un défaut affiché dans
+`/edge config` doit être le comportement d'usine — sinon « oublier » changerait le comportement au lieu de
+l'annuler. Donc rien de décoratif d'un côté, rien de clandestin de l'autre.
+
+Autres garanties : les valeurs sont lues à chaud (cache de 20 s, invalidé dès qu'on règle), validées à la
+saisie avec une raison explicite (« minimum 1 », « mentionne le salon », « réponds par oui ou non »), et un
+salon réglé sur un ID où Edge n'a pas le droit d'écrire te le dit tout de suite au lieu de se taire. Les
+réglages `flags` écrivent dans la même table que `/edge flag` : les deux chemins restent d'accord.
+
+Pour un réglage que tu veux et qui n'est pas là, c'est dix lignes dans le module (une déclaration
+`reglages: [{ cle, type, label, aide, defaut }]` et une lecture `await c.reglages('x').num('y')`) — la
+commande, le menu, la validation, l'export et le test anti-réglage-décoratif suivent tout seuls.
 
 ### Interrupteurs (`/edge flag <clé> [valeur : vrai｜faux]`, ou la table `flags` en base)
 
 `antiraid.auto` (off par défaut — verrouiller un serveur tout seul est trop lourd pour être actif sans feu),
 `rules.gate` (off), `levels.announce` (off), `invites.announce`, `invites.allowSelf`, `voice.kickIdle`,
-`audit.post`, `bot.maintenance`, et `module:<clé>` pour éteindre un module entier sans redémarrer.
+`audit.post`, `bot.maintenance`, `log:<genre>` pour chaque journal, et `module:<clé>` pour éteindre un module
+entier sans redémarrer. Sauf `bot.maintenance`, tous sont aussi visibles et réglables dans `/edge config`.
 
 ---
 
@@ -178,7 +221,7 @@ qui te le dit si tu t'es trompé de cran.
 
 ```bash
 npm run typecheck   # 0 erreur
-npm test            # 45 tests purs : barèmes, tirage pondéré, détecteurs, permissions, structure,
+npm test            # 53 tests purs : barèmes, tirage pondéré, détecteurs, permissions, structure, registre
                     #   db (les 3 moteurs : mémoire, pg, API Supabase), sonde HTTP, autoping
 npm run dry         # 8 scénarios de serveur (conforme, salon renommé, rôle oublié, fuite @everyone…)
 ```

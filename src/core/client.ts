@@ -8,11 +8,13 @@ import {
 import { Db } from '../db/db.js';
 import { migrate } from '../db/migrate.js';
 import { Logger } from './logger.js';
+import { Config, construireRegistre, REGLAGES_GENERAL } from './settings.js';
 import { driftReport, resolveStructure, type Drift, type Resolved } from './structure.js';
 import { Scheduler } from './scheduler.js';
 import { buildDispatch, handleInteraction, syncCommands, type Dispatch } from './dispatch.js';
 import { bits } from './perms.js';
 import { onLog, type LogKind } from './logs.js';
+import { canalSelon, definirStyle } from './send.js';
 import type { Ctx, EdgeModule } from './module.js';
 import { type TextChannel, type VoiceChannel, ChannelType } from 'discord.js';
 
@@ -122,8 +124,33 @@ async function start(client: Client<true>, modules: EdgeModule[], onProgress?: (
 
   const needsCache = new Map<string, Promise<boolean>>();
   const flagCache = new Map<string, { v: boolean; t: number }>();
+  const registre = construireRegistre(modules);
+  registre.set('general', new Map(REGLAGES_GENERAL.map((d) => [d.cle, d])));
+  const cfg = new Config(db, registre, (m) => {
+    if (m === 'general') void appliquerStyle();
+    // Un texte de panneau regle depuis /edge config doit se voir dans le salon, pas seulement
+    // dans la base : on redemande le panneau du module concerne (idempotent, a chaud).
+    const mod = modules.find((x) => x.key === m);
+    if (mod?.panels) void safeRun('panneaux ' + m, () => mod.panels!(ctx));
+  });
+
+  /**
+   * Le style global (couleur, pied de page, pings de roles) est lu au demarrage puis re-pose a
+   * chaque reglage de `general` : les modules passent tous par embed()/say(), donc ils heritent
+   * du choix sans avoir a le connatre.
+   */
+  const appliquerStyle = async (): Promise<void> => {
+    const g = cfg.pour('general');
+    definirStyle({
+      couleur: await g.couleur('couleur'),
+      pied: (await g.str('pied_de_page')) || `${guild.name} · Edge`,
+      pingsRoles: await g.bool('pings_roles'),
+    });
+  };
+
   const ctx: Ctx = {
     client, guild, db, sched, s, log: new Logger('edge'), content: env.contentIntent, disabled,
+    cfg, reglages: (m: string) => cfg.pour(m),
     on: (key: string) => {
       if (disabled.has(key)) return Promise.resolve(false);
       const hit = flagCache.get(key);
@@ -170,6 +197,7 @@ async function start(client: Client<true>, modules: EdgeModule[], onProgress?: (
     await safeRun(m.key, () => m.sync?.(ctx));
   }
 
+  await appliquerStyle();
   wireLogSinks(ctx);
   sched.start();
   await client.user.setPresence({ activities: [{ name: `${guild.name} · /aide`, type: ActivityType.Watching }], status: 'online' });
@@ -226,19 +254,29 @@ async function sweep(ctx: Ctx): Promise<void> {
   await ctx.db.delete('automod_hits', {} as never).catch(() => void 0);
 }
 
+/** Ou chaque sorte de ligne de log doit atterrir : reglable sans redemarrer (/edge config). */
+const ROUTES_LOG: Record<LogKind, [string, ChannelKey, string]> = {
+  moderation: ['salon_moderation', 'modLogs', 'journal_moderation'],
+  ticket: ['salon_tickets', 'ticketLogs', 'journal_tickets'],
+  staff: ['salon_audit', 'auditStaff', 'journal_staff'],
+  ops: ['salon_journal', 'staffChat', 'journal_bot'],
+};
+
 function wireLogSinks(ctx: Ctx): void {
-  const route: Record<LogKind, ChannelKey | null> = { moderation: 'modLogs', ticket: 'ticketLogs', staff: 'auditStaff', ops: 'staffChat' };
-  for (const [kind, chKey] of Object.entries(route) as [LogKind, ChannelKey | null][]) {
-    if (!chKey) continue;
+  for (const [kind, [cle, defaut, active]] of Object.entries(ROUTES_LOG) as [LogKind, [string, ChannelKey, string]][]) {
     onLog(kind, async (_k, line) => {
       if (line.length < 3) return;
-      const ch = ctx.s.channel(chKey) as TextChannel | VoiceChannel | null;
-      if (!ch || ch.type === ChannelType.GuildVoice) return;
-      if (!(await ctx.db.flags.isOn(`log:${kind}`, true))) return;
+      // Une seule bascule pour les 23 modules, dans /edge config voir general (cle de flags
+      // historique log:<kind> conservee : ce qui etait coupe le reste).
+      if (!(await ctx.cfg.valeur('general', active))) return;
+      let ch: TextChannel | null = null;
+      try { ch = await canalSelon(ctx, await ctx.cfg.valeur('general', cle), defaut); } catch { return; }
+      if (!ch) return;
       await ch.send({ content: line.slice(0, 1990), allowedMentions: { parse: [] } }).catch(() => void 0);
     });
   }
 }
+
 
 /**
  * Choix du moteur de persistance, dans l'ordre : API Supabase (SUPABASE_URL + cle), puis

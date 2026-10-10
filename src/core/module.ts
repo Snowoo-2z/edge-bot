@@ -8,6 +8,7 @@ import type { Resolved } from './structure.js';
 import type { Scheduler } from './scheduler.js';
 import type { CategoryKey, ChannelKey, PermName, RoleKey } from '../manifest.js';
 import type { Logger } from './logger.js';
+import type { Config, SettingDef, VueReglages } from './settings.js';
 
 export interface Ctx {
   client: Client<true>;
@@ -21,6 +22,14 @@ export interface Ctx {
   /** Un module est on si son flag l'est et si ses dependances sont reunies. */
   on(key: string): Promise<boolean>;
   disabled: Map<string, string>;
+  /**
+   * Les reglages personnalises du module : `await c.reglages('welcome').texte('message')`.
+   * Une valeur non reglee renvoie le defaut declare par le module : jamais de `undefined`
+   * a gerer chez soi, et un reglage depuis /edge config est visible en 20 s max (cache).
+   */
+  reglages(module: string): VueReglages;
+  /** La config entiere (liste, reglages declares, export/import) — ce que manipule /edge config. */
+  cfg: Config;
 }
 
 export interface Guard {
@@ -95,6 +104,11 @@ export interface EdgeModule {
   panels?: (ctx: Ctx) => Promise<void>;
   /** Rattrapage apres un redemarrage (giveaways en cours, tickets orphelins...). */
   sync?: (ctx: Ctx) => Promise<void>;
+  /**
+   * Ce que l'humain peut changer sur ce module (/edge config). Un reglage declare doit etre lu
+   * par le module : un test `npm test` le verifie, pour qu'aucun interrupteur ne soit decoratif.
+   */
+  reglages?: SettingDef[];
 }
 
 export const customId = (mod: string, action: string, ...args: (string | number)[]): string =>

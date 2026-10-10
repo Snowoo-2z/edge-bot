@@ -8,12 +8,15 @@ import { bits } from '../core/perms.js';
 import { inviteUrl } from '../core/client.js';
 import { at, fmtDur } from '../core/ui.js';
 import { ensurePanel } from '../core/panels.js';
+import { configCommande, configComposants, resyncCommandes } from '../core/config-ui.js';
 import { fr } from '../core/copy.js';
 
 export const botadmin: EdgeModule = {
   key: 'botadmin',
   label: 'Admin du bot',
   needs: { roles: ['admin'] },
+  /** Le tableau de bord de /edge config : menus et boutons, réservés au staff. */
+  components: (ctx) => configComposants(ctx, MODULES),
   commands: () => [
     {
       data: new SlashCommandBuilder().setName('edge')
@@ -21,6 +24,20 @@ export const botadmin: EdgeModule = {
         .addSubcommand((s) => s.setName('module').setDescription('Activer / couper un module')
           .addStringOption((o) => o.setName('nom').setDescription('Lequel').setRequired(true).addChoices(...MODULES.map((m) => ({ name: m.label.slice(0, 100), value: m.key }))))
           .addStringOption((o) => o.setName('action').setDescription('Que faire').addChoices({ name: 'couper', value: 'off' }, { name: ' rallumer'.trim(), value: 'on' }, { name: 'état', value: 'etat' })))
+        .addSubcommand((s) => s.setName('config').setDescription('Tout personnaliser : textes, salons, couleur, seuils — et couper un module')
+          .addStringOption((o) => o.setName('action').setDescription('Que faire').setRequired(true).addChoices(
+            { name: '🎛️ tableau de bord', value: 'tableau' },
+            { name: 'voir les réglages d’un module', value: 'voir' },
+            { name: 'régler une valeur', value: 'regler' },
+            { name: 'oublier une valeur', value: 'oublier' },
+            { name: 'réinitialiser un module', value: 'reinitialiser' },
+            { name: 'exporter en JSON', value: 'exporter' },
+            { name: 'importer un JSON', value: 'importer' },
+          ))
+          .addStringOption((o) => o.setName('module').setDescription('Lequel').addChoices(...[{ name: '🎛️ Général (style & journaux)', value: 'general' }, ...MODULES.map((m) => ({ name: m.label.slice(0, 95), value: m.key }))]))
+          .addStringOption((o) => o.setName('cle').setDescription('Le réglage (la liste est dans « voir »)'))
+          .addStringOption((o) => o.setName('valeur').setDescription('La nouvelle valeur, en texte libre'))
+          .addBooleanOption((o) => o.setName('tout').setDescription('Afficher aussi les réglages avancés')))
         .addSubcommand((s) => s.setName('flag').setDescription('Lire / poser une option fine (rules.gate, antiraid.auto, log.tickets…)')
           .addStringOption((o) => o.setName('cle').setDescription('Nom exact du flag').setRequired(true))
           .addStringOption((o) => o.setName('valeur').setDescription('vrai / faux').addChoices({ name: 'vrai', value: 'true' }, { name: 'faux', value: 'false' })))
@@ -43,10 +60,14 @@ export const botadmin: EdgeModule = {
             return void (await i.editReply({ content: `**${key}** : ${on ? '✅ activé' : '🔕 coupé'}${c.disabled.has(key) ? ` · désactivé d’office : ${c.disabled.get(key)}` : ''}` }));
           }
           await c.db.flags.set(`module:${key}`, action === 'on');
-          await i.editReply({ content: action === 'on' ? `✅ \`${key}\` rallumé. Les listeners sont montés au prochain redémarrage ; les commandes, elles, répondent tout de suite.` : `🔕 \`${key}\` coupé : ses commandes répondent « module désactivé », ses salons ne reçoivent plus rien.` });
-          if (action === 'on') await c.guild.commands.set(await rebuild(c)).catch(() => void 0);
+          await resyncCommandes(c, MODULES); // dans les deux sens : couper doit vraiment retirer le module du `/`
+          await i.editReply({ content: action === 'on'
+            ? `✅ \`${key}\` rallumé : ses slash commands sont de retour, ses listeners et jobs reviennent au plus tard au prochain redémarrage.`
+            : `🔕 \`${key}\` coupé : ses commandes sont retirées du serveur et plus aucun de ses messages ne part. En base, rien n’est supprimé — ses réglages et ses données t’attendent si tu le rallumes.` });
           return;
         }
+
+        if (sub === 'config') return void (await configCommande(c, i, MODULES));
 
         if (sub === 'flag') {
           const key = i.options.getString('cle', true);
@@ -112,9 +133,13 @@ export const botadmin: EdgeModule = {
   ],
 };
 
+/**
+ * L'ancien rebuild ne filtrait que les modules en defaut structurel (salon manquant) : couper un
+ * module laissait sa commande en ligne, avec une reponse « module desactive ». La logique vit
+ * desormais dans resyncCommandes(), qui consulte c.on() — donc /edge module X couper et le bouton
+ * du tableau de bord suivent exactement le meme chemin.
+ */
 async function rebuild(c: Ctx): Promise<never[]> {
-  const { buildDispatch, syncCommands } = await import('../core/dispatch.js');
-  const d = buildDispatch(c, MODULES.filter((m) => !c.disabled.has(m.key)));
-  await syncCommands(c, d);
+  await resyncCommandes(c, MODULES);
   return [];
 }

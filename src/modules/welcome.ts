@@ -1,7 +1,7 @@
 /** Bienvenue : message texte simple (pas d'embed), ping du nouvel arrivant, role Membre. */
 import { Events, type GuildMember } from 'discord.js';
 import type { Ctx, EdgeModule } from '../core/module.js';
-import { mustText, say } from '../core/send.js';
+import { canalSelon, mustText } from '../core/send.js';
 import { atLeast, canManageRole, roleIds } from '../core/perms.js';
 import { fmtDur, at } from '../core/ui.js';
 import { fr } from '../core/copy.js';
@@ -14,6 +14,28 @@ const SUSPECT_DAYS = 7;
 export const welcome: EdgeModule = {
   key: 'welcome',
   label: 'Bienvenue & départs',
+  reglages: [
+    {
+      cle: 'message', module: 'welcome', type: 'texte', label: 'Message de bienvenue',
+      aide: 'Placeholders : {membre} {serveur} {reglement} {discussion}. C’est le même texte que /bienvenue texte.',
+      defaut: DEFAULT_TEXT, maxLen: 1800, base: 'kv', cleBase: 'welcome:text',
+    },
+    {
+      cle: 'salon', module: 'welcome', type: 'salon', label: 'Salon de bienvenue',
+      aide: 'Par défaut 🎉│・Bienvenue. Tu peux le pointer n’importe où sans toucher à la structure.',
+      defaut: 'bienvenue',
+    },
+    {
+      cle: 'delai', module: 'welcome', type: 'nombre', label: 'Délai avant le message (s)',
+      aide: 'Attendre quelques secondes laisse l’arrivant lire le règlement avant d’être salué. 0 = immédiat.',
+      defaut: 0, min: 0, max: 120,
+    },
+    {
+      cle: 'mp_texte', module: 'welcome', type: 'texte', label: 'Message privé d’accueil',
+      aide: 'Vide = pas de MP. Mêmes placeholders que le message public.',
+      defaut: '', maxLen: 1500,
+    },
+  ],
   needs: { roles: ['membre'], channels: ['bienvenue', 'signalements', 'reglement', 'discussion'] },
   commands: (ctx: Ctx) => [
     {
@@ -30,6 +52,7 @@ export const welcome: EdgeModule = {
         if (sub === 'texte') {
           if (!atLeast(i.member as GuildMember, 'admin', c.s.idx)) return void (await i.editReply({ content: fr.noPerm('🛡️│ Administrateur') }));
           await c.db.kv.set('welcome:text', i.options.getString('contenu', true));
+          c.cfg.invalider('welcome'); // le reglage lit la meme cle : le cache de 20 s ne doit pas mentir
           return void (await i.editReply({ content: '✅ Message d’accueil mis à jour.' }));
         }
         if (sub === 'test') {
@@ -75,14 +98,32 @@ export const welcome: EdgeModule = {
   ],
 };
 
-async function greet(c: Ctx, m: GuildMember, quiet = false): Promise<void> {
-  const tpl = (await c.db.kv.get<string>('welcome:text')) ?? DEFAULT_TEXT;
-  const content = tpl
+/** Le texte est un reglage : /bienvenue texte et /edge config ecrivent exactement au meme endroit. */
+function deplier(c: Ctx, m: GuildMember, tpl: string): string {
+  return tpl
     .replaceAll('{membre}', `<@${m.id}>`)
     .replaceAll('{serveur}', c.guild.name)
     .replaceAll('{reglement}', `<#${mustText(c, 'reglement').id}>`)
     .replaceAll('{discussion}', `<#${mustText(c, 'discussion').id}>`);
-  await say(c, 'bienvenue', quiet ? content : content, { roles: [] });
+}
+
+async function greet(c: Ctx, m: GuildMember, quiet = false): Promise<void> {
+  const r = c.reglages('welcome');
+  const tpl = (await r.str('message')) || DEFAULT_TEXT;
+  const delai = await r.num('delai');
+  if (!quiet && delai > 0) await new Promise((ok) => setTimeout(ok, Math.min(delai, 120) * 1000));
+  const content = deplier(c, m, tpl);
+  try {
+    const cible = await canalSelon(c, await r.salon('salon'), 'bienvenue');
+    await cible.send({ content: content.slice(0, 2000), allowedMentions: { parse: ['users'], repliedUser: false } }).catch(() => void 0);
+  } catch (e) {
+    c.log.debug(`bienvenue publique impossible : ${(e as Error).message}`);
+  }
+  const mp = (await r.str('mp_texte')) || '';
+  if (mp && !quiet) {
+    await m.send({ content: deplier(c, m, mp).slice(0, 2000), allowedMentions: { parse: [] } }).catch(() => void 0);
+    await bump(c, 'welcome:mp');
+  }
 }
 
 /** Role Membre auto, seulement si Edge peut le poser (hierarchie). */
