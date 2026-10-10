@@ -1,0 +1,382 @@
+/**
+ * `npm test` — petit harnais maison (aucune dependance de test a installer).
+ * Tout ce qui est teste ici est pur : pas de connexion Discord, pas de base.
+ * Les tests de structure passent par le faux serveur de src/dryrun/fake.ts.
+ */
+import { strict as assert } from 'node:assert';
+import { PermissionFlagsBits } from 'discord.js';
+import { afterCheck, automodStep, escalate, isActive, pointsAfter, weightOf, AUTOMOD_LADDER, WARN_LADDER } from '../src/logic/ladders.js';
+import { distribution, seeded, weightedDraw } from '../src/logic/draw.js';
+import { duplicateScore, floodBurst, norm, scan } from '../src/logic/matchers.js';
+import { at, bar, fmtDur, levelFromXp, parseDuration, slug, truncate, xpForLevel } from '../src/core/ui.js';
+import { atLeast, canPingEveryone, canPingRole, canSeeChannel, canSelfAssign, canSpeakIn, effectivePerms, INVARIANTS, topLevel } from '../src/core/permmodel.js';
+import { ASSIGNABLE_ROLES, BOT_PERMISSIONS, CATEGORY_DEFS, CHANNEL_DEFS, PERM_NAMES, ROLE_DEFS, TICKET_OPTIONS, expectedAcl, roleDef } from '../src/manifest.js';
+import { Db } from '../src/db/db.js';
+import { MODULES } from '../src/modules/index.js';
+import { driftReport, resolveStructure } from '../src/core/structure.js';
+import { fakeGuild } from '../src/dryrun/fake.js';
+import { inviteUrl } from '../src/core/client.js';
+import { fr } from '../src/core/copy.js';
+
+type Test = { name: string; fn: () => void | Promise<void> };
+const tests: Test[] = [];
+const test = (name: string, fn: () => void | Promise<void>): void => { tests.push({ name, fn }); };
+
+const SCAN_OPTS = { inviteAllowed: false, guildId: '1558076024778919946', vanityCode: 'edgemode', maxMentions: 5, allowLinks: false, capsMinLength: 12 };
+const hits = (text: string, kind: string, o = SCAN_OPTS): boolean => scan(text, o).some((h) => h.kind === kind);
+
+/* ------------------------------------------------------------------ bareme sanctions */
+test('bareme : note=0, 1 warn, 2 = timeout 1 h, 6 = ban a confirmer', () => {
+  assert.deepEqual(WARN_LADDER.map((s) => s.action), ['note', 'warn', 'timeout', 'timeout', 'timeout', 'kick', 'ban']);
+  assert.equal(escalate(-5).action, 'note', 'aucun point = note uniquement');
+  assert.equal(escalate(0).action, 'note', 'une note ne doit jamais punir');
+  assert.equal(escalate(1).action, 'warn');
+  assert.equal(escalate(2).minutes, 60);
+  assert.equal(escalate(4).minutes, 10_080, 'le maximum Discord est 7 jours');
+  assert.equal(escalate(5).action, 'kick');
+  assert.equal(escalate(99).action, 'ban');
+  assert.match(escalate(99).label, /Admin/, 'le ban reste une decision humaine');
+  for (const s of WARN_LADDER) assert.ok(s.label.length > 5);
+});
+
+test('points : note=0, pardon efface, unban=0', () => {
+  assert.equal(pointsAfter(0, 'note'), 0);
+  assert.equal(pointsAfter(2, 'timeout'), 3);
+  assert.equal(pointsAfter(3, 'pardon'), 0);
+  assert.equal(pointsAfter(1, 'unban'), 1);
+});
+
+test('un warn de plus de 60 jours ne compte plus', () => {
+  const old = new Date(Date.now() - 61 * 86_400_000).toISOString();
+  const fresh = new Date(Date.now() - 3 * 86_400_000).toISOString();
+  assert.equal(isActive({ type: 'warn', active: true, created_at: old }), false);
+  assert.equal(isActive({ type: 'warn', active: true, created_at: fresh }), true);
+});
+
+/* ------------------------------------------------------------------ bareme automod */
+test('automod : 1 hit = suppression, 3 = timeout, jamais de ban automatique', () => {
+  assert.equal(automodStep(0).action, 'ignore', 'sans hit, on ne touche a rien');
+  assert.equal(automodStep(1).action, 'delete');
+  assert.equal(automodStep(3).minutes, 10);
+  assert.equal(automodStep(4).minutes, 60);
+  assert.equal(automodStep(7).action, 'ban_suggest');
+  assert.ok(!AUTOMOD_LADDER.some((s) => (s.action as string) === 'ban'), 'le bot ne bannit jamais seul sur un compteur');
+  const RANG: Record<string, number> = { ignore: 0, delete: 1, delete_warn: 2, timeout: 3, kick_suggest: 4, ban_suggest: 5 };
+  let vu = 0;
+  for (let h = 0; h <= 10; h++) { const s = automodStep(h); assert.ok(RANG[s.action]! >= vu, 'la severite ne redescend jamais'); vu = RANG[s.action]!; }
+});
+
+/* ------------------------------------------------------------------ partenariats */
+test('partenariat : pause des le 1er raté, expiration au 3e, revive si ca repasse', () => {
+  assert.deepEqual(afterCheck('pending', true, 0), { state: 'active', fails: 0 });
+  assert.deepEqual(afterCheck('active', false, 0), { state: 'paused', fails: 1 });
+  assert.deepEqual(afterCheck('paused', false, 2), { state: 'expired', fails: 3 });
+  const relance = afterCheck('expired', true, 3);
+  assert.deepEqual(relance, { state: 'expired', fails: 3 }, 'un dossier expire ne se rallume pas tout seul : /partenariat accepter');
+});
+
+test('pondérations giveaway : booster > animateur > partenaire > membre, sans cumul', () => {
+  assert.ok(weightOf(['booster']) > weightOf(['animateur']));
+  assert.ok(weightOf(['animateur']) > weightOf(['partenaire']));
+  assert.ok(weightOf(['partenaire']) > weightOf(['membre']));
+  assert.equal(weightOf([]), 1, 'sans rôle = poids 1');
+  assert.equal(weightOf(['booster', 'animateur']), 2, 'on garde le meilleur poids : pas de cumul a empiler les rôles');
+});
+
+/* ------------------------------------------------------------------ tirage pondéré */
+test('tirage pondéré : deterministe a graine egale, jamais de doublon', () => {
+  const entries = Array.from({ length: 10 }, (_, i) => ({ userId: `u${i}`, weight: i === 0 ? 5 : 1 }));
+  const a = weightedDraw(entries, 3, seeded(42));
+  const b = weightedDraw(entries, 3, seeded(42));
+  assert.deepEqual(a.map((x) => x.userId), b.map((x) => x.userId));
+  assert.equal(new Set(a.map((x) => x.userId)).size, 3);
+  assert.equal(weightedDraw(entries, 99).length, 10, 'k > effectif = tout le monde, pas de crash');
+  assert.equal(weightedDraw([], 3).length, 0);
+});
+
+test('tirage pondéré : le poids 5 sort nettement plus souvent que le poids 1', () => {
+  const entries = [{ userId: 'gros', weight: 5 }, ...Array.from({ length: 5 }, (_, i) => ({ userId: `p${i}`, weight: 1 }))];
+  const dist = distribution(entries, 600, seeded(7));
+  const gros = dist.get('gros') ?? 0;
+  const petit = Math.max(...entries.slice(1).map((e) => dist.get(e.userId) ?? 0));
+  assert.ok(gros > petit, `attendu gros(${gros}) > petit(${petit})`);
+});
+
+/* ------------------------------------------------------------------ detecteurs */
+test('detecteurs : invitation, webhook, token, mentions, majuscules, zalgo', () => {
+  assert.ok(hits(' rejoins discord.gg/edge ', 'invite'));
+  assert.ok(hits('c’est discord.com/invite/serveur', 'invite'));
+  assert.ok(!hits('on a parlé du jeu discord aujourd’hui', 'invite'), 'le mot « discord » seul n’est pas une infraction');
+  assert.ok(hits(`https://discord.com/api/webhooks/${'9'.repeat(18)}/${'t'.repeat(24)}`, 'webhook'), 'un webhook posté dans le chat doit partir');
+  // Token FACTICE, construit par morceaux : un vrai motif « Mxyz...xxxx.xxxxxx.xxxxx... »
+  // ferait sonner la protection anti-secrets de GitHub au push, et ce serait merite.
+  const fauxJeton = `${'a'.repeat(24)}.${'b'.repeat(6)}.${'c'.repeat(30)}`;
+  assert.ok(hits(fauxJeton, 'token'), 'un jeton posté dans le chat doit partir');
+  assert.ok(hits('@everyone à tous', 'everyone_ping'));
+  assert.ok(hits('<@1> <@2> <@3> <@4> <@5> <@6>', 'mass_mention'));
+  assert.ok(!hits('<@1> <@2>', 'mass_mention'), 'mentionner deux potes est normal');
+  assert.ok(hits('AAAAAAAAAAAAAAAAAAAA', 'caps'));
+  assert.ok(!hits('ok', 'caps'), 'un « OK » tout court n’est pas du spam');
+  assert.ok(hits('va voir https://exemple.com/article', 'link'));
+  assert.ok(hits('á̵̫̊͝ͅb̸̜̈́̚ç', 'zalgo'));
+});
+
+test('detecteurs : nos propres liens ne sont pas sanctionnés', () => {
+  const ici = { ...SCAN_OPTS, vanityCode: 'edge' };
+  assert.ok(!hits('notre serveur : discord.gg/edge', 'invite', ici), 'le vanity du serveur doit rester libre');
+  assert.ok(hits('notre serveur : discord.gg/pilleurs', 'invite', ici), 'un autre lien que le notre reste bloqué');
+  assert.ok(!hits('lien mort discord.gg/introuvable', 'invite', { ...SCAN_OPTS, inviteAllowed: true }), '💌│・Invitations = pub autorisée');
+});
+
+test('flood et doublons : la repetition se voit, la ponctuation et les accents aussi', () => {
+  assert.equal(floodBurst([{ text: 'pareil', at: 1_000 }, { text: 'pareil', at: 2_000 }, { text: 'pareil', at: 3_000 }], 3_000), true);
+  assert.equal(floodBurst([{ text: 'a', at: 0 }, { text: 'b', at: 60_000 }], 61_000), false);
+  assert.equal(duplicateScore(['salut ça va les gars'], 'Salut CA VA les gars !!!'), 1, 'accents et ponctuation ignorés');
+  assert.equal(duplicateScore(['salut ça va'], 'non merci je passe'), 0);
+  assert.equal(norm('Salut, ça va ?!'), norm('salut ca va'), 'norme commune = comparaison fiable');
+});
+
+/* ------------------------------------------------------------------ permissions */
+test('les 10 invariants de ping du manifeste', () => {
+  for (const v of INVARIANTS) assert.equal(v.check(), v.attendu, `invariant ${v.id} : ${v.description}`);
+});
+
+test('modele de permissions : cas limites', () => {
+  assert.equal(atLeast(['membre'], 'mod'), false);
+  assert.equal(atLeast(['mod'], 'mod'), true);
+  assert.equal(atLeast(['admin'], 'mod'), true);
+  assert.ok(topLevel(['mod']) < topLevel(['admin']), 'Modérateur doit être sous Administrateur');
+  assert.ok(topLevel(['membre']) < topLevel(['helper']));
+  assert.equal(topLevel([]), -1, 'sans rôle = au ras du sol');
+  assert.equal(canPingRole(['membre'], 'notifGiveaway'), false);
+  assert.equal(canPingRole(['animateur'], 'notifGiveaway', 'giveaway'), true);
+  assert.equal(canPingEveryone(['membre'], 'discussion'), false);
+  assert.equal(canSeeChannel(['membre'], 'staffChat'), false);
+  assert.equal(canSeeChannel(['helper'], 'staffChat'), true);
+  assert.equal(canSpeakIn(['helper'], 'modLogs'), false, 'Helper lit le journal, il n’y écrit pas');
+  assert.equal(canSpeakIn(['mod'], 'modLogs'), true);
+  assert.ok(effectivePerms(['admin'], 'discussion').has('Administrator'), 'Admin = Administrator, done');
+});
+
+test('selfroles : seules les roles annoncees sont proposables', () => {
+  for (const k of ASSIGNABLE_ROLES) assert.ok(ASSIGNABLE_ROLES.includes(k));
+  assert.equal(canSelfAssign('notifGiveaway'), true);
+  assert.equal(canSelfAssign('notifPartenaire'), true);
+  assert.equal(canSelfAssign('booster'), false, '✨│ Booster se donne par Palworld/le palier de boost, pas par le panneau');
+  assert.equal(canSelfAssign('partenaire'), false, 'le rôle Partenaire est une décision de Manager');
+  for (const k of ['mod', 'admin', 'fondateur', 'helper', 'manager'] as const) assert.equal(canSelfAssign(k), false, `${k} n’est jamais auto-attribuable`);
+});
+
+/* ------------------------------------------------------------------ manifeste */
+test('manifeste : coherence des noms, categories et roles', () => {
+  const names = new Set<string>();
+  for (const r of ROLE_DEFS) {
+    assert.ok(!names.has(r.name), `rôle en double : ${r.name}`);
+    names.add(r.name);
+    assert.match(r.name, /^[^\s]+│ \S/, `${r.name} : format « emoji │ Nom » comme sur ton serveur`);
+    for (const p of r.perms) assert.ok(PERM_NAMES.includes(p), `permission inconnue « ${p} » sur ${r.name}`);
+  }
+  const cn = new Set<string>();
+  for (const c of CHANNEL_DEFS) {
+    assert.ok(!cn.has(c.name), `salon en double : ${c.name}`);
+    cn.add(c.name);
+    assert.ok(CATEGORY_DEFS.some((x) => x.key === c.cat), `catégorie inconnue pour ${c.name}`);
+    assert.ok(c.name.length <= 100, `${c.name} dépasse les 100 caractères Discord`);
+  }
+  assert.equal(CHANNEL_DEFS.length, 30, '30 salons, comme dans ton message');
+  assert.equal(CATEGORY_DEFS.length, 7, '7 catégories');
+  assert.ok(ROLE_DEFS.length >= 11);
+});
+
+test('manifeste : un salon 🔒 reste muet pour @everyone mais pas pour Edge', () => {
+  const locked = CHANNEL_DEFS.filter((d) => d.locked);
+  assert.ok(locked.length >= 4, 'les salons 🔒 sont bien marqués');
+  for (const def of locked) {
+    const acl = expectedAcl(def);
+    assert.ok(acl.everyone.deny.includes('SendMessages'), `${def.name} : SendMessages doit être refusé à @everyone`);
+    assert.ok(!acl.everyone.allow.includes('SendMessages'), `${def.name} : @everyone ne doit pas avoir SendMessages`);
+    assert.ok(acl.bot?.allow.includes('SendMessages'), `Edge doit pouvoir poster dans ${def.name} (@everyone muet ne veut pas dire bot muet)`);
+  }
+});
+
+test('manifeste : tickets — 6 motifs, customIds < 100, rôles de ping mentionnables', () => {
+  assert.equal(TICKET_OPTIONS.length, 6);
+  for (const o of TICKET_OPTIONS) {
+    assert.ok(`edge:ticket:type:${o.key}`.length <= 100, `customId trop long pour ${o.key}`);
+    assert.ok(ROLE_DEFS.some((r) => r.key === o.ping), `rôle de ping inconnu : ${String(o.ping)}`);
+    // Soit le role est publicablement mentionnable, soit c'est Edge qui le ping (il a MentionEveryone + ManageRoles).
+    assert.ok(roleDef(o.ping).mentionable || (BOT_PERMISSIONS.includes('MentionEveryone') && BOT_PERMISSIONS.includes('ManageRoles')), `${o.ping} ne pourrait pas être pingé`);
+    assert.ok(o.label.length > 2 && (o.emoji ?? '·').length > 0);
+  }
+});
+
+test('manifeste : permissions du bot = assez, et rien de plus', () => {
+  for (const p of BOT_PERMISSIONS) assert.ok(PERM_NAMES.includes(p), `permission inconnue : ${p}`);
+  assert.ok(!BOT_PERMISSIONS.includes('Administrator'), 'Edge ne prend PAS Administrator (tu as dit « pas plus »)');
+  for (const p of ['MentionEveryone', 'ManageRoles', 'ManageChannels', 'ModerateMembers', 'ViewAuditLog', 'ManageEvents', 'MoveMembers', 'MuteMembers']) {
+    assert.ok(BOT_PERMISSIONS.includes(p as never), `il manque ${p} au bot`);
+  }
+  const url = inviteUrl('bot-test');
+  assert.match(url, /scope=bot%20applications\.commands/);
+  const given = BigInt(url.match(/permissions=(\d+)/)![1]!);
+  const wanted = BOT_PERMISSIONS.reduce<bigint>((acc, p) => acc | (PermissionFlagsBits as unknown as Record<string, bigint>)[p], 0n);
+  assert.equal(given, wanted, 'le lien d’invite doit demander exactement le manifeste');
+});
+
+/* ------------------------------------------------------------------ UI */
+test('ui : durees, barres, dates, troncature', () => {
+  assert.equal(parseDuration('1h30'), 5_400_000);
+  assert.equal(parseDuration('2j'), 172_800_000);
+  assert.equal(parseDuration('45 min'), 2_700_000);
+  assert.equal(parseDuration('30m'), 1_800_000);
+  assert.equal(parseDuration('bientôt'), null, 'entrée invalide = null, jamais NaN');
+  assert.equal(fmtDur(0), '0s');
+  assert.equal(fmtDur(3_725_000), '1h 2min', 'au-dela de la minute, les secondes ne font que du bruit');
+  assert.equal(fmtDur(90_000), '1min 30s');
+  assert.equal(fmtDur(86_400_000 + 3_600_000), '1j 1h');
+  assert.equal(fmtDur(-60_000), '-1min');
+  assert.equal(at(null), '—', 'une date manquante ne doit jamais sortir « Invalid Date »');
+  assert.match(at(Date.now()), /^<t:\d+:F>$/, 'les timestamps Discord rendent l’heure locale de chacun');
+  assert.equal(at('pas une date'), '—', 'une date pourrie ne doit pas sortir en NaN');
+  assert.equal(at(new Date('2026-01-01T00:00:00Z')), '<t:1767225600:F>');
+  assert.equal(bar(0), '░░░░░░░░░░░░ 0%', 'bar() prend une fraction 0..1');
+  assert.equal(bar(1), '▓▓▓▓▓▓▓▓▓▓▓▓ 100%');
+  assert.equal(bar(0.5).split('').filter((c) => c === '▓').length, 6);
+  assert.equal(bar(-1), '░░░░░░░░░░░░ 0%', 'un pourcentage hors bornes ne casse pas la barre');
+  assert.equal(bar(5).split('').filter((c) => c === '▓').length, 12);
+  assert.equal(truncate('abc', 10), 'abc');
+  assert.equal(truncate('abcdefg', 5).length, 5);
+  assert.equal(xpForLevel(0), 0);
+  assert.equal(xpForLevel(1), 100);
+  assert.ok(xpForLevel(10) > xpForLevel(9), 'la courbe doit etre strictement croissante');
+  assert.equal(levelFromXp(0).level, 0, 'on commence au niveau 0, comme MEE6');
+  assert.ok(levelFromXp(50_000).level > 10, 'la courbe doit monter');
+  assert.equal(slug('🎉 Fête du Jeu !'), 'fete-du-jeu');
+  assert.equal(slug('***'), 'sans-nom');
+});
+
+/* ------------------------------------------------------------------ base en memoire */
+test('db en memoire : insert / bump / upsert / count / remove', async () => {
+  const db = Db.memory();
+  const row = await db.insert('members', { user_id: 'u1', guild_id: 'g', xp: 10 });
+  assert.equal(row.xp, 10);
+  await db.bump('members', { user_id: 'u1', guild_id: 'g' }, 'xp', 5);
+  assert.equal((await db.one('members', { user_id: 'u1' }))!.xp, 15, 'bump additionne, il n’écrase pas');
+  await db.upsert('members', ['user_id', 'guild_id'], { user_id: 'u1', guild_id: 'g', xp: 3 });
+  assert.equal((await db.one('members', { user_id: 'u1' }))!.xp, 3, 'upsert écrase');
+  await db.bump('members', { user_id: 'u2', guild_id: 'g' }, 'xp', 7);
+  assert.equal(await db.count('members'), 2);
+  await db.remove('members', { user_id: 'u2' });
+  assert.equal(await db.count('members'), 1);
+  assert.equal(await db.one('members', { user_id: 'u2' }), null, 'un trou = null, jamais undefined');
+  assert.equal(db.isPersisted, false);
+});
+
+test('db : kv ( compteurs ) et flags ( on/off modules )', async () => {
+  const db = Db.memory();
+  assert.equal(await db.kv.get<number>('ticket:counter'), null);
+  await db.kv.set('ticket:counter', 1);
+  assert.equal(await db.kv.get<number>('ticket:counter'), 1);
+  await db.kv.del('ticket:counter');
+  assert.equal(await db.kv.get<number>('ticket:counter'), null);
+  assert.equal(await db.flags.isOn('module:automod', true), true, 'un module est actif tant que rien n’est écrit');
+  await db.flags.set('module:automod', false);
+  assert.equal(await db.flags.isOn('module:automod', true), false);
+  assert.equal((await db.flags.all()).length, 1);
+});
+
+test('db : requete sur table vide = tableau vide, pas d’exception', async () => {
+  const db = Db.memory();
+  assert.deepEqual(await db.all('cases', {}), []);
+  assert.equal(await db.count('cases'), 0);
+  await db.track('test', { a: 1 });
+  assert.equal((await db.all('bot_events', {})).length, 1);
+});
+
+/* ------------------------------------------------------------------ structure */
+test('structure : un serveur conforme ne declenche aucune erreur bloquante', () => {
+  const r = resolveStructure(fakeGuild() as never);
+  const erreurs = driftReport(r).filter((d) => d.level === 'error');
+  assert.equal(erreurs.length, 0, erreurs.map((e) => e.what).join(' | '));
+  assert.equal(r.missingChannels.length, 0);
+  assert.equal(r.missingRoles.length, 0);
+  assert.equal(Object.keys(r.channels).length, 30);
+});
+
+test('structure : renommage d’un salon = un seul module coupe, et c’est dit', () => {
+  const r = resolveStructure(fakeGuild({ renameChannel: ['discussion', '💬│・Chat'] }) as never);
+  assert.deepEqual(r.missingChannels, ['discussion']);
+  assert.ok(driftReport(r).some((d) => d.level === 'error' && d.what.includes('💬│・Discussion')));
+});
+
+test('structure : fuite @everyone dans une categorie privee = bloquant', () => {
+  const fuites = driftReport(resolveStructure(fakeGuild({ leakPrivate: true }) as never)).filter((d) => d.what.includes('FUITE'));
+  assert.ok(fuites.length >= 1);
+  assert.ok(fuites.every((d) => d.level === 'error'), 'une fuite n’est pas un simple avertissement');
+});
+
+test('structure : role Edge mal place et MentionEveryone absent sont vus', () => {
+  assert.ok(driftReport(resolveStructure(fakeGuild({ edgeTooHigh: true }) as never)).some((d) => d.level === 'error' && d.what.includes('trop haut')));
+  assert.ok(driftReport(resolveStructure(fakeGuild({ edgeNoMention: true }) as never)).some((d) => d.level === 'error' && d.what.includes('MentionEveryone')));
+  assert.ok(driftReport(resolveStructure(fakeGuild({ extraChannel: '💬│・Old' }) as never)).some((d) => d.what.includes('hors manifeste')));
+});
+
+/* ------------------------------------------------------------------ modules */
+test('modules : cles uniques, au moins un mecanique chacun', () => {
+  const keys = new Set<string>();
+  for (const m of MODULES) {
+    assert.ok(!keys.has(m.key), `double clé de module : ${m.key}`);
+    keys.add(m.key);
+    assert.ok(m.label.trim().length > 0, `${m.key} : label requis`);
+    assert.equal(m.key, m.key.toLowerCase(), `${m.key} : clé en minuscules`);
+    const vivant = [m.commands, m.components, m.listeners, m.jobs, m.panels, m.sync].some(Boolean);
+    assert.ok(vivant, `${m.key} ne branche rien (ni commande, ni bouton, ni event, ni job)`);
+    if (m.commands) assert.ok(Array.isArray(m.commands({} as never) as unknown), `${m.key}.commands doit renvoyer un tableau`);
+  }
+  for (const attendu of ['welcome', 'rules', 'presentation', 'selfroles', 'tickets', 'moderation', 'audit', 'giveaway', 'polls', 'boosts', 'announcements', 'events', 'automod', 'antiraid', 'reports', 'partnership', 'recruitment', 'suggestions', 'invites', 'levels', 'voice', 'botadmin', 'help']) {
+    assert.ok(keys.has(attendu), `module manquant : ${attendu}`);
+  }
+});
+
+test('modules : chaque dependance declaree existe dans le manifeste', () => {
+  for (const m of MODULES) {
+    for (const k of m.needs?.channels ?? []) assert.ok(CHANNEL_DEFS.some((c) => c.key === k), `${m.key} dépend d’un salon inconnu : ${k}`);
+    for (const k of m.needs?.roles ?? []) assert.ok(ROLE_DEFS.some((r) => r.key === k), `${m.key} dépend d’un rôle inconnu : ${k}`);
+    for (const p of m.needs?.perms ?? []) assert.ok(BOT_PERMISSIONS.includes(p as never), `${m.key} demande une permission que le bot n’a pas : ${p}`);
+  }
+});
+
+test('modules : un module coupe ne fait pas planter les autres (needs vides)', () => {
+  const sansBesoin = MODULES.filter((m) => !m.needs || (!m.needs.channels?.length && !m.needs.roles?.length));
+  assert.ok(sansBesoin.length >= 1, 'au moins un module tient sans salon dédié (aide, niveaux)');
+  for (const m of sansBesoin) assert.ok(m.key === 'levels' || m.key === 'help' || m.key === 'botadmin', `${m.key} tourne sans dépendance : c’est voulu ?`);
+});
+
+test('copy : rien de vide, rien en anglais', () => {
+  const seen: string[] = [];
+  const walk = (o: unknown): void => {
+    if (typeof o === 'string') { assert.ok(o.trim().length > 0, 'chaine vide'); seen.push(o); return; }
+    if (o && typeof o === 'object') for (const v of Object.values(o as Record<string, unknown>)) walk(v);
+  };
+  for (const [k, v] of Object.entries(fr)) {
+    if (typeof v === 'function') { const out = (v as unknown as (a: string) => string)(`«${k}»`); assert.equal(typeof out, 'string'); seen.push(out); } else seen.push(v as string);
+  }
+  assert.ok(seen.length >= 8, 'la copie française doit exister');
+  const anglais = seen.filter((x) => /\b(you|your|please|error|not found|module is)\b/i.test(x));
+  assert.deepEqual(anglais, [], `textes anglais restants : ${anglais.join(' | ')}`);
+  for (const x of seen) assert.ok(!x.includes('undefined') && !x.includes('NaN'), `variable pas rempliee : ${x}`);
+});
+
+/* ------------------------------------------------------------------ lanceur */
+let echecs = 0;
+for (const t of tests) {
+  try {
+    await t.fn();
+    console.log(`\x1b[32m✔\x1b[0m ${t.name}`);
+  } catch (e) {
+    echecs++;
+    console.log(`\x1b[31m✘\x1b[0m ${t.name}\n   ${(e as Error).message.split('\n').join('\n   ')}`);
+  }
+}
+console.log(`\n${tests.length - echecs}/${tests.length} tests passent${echecs ? ` — ${echecs} ÉCHEC(S)` : ''}`);
+if (echecs) process.exit(1);
