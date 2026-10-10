@@ -65,6 +65,25 @@ export const at = (d: Date | number | string | null | undefined): string => {
   const ms = new Date(d).getTime();
   return Number.isFinite(ms) ? `<t:${Math.floor(ms / 1000)}:F>` : '—';
 };
+/**
+ * Une `value` d'option de menu Discord : minuscules, chiffres, `. _ -`, 100 caractères, et rien
+ * d'autre — un seul caractère interdit (le deux-points d'un `module:cle`, un accent, une
+ * majuscule) fait rejeter le message ENTIER avec un `Invalid Form Body` introuvable. On nettoie
+ * a la source plutot que de surveiller chaque constructeur de menu.
+ */
+export const valeurOption = (s: string): string => {
+  const propre = String(s ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, '-')
+    .replace(/^[-.]+|[-.]+$/g, '');
+  return (propre || 'valeur').slice(0, 100);
+};
+
+/** Le inverse : retrouver la cle d'origine quand on a encode `module.cle` dans une value. */
+export const decouperOption = (s: string, n = 2): string[] => String(s ?? '').split('.', n);
+
 /** Timestamp Discord relatif (le client rend « dans 2 h », « il y a 3 min »). */
 export const rel = (d: Date | number): string => `<t:${Math.floor(new Date(d).getTime() / 1000)}:R>`;
 export const until = (d: Date | number): string => `<t:${Math.floor(new Date(d).getTime() / 1000)}:R>`;

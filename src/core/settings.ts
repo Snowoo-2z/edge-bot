@@ -163,6 +163,10 @@ export function formater(def: SettingDef, valeur: unknown): string {
     case 'pourcentage': return `${v} %`;
     case 'liste': return (v as string[]).length ? (v as string[]).join(', ') : '—';
     case 'couleur': return `🟪 \`${v}\``;
+    // Un snowflake brut est illisible ; la mention, elle, est rendue en nom de salon / en pastille
+    // de role par Discord. Et elle se relit telle quelle (valider accepte les deux formes).
+    case 'salon': return /^\d{15,21}$/.test(String(v)) ? `<#${v}>` : String(v ?? '—');
+    case 'role': return /^\d{15,21}$/.test(String(v)) ? `<@&${v}>` : String(v ?? '—');
     case 'texte': {
       const t = String(v).replace(/\n/g, ' ⏎ ');
       return t.length > 120 ? `${t.slice(0, 117)}…` : t;

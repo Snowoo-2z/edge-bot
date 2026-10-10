@@ -25,7 +25,7 @@ export const botadmin: EdgeModule = {
           .addStringOption((o) => o.setName('nom').setDescription('Lequel').setRequired(true).addChoices(...MODULES.map((m) => ({ name: m.label.slice(0, 100), value: m.key }))))
           .addStringOption((o) => o.setName('action').setDescription('Que faire').addChoices({ name: 'couper', value: 'off' }, { name: ' rallumer'.trim(), value: 'on' }, { name: 'état', value: 'etat' })))
         .addSubcommand((s) => s.setName('config').setDescription('Tout personnaliser : textes, salons, couleur, seuils — et couper un module')
-          .addStringOption((o) => o.setName('action').setDescription('Que faire').setRequired(true).addChoices(
+          .addStringOption((o) => o.setName('action').setDescription('Vide = le tableau de bord').addChoices(
             { name: '🎛️ tableau de bord', value: 'tableau' },
             { name: 'voir les réglages d’un module', value: 'voir' },
             { name: 'régler une valeur', value: 'regler' },

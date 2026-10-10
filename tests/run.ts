@@ -10,7 +10,7 @@ import { PermissionFlagsBits } from 'discord.js';
 import { afterCheck, automodStep, escalate, isActive, pointsAfter, weightOf, AUTOMOD_LADDER, WARN_LADDER } from '../src/logic/ladders.js';
 import { distribution, seeded, weightedDraw } from '../src/logic/draw.js';
 import { duplicateScore, floodBurst, norm, scan } from '../src/logic/matchers.js';
-import { at, bar, fmtDur, levelFromXp, parseDuration, slug, truncate, xpForLevel } from '../src/core/ui.js';
+import { at, bar, decouperOption, fmtDur, levelFromXp, parseDuration, slug, truncate, valeurOption, xpForLevel } from '../src/core/ui.js';
 import { atLeast, canPingEveryone, canPingRole, canSeeChannel, canSelfAssign, canSpeakIn, effectivePerms, INVARIANTS, topLevel } from '../src/core/permmodel.js';
 import { ASSIGNABLE_ROLES, BOT_PERMISSIONS, CATEGORY_DEFS, CHANNEL_DEFS, PERM_NAMES, ROLE_DEFS, TICKET_OPTIONS, expectedAcl, roleDef } from '../src/manifest.js';
 import { Db } from '../src/db/db.js';
@@ -865,6 +865,93 @@ test('réglages : régler / lire / oublier / exporter, sur la vraie couche de st
   const tout = await cfg.tout('test');
   assert.ok(Object.values(tout).every((e) => e.parDefaut), 'tout est revenu au défaut');
   assert.ok(tout['secret']!.def.avance, 'un réglage avancé reste accessible, il est juste masqué par défaut');
+});
+
+/* ------------------------------------------------------------------ garde-fils d'envoi (le bug /help) */
+import { briderReponses, decouper, separer } from '../src/core/safe-reply.js';
+import { DOCS, helpModule, lignesApercu, pagesApercu } from '../src/modules/help.js';
+
+test('decouper : casse sur les lignes, jamais au milieu d’un mot, ne perd rien', () => {
+  const lignes = Array.from({ length: 60 }, (_, k) => `ligne ${k} — un peu de texte pour pousser la taille`);
+  const texte = lignes.join('\n');
+  const pages = decouper(texte, 500);
+  assert.ok(pages.length >= 5, `attendu plusieurs pages, recu ${pages.length}`);
+  assert.ok(pages.every((t) => t.length <= 500), `une page depasse : ${Math.max(...pages.map((t) => t.length))}`);
+  assert.equal(pages.join('\n'), texte, 'aucun caractère ne doit disparaître');
+  assert.ok(pages.every((t) => !t.startsWith('\n')), 'une page ne commence pas par un saut de ligne');
+  const brut = 'a'.repeat(4200);
+  const dures = decouper(brut, 1000);
+  assert.equal(dures.join(''), brut, 'une ligne kilométrique est tranchée, pas perdue');
+  assert.equal(decouper('court', 1000)[0], 'court', 'ce qui passe n’est pas touché');
+});
+
+test('le filet de réponse : un content trop long part en messages de suite, au lieu de faire échouer la commande', async () => {
+  const gros = Array.from({ length: 40 }, (_, k) => `- ${k} · ${'x'.repeat(60)}`).join('\n');
+  assert.ok(gros.length > 2000, 'le jeu de test doit dépasser la limite Discord');
+  const separe = separer({ content: gros, embeds: [], components: [] });
+  assert.ok((separe.premier as { content: string }).content.length <= 1990, 'la première réponse passe la limite');
+  assert.ok(separe.suivants.length >= 1, 'la suite existe');
+  assert.deepEqual(separer('court').suivants, [], 'un payload conforme traverse sans copie');
+  assert.deepEqual(separer({ embeds: [] }), { premier: { embeds: [] }, suivants: [] }, 'sans content, on ne touche à rien');
+
+  const recus: string[] = [];
+  const faux = {
+    editReply: async (x: unknown) => { recus.push(`edit:${(x as { content: string }).content.length}`); return { id: 'm1' }; },
+    followUp: async (x: unknown) => { recus.push(`suite:${typeof x === 'string' ? x.length : (x as { content: string }).content.length}`); return { id: 'm2' }; },
+  };
+  briderReponses(faux);
+  await (faux as unknown as { editReply: (p: unknown) => Promise<unknown> }).editReply({ content: gros });
+  assert.match(recus[0]!, /^edit:\d+$/, 'editReply a bien été bridé');
+  assert.ok(recus.length > 1, `la suite devait partir en followUp : ${recus.join(', ')}`);
+  assert.ok(recus.slice(1).every((r) => r.startsWith('suite:')), 'les suites sont bien des followUps');
+});
+
+test('/aide : les 23 fiches existent, et l’aperçu tient dans les embeds (le bug « Invalid Form Body »)', async () => {
+  for (const m of MODULES) {
+    const d = DOCS[m.key];
+    assert.ok(d, `aucune fiche pour le module « ${m.key} » : /aide mentirait sur lui`);
+    assert.ok(d.quoi.length > 40 && d.ou.length > 2 && d.cmd.length > 2, `${m.key} : fiche incomplète`);
+  }
+  for (const cle of Object.keys(DOCS)) assert.ok(MODULES.some((m) => m.key === cle), `DOCS garde une fiche orpheline : « ${cle} »`);
+  const ctx = { disabled: new Map(), cfg: { defs: () => [] }, guild: { name: 'EdgeMode' } } as never;
+  const lignes = lignesApercu(ctx);
+  assert.equal(lignes.length, MODULES.length, 'un module oublié de l’aperçu = un module introuvable pour les membres');
+  const texte = lignes.join('\n');
+  assert.ok(texte.length > 2000, `cet échantillon devrait être au-dessus de la limite de contenu (${texte.length}) : le test ne prouverait rien`);
+  const pages = pagesApercu(ctx);
+  assert.ok(pages.length >= 1);
+  for (const p of pages) assert.ok(p.length <= 3800, `une page de ${p.length} caractères ferait rejeter l’embed (limite 4096)`);
+  assert.equal(pages.join('\n').replace(/\n+/g, '\n').includes('EdgeMode'), true, 'le nom du serveur doit être dans l’aperçu');
+  const unSeulContenu = texte; // la version « content » de l'ancien /aide : c'est exactement ce qui faisait échouer la commande
+  assert.ok(unSeulContenu.length > 2000, 'si l’aperçu rentrait dans un content, le garde-fou n’aurait plus d’utilité — mets à jour ce test avec conscience');
+  assert.ok(typeof helpModule.components === 'function', '/aide doit rester maniable au clic (menu des modules)');
+});
+
+test('les menus d’Edge assainissent leurs `value` (le « Invalid Form Body » le plus vicieux)', () => {
+  // Un select dont une value contient « : », une majuscule ou un accent : Discord rejette le
+  // message entier. L'assainisseur est le seul endroit qui decide, et les constructeurs de menus
+  // sont obliges de passer par lui.
+  assert.equal(valeurOption('welcome.message'), 'welcome.message');
+  assert.equal(valeurOption('antiraid:auto'), 'antiraid-auto', 'un deux-points devient un tiret : la value reste legale');
+  assert.equal(valeurOption('Général'), 'general', 'les accents sautent (les cles du manifeste sont ASCII, donc le retour se fait a l’identique)');
+  assert.equal(valeurOption('  '), 'valeur', 'jamais de value vide : Discord la refuserait');
+  assert.equal(valeurOption('a'.repeat(300)).length, 100);
+  assert.deepEqual(decouperOption('tickets.message_panneau'), ['tickets', 'message_panneau']);
+  assert.deepEqual(decouperOption('general.salon_moderation'), ['general', 'salon_moderation']);
+  for (const f of ['src/core/config-ui.ts', 'src/modules/help.ts']) {
+    const src = readFileSync(f, 'utf8');
+    const menus = src.match(/addOptions\(/g) ?? [];
+    const assainis = src.match(/value: valeurOption\(/g) ?? [];
+    assert.ok(menus.length > 0, `${f} : plus aucun menu construit ? ce test ne surveille rien`);
+    assert.equal(assainis.length, menus.length, `${f} : ${menus.length} menu(s) construit(s), ${assainis.length} value(s) lavée(s) — une value non assainie peut faire rejeter tout le message`);
+  }
+  // et les cles qu'on encode dans une value doivent deja etre legales, sinon le retour ne marche plus
+  for (const m of MODULES) {
+    assert.equal(valeurOption(m.key), m.key, `la cle de module « ${m.key} » change en passant par le menu : /aide ne retrouverait plus le module`);
+    for (const def of construireRegistre([m]).get(m.key)?.values() ?? []) {
+      assert.equal(valeurOption(`${m.key}.${def.cle}`), `${m.key}.${def.cle}`, `${m.key}.${def.cle} : cle refusee dans une value de menu`);
+    }
+  }
 });
 
 /* ------------------------------------------------------------------ lanceur */

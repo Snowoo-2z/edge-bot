@@ -12,6 +12,7 @@ import type { Guard } from './module.js';
 import { fr } from './copy.js';
 import { atLeast, bits, isOwner } from './perms.js';
 import { roleDef } from '../manifest.js';
+import { briderReponses } from './safe-reply.js';
 
 export interface Dispatch {
   commands: Map<string, { mod: string; def: CommandDef }>;
@@ -88,6 +89,9 @@ async function runCommand(ctx: Ctx, d: Dispatch, i: AnyCommand): Promise<void> {
     if (left) return void (await i.reply({ content: fr.tooFast(left), flags: MessageFlags.Ephemeral }));
   }
   await i.deferReply({ flags: MessageFlags.Ephemeral });
+  // Le filet : un module qui oublie de tronquer son texte ne doit pas valoir a l'utilisateur un
+  // « Invalid Form Body » et a toi un bug introuvable. Ce qui ne rentre passe dans la suite.
+  briderReponses(i, (n) => ctx.log.debug(`/ ${i.commandName} : ${n} message(s) de suite (content > 2000)`));
   await entry.def.run(ctx, i as ChatInputCommandInteraction);
   await ctx.db.track('command', { mod: entry.mod, cmd: i.commandName, user: i.user.id, guild: i.guildId });
   if (!i.deferred) await i.editReply({ content: '…rien à signaler.' });
@@ -102,6 +106,7 @@ async function runComponent(ctx: Ctx, d: Dispatch, i: AnyComponent): Promise<voi
   const entry = d.components.get(action) ?? d.components.get(`${mod}:${parts[2]}`);
   if (!entry) return void (await i.reply({ content: '⌛ Ce bouton est périmé (module retiré ou panneau à re-publier).', flags: MessageFlags.Ephemeral }).catch(() => void 0));
   if (!(await ctx.on(entry.mod))) return void (await i.reply({ content: fr.moduleOff(entry.mod), flags: MessageFlags.Ephemeral }));
+  briderReponses(i, (n) => ctx.log.debug(`// ${raw} : ${n} suite(s) (content > 2000)`));
   await entry.h(ctx, i as never, parts.slice(3));
   await ctx.db.track('component', { mod: entry.mod, id: raw, user: i.user.id });
 }

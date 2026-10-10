@@ -168,10 +168,21 @@ qui te le dit si tu t'es trompé de cran.
 
 ### Personnaliser (`/edge config`)
 
-`/edge config tableau` ouvre un menu : tu choisis le module, tu vois **tout ce qui est réglable** dessus,
-et tu changes la valeur sans retaper une commande. Les mêmes boutons coupent ou rallument un module — et
-couper un module **retire aussi sa slash command** du serveur. Rien n'est supprimé en base : ses tickets,
-ses niveaux et ses réglages t'attendent si tu le rallumes.
+**Rien à retenir, tout à cliquer.** `/edge config`, tout court, ouvre le tableau de bord :
+
+1. premier menu → le module (ou ⚙️ *Général* pour le style et les journaux) ;
+2. second menu → **✏️ le réglage à changer**, avec sa valeur actuelle dans la description ;
+3. Edge ouvre **le contrôle qui va avec le type** : zone de texte pré-remplie pour un message ou un
+   salon de bienvenue, **liste des salons du serveur** pour déplacer un journal, **liste des rôles**
+   pour une exemption, deux boutons **✅ oui / 🚫 non** pour un interrupteur, menu d'options pour un choix.
+
+Les boutons au-dessus font le reste : 🔕 couper / ✅ rallumer le module, 🧹 réinitialiser ses réglages,
+📤 exporter. Couper un module **retire aussi sa slash command** du serveur ; rien n'est supprimé en base,
+ses tickets, ses niveaux et ses réglages t'attendent si tu le rallumes. Et depuis `/aide`, chaque fiche
+de module a son bouton ⚙️ : plus besoin de savoir que la config s'appelle `/edge config`.
+
+Le clavier reste disponible — et c'est même le seul chemin pour un texte de 1800 caractères collé
+depuis un fichier :
 
 ```
 /edge config tableau                                  ← le menu, à la souris
@@ -195,6 +206,7 @@ Ce qui est exposé aujourd'hui :
 | `antiraid`, `rules`, `levels`, `invites`, `voice`, `audit` | leurs interrupteurs (les flags historiques), listés ici au lieu d'être à deviner |
 
 Un réglage **non listé n'existe pas**, et c'est `npm test` qui l'impose : chaque réglage déclaré doit être
+
 réellement lu par son module, chaque flag lu par un module doit être déclaré, et un défaut affiché dans
 `/edge config` doit être le comportement d'usine — sinon « oublier » changerait le comportement au lieu de
 l'annuler. Donc rien de décoratif d'un côté, rien de clandestin de l'autre.
@@ -206,7 +218,24 @@ réglages `flags` écrivent dans la même table que `/edge flag` : les deux chem
 
 Pour un réglage que tu veux et qui n'est pas là, c'est dix lignes dans le module (une déclaration
 `reglages: [{ cle, type, label, aide, defaut }]` et une lecture `await c.reglages('x').num('y')`) — la
-commande, le menu, la validation, l'export et le test anti-réglage-décoratif suivent tout seuls.
+commande, le menu, la modale, la validation, l'export et le test anti-réglage-décoratif suivent tout seuls.
+
+### Le bug qui a tué `/aide`, et son filet
+
+`/aide` listait ses 23 modules dans un `content` de 2900 caractères. Discord limite un contenu à
+**2000** et répond `Invalid Form Body: content[BASE_TYPE_MAX_LENGTH]` — la commande entière échoue, sans
+indice. Deux corrections, dans cet ordre :
+
+- le texte de `/aide` vit désormais dans des **embeds** (4096) paginés par `decouper()` ;
+- et surtout, `src/core/safe-reply.ts` bride **toutes** les réponses au point d'entrée du routeur :
+  un `content` trop long est coupé aux fins de ligne et le reste part en message de suite. Aucun module
+  n'a à y penser, et le bug ne peut plus se reproduire quand une liste s'allonge (classements, journaux,
+  rapports d'audit). Un test `npm test` fabrique un payload de 5000 caractères et vérifie qu'il sort en
+  plusieurs messages au lieu d'échouer.
+
+Le même `Invalid Form Body` guette les menus : une `value` d'option doit rester dans `[a-z0-9._-]`.
+`valeurOption()` lave toutes les values construites par Edge (testé), parce qu'un deux-points de trop
+dans `module:clé` fait rejeter le message entier.
 
 ### Interrupteurs (`/edge flag <clé> [valeur : vrai｜faux]`, ou la table `flags` en base)
 
@@ -221,7 +250,7 @@ entier sans redémarrer. Sauf `bot.maintenance`, tous sont aussi visibles et ré
 
 ```bash
 npm run typecheck   # 0 erreur
-npm test            # 54 tests purs : barèmes, tirage pondéré, détecteurs, permissions, structure, registre
+npm test            # 58 tests purs : barèmes, tirage pondéré, détecteurs, permissions, structure, registre
                     #   db (les 3 moteurs : mémoire, pg, API Supabase), sonde HTTP, autoping
 npm run dry         # 8 scénarios de serveur (conforme, salon renommé, rôle oublié, fuite @everyone…)
 ```

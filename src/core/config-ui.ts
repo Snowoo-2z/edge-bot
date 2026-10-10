@@ -11,14 +11,18 @@
  *  - toutes ces vues sont éphémères (elles suivent la visibilité de la commande qui les appelle).
  */
 import {
-  ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, MessageFlags,
-  PermissionFlagsBits, StringSelectMenuBuilder, type ChatInputCommandInteraction,
-  type EmbedBuilder, type MessageActionRowComponentBuilder, type MessageComponentInteraction, type StringSelectMenuInteraction,
+  ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, ModalBuilder, MessageFlags,
+  PermissionFlagsBits, RoleSelectMenuBuilder, ChannelSelectMenuBuilder, StringSelectMenuBuilder,
+  TextInputBuilder, TextInputStyle,
+  type ChatInputCommandInteraction, type EmbedBuilder, type GuildMember,
+  type MessageActionRowComponentBuilder, type MessageComponentInteraction, type StringSelectMenuInteraction,
+  type ChannelSelectMenuInteraction, type RoleSelectMenuInteraction,
 } from 'discord.js';
-import { MODULES } from '../modules/index.js';
 import { buildDispatch, syncCommands } from './dispatch.js';
+import { atLeast } from './perms.js';
 import { customId, type Ctx, type ComponentHandler, type EdgeModule } from './module.js';
 import { formater, type SettingDef } from './settings.js';
+import { decouperOption, valeurOption } from './ui.js';
 import { embed } from './send.js';
 
 /** Le module général, qui n'a pas de fichier : son nom dans les commandes et les vues. */
@@ -37,7 +41,7 @@ const labelDe = (modules: readonly EdgeModule[], key: string): string =>
   (key === MODULE_GENERAL ? LABEL_GENERAL : modules.find((m) => m.key === key)?.label ?? key).replace(/^🎛️ /, '');
 
 /** Un module est actif s'il n'est pas en défaut structurel et si son flag est allumé. */
-export async function modulesActifs(c: Ctx, modules: readonly EdgeModule[] = MODULES): Promise<EdgeModule[]> {
+export async function modulesActifs(c: Ctx, modules: readonly EdgeModule[]): Promise<EdgeModule[]> {
   const garde: EdgeModule[] = [];
   for (const m of modules) if (await c.on(m.key)) garde.push(m);
   return garde;
@@ -47,7 +51,7 @@ export async function modulesActifs(c: Ctx, modules: readonly EdgeModule[] = MOD
  * Redéclare les slash commands d'après les modules actifs. C'est ce qui fait qu'« enlever un
  * module » se voit vraiment dans le `/` de Discord — et qu'il revient sans redémarrage.
  */
-export async function resyncCommandes(c: Ctx, modules: readonly EdgeModule[] = MODULES): Promise<void> {
+export async function resyncCommandes(c: Ctx, modules: readonly EdgeModule[]): Promise<void> {
   const d = buildDispatch(c, await modulesActifs(c, modules));
   await syncCommands(c, d);
 }
@@ -92,7 +96,7 @@ function selecteur(modules: readonly EdgeModule[], valeur?: string): Rangee[] {
   const menu = new StringSelectMenuBuilder()
     .setCustomId(customId('botadmin', 'config-module'))
     .setPlaceholder('Changer de module…')
-    .addOptions(choixModules(modules).map((o) => ({ label: o.name, value: o.value, default: o.value === valeur })));
+    .addOptions(choixModules(modules).map((o) => ({ label: o.name, value: valeurOption(o.value), default: o.value === valeur })));
   return [new ActionRowBuilder<MessageActionRowComponentBuilder>().setComponents(menu as never)];
 }
 
@@ -148,9 +152,23 @@ export async function vueModule(c: Ctx, modules: readonly EdgeModule[], module: 
     !tout && tous.length > defs.length ? `_${tous.length - defs.length} réglage(s) avancé(s) masqué(s)._` : '',
   ].filter(Boolean).join('\n');
 
+  const reglages = defs.length
+    ? [new ActionRowBuilder<MessageActionRowComponentBuilder>().setComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId(customId('botadmin', 'config-cle'))
+        .setPlaceholder('✏️ Choisir le réglage à changer…')
+        .addOptions(defs.map((def) => ({
+          label: def.label.slice(0, 95),
+          // separateur « . » et pas « : » : Discord n'accepte que [a-z0-9._-] dans une
+          // value d'option, et un menu mal forme fait echouer tout le message.
+          value: valeurOption(`${module}.${def.cle}`),
+          description: `${formater(def, etat[def.cle]?.valeur)}${def.avance ? ' · avancé' : ''}`.slice(0, 95),
+        })),
+    ) as never)]
+    : [];
   return {
-    embeds: [embed({ title: `⚙️ ${labelDe(modules, module)}`, desc, fields: champs, footer: '/edge config · rien n’est gravé dans le code' })],
-    components: [boutons as never, ...selecteur(modules, module)],
+    embeds: [embed({ title: `⚙️ ${labelDe(modules, module)}`, desc, fields: champs, footer: '/edge config · clique sur ✏️ pour changer, rien n’est gravé dans le code' })],
+    components: [boutons as never, ...reglages, ...selecteur(modules, module)],
   };
 }
 
@@ -174,7 +192,7 @@ export async function vueTableau(c: Ctx, modules: readonly EdgeModule[], tout = 
     embeds: [embed({
       title: '🎛️ Personnaliser Edge',
       desc: [
-        'Choisis un module dans le menu : tu verras tout ce qui s’y change, et tu pourras le couper, le réinitialiser ou l’exporter sans retaper une commande.',
+        'Choisis un module dans le menu, puis **✏️ le réglage à changer** : Edge ouvre la bonne fenêtre — zone de texte pour un message, liste des salons du serveur pour une destination, deux boutons pour un oui/non. Rien à retenir, rien à taper dans le vide.',
         'Rien n’efface tes données : couper un module retire ses slash commands et ses messages, pas les tickets ni les niveaux déjà écrits.',
         'Les options fines qui ne sont pas là se touchent quand même : `/edge flag <clé> <vrai|faux>`.',
       ].join('\n'),
@@ -187,9 +205,11 @@ export async function vueTableau(c: Ctx, modules: readonly EdgeModule[], tout = 
 /* ------------------------------------------------------------------ /edge config */
 
 /** Toute la logique de la sous-commande, pour que botadmin reste déclaratif. */
-export async function configCommande(c: Ctx, i: ChatInputCommandInteraction, modules: readonly EdgeModule[] = MODULES): Promise<void> {
-  const action = i.options.getString('action', true);
+export async function configCommande(c: Ctx, i: ChatInputCommandInteraction, modules: readonly EdgeModule[]): Promise<void> {
   const module = i.options.getString('module') ?? '';
+  // Aucune option obligatoire : `/edge config` seul ouvre le tableau, `/edge config tickets`
+  // ouvre le module. Les gens ne retiennent pas les syntaxes, ils retiennent les menus.
+  const action = i.options.getString('action') ?? (module ? 'voir' : 'tableau');
   const cle = i.options.getString('cle');
   const valeur = i.options.getString('valeur');
   const tout = i.options.getBoolean('tout') ?? false;
@@ -266,8 +286,32 @@ export async function exporter(c: Ctx, module: string): Promise<string> {
   return `📤 \`${module}\` — recolle ça sur l’autre serveur avec \`/edge config importer ${module} <json>\` :\n\`\`\`json\n${json.slice(0, 1600)}\n\`\`\``;
 }
 
-/** Les composants du tableau de bord, montés dans botadmin (donc réservés au staff). */
-export function configComposants(c: Ctx, modules: readonly EdgeModule[] = MODULES): Record<string, ComponentHandler> {
+/** administrateur+ ou fondateur : le modele du manifeste, pas une permission brute. */
+export function habilitation(c: Ctx, i: MessageComponentInteraction | (MessageComponentInteraction & { member?: unknown })): boolean {
+  const m = i.member as GuildMember | null;
+  return !!m && atLeast(m, 'admin', c.s.idx);
+}
+
+/** Les composants du tableau de bord, montés dans botadmin — verrouillés à l'usage. */
+export function configComposants(c: Ctx, modules: readonly EdgeModule[]): Record<string, ComponentHandler> {
+  const nus = composantsNus(c, modules);
+  const verrouille: Record<string, ComponentHandler> = {};
+  for (const [nom, h] of Object.entries(nus)) {
+    verrouille[nom] = async (ctx2, i, args) => {
+      if (!habilitation(c, i)) {
+        await i.reply({
+          content: '🔒 Seuls **🛡️│ Administrateur** et le fondateur règlent Edge. Ce que tu peux changer toi, membre, se fait sur le serveur (rôles, tickets, signalements).',
+          flags: MessageFlags.Ephemeral,
+        } as never);
+        return;
+      }
+      await h(ctx2, i, args);
+    };
+  }
+  return verrouille;
+}
+
+function composantsNus(c: Ctx, modules: readonly EdgeModule[]): Record<string, ComponentHandler> {
   const maj = async (i: MessageComponentInteraction, vue: Vue, content?: string): Promise<void> => {
     await i.update({ ...vue, ...(content ? { content } : {}), allowedMentions: { parse: [] } } as never);
   };
@@ -289,8 +333,161 @@ export function configComposants(c: Ctx, modules: readonly EdgeModule[] = MODULE
     },
     'config-on': async (_c, i: MessageComponentInteraction, a) => void (await basculer(c, modules, i, a[0]!, true)),
     'config-off': async (_c, i: MessageComponentInteraction, a) => void (await basculer(c, modules, i, a[0]!, false)),
+
+    // Le clic sur « ✏️ un réglage » : on n'ouvre pas une zone de texte à l'aveugle, on ouvre le
+    // bon controle selon le type. C'est la difference entre « configurable » et « intuitif ».
+    'config-cle': async (_c, i: StringSelectMenuInteraction) => {
+      const [module, cle] = decouperOption(i.values[0] ?? '');
+      if (!module || !cle) return;
+      const def = c.cfg.def(module, cle);
+      if (!def) return void (await i.reply({ content: 'Réglage introuvable (module renommé ?).', flags: MessageFlags.Ephemeral }));
+      if (def.type === 'booleen') return void (await i.update(await vueEditeur(c, modules, def, 'bascule') as never));
+      if (def.type === 'salon' || def.type === 'role' || def.type === 'choix') {
+        return void (await i.update(await vueEditeur(c, modules, def, 'liste') as never));
+      }
+      const modal = new ModalBuilder()
+        .setCustomId(customId('botadmin', 'config-modal', module, cle))
+        .setTitle(def.label.slice(0, 45));
+      const champ = new TextInputBuilder()
+        .setCustomId('valeur')
+        .setLabel(def.label.slice(0, 45))
+        .setStyle(def.type === 'texte' || def.type === 'liste' ? TextInputStyle.Paragraph : TextInputStyle.Short)
+        .setPlaceholder((def.aide ?? 'nouvelle valeur').slice(0, 100))
+        .setRequired(true);
+      const taille = def.type === 'texte' ? Math.min(4000, def.maxLen ?? 1800) : Math.min(4000, Math.max(60, def.maxLen ?? 200));
+      champ.setMaxLength(taille);
+      const courant = String((await c.cfg.valeur(module, cle)) ?? '');
+      if (courant && courant.length <= taille) champ.setValue(courant);
+      modal.addComponents(new ActionRowBuilder<MessageActionRowComponentBuilder>().setComponents(champ as never) as never);
+      await i.showModal(modal as never);
+    },
+    'config-modal': async (_c, i) => {
+      if (!i.isModalSubmit()) return;
+      // customId = edge:botadmin:config-modal:<module>:<cle> — les deux premiers morceaux sont
+      // le prefixe et le module proprietaire, ce qui nous interesse commence au troisieme.
+      const [, , , module, cle] = i.customId.split(':');
+      if (!module || !cle) return void (await i.reply({ content: '🚫 modale périmée : rouvre le réglage depuis ⚙️.', flags: MessageFlags.Ephemeral }));
+      await appliquer(c, modules, i, module, cle, i.fields.getTextInputValue('valeur'));
+    },
+    'config-bool': async (_c, i: MessageComponentInteraction, a) => {
+      await appliquer(c, modules, i, a[0]!, a[1]!, a[2] === '1' ? 'oui' : 'non');
+    },
+    'config-salon': async (_c, i: ChannelSelectMenuInteraction, a) => {
+      await appliquer(c, modules, i, a[0]!, a[1]!, i.values[0] ?? '');
+    },
+    'config-role': async (_c, i: RoleSelectMenuInteraction, a) => {
+      await appliquer(c, modules, i, a[0]!, a[1]!, i.values[0] ?? '');
+    },
+    'config-choix': async (_c, i: StringSelectMenuInteraction, a) => {
+      await appliquer(c, modules, i, a[0]!, a[1]!, i.values[0] ?? '');
+    },
+    'config-cle-defaut': async (_c, i: MessageComponentInteraction, a) => {
+      const [module, cle] = a;
+      const ok = await c.cfg.oublier(module!, cle!);
+      await i.update({ ...(await vueModule(c, modules, module!, false)), content: ok ? `↩️ \`${cle}\` est revenu à son défaut.` : '🚫 rien à oublier.', flags: MessageFlags.Ephemeral } as never);
+    },
+    'config-cle-retour': async (_c, i: MessageComponentInteraction, a) => {
+      await i.update({ ...(await vueModule(c, modules, a[0]!, false)), flags: MessageFlags.Ephemeral } as never);
+    },
   };
 }
+
+/** L'ecran d'un seul reglage : valeur courante, ce que ca change, et le controle qui va bien. */
+async function vueEditeur(c: Ctx, modules: readonly EdgeModule[], def: SettingDef, genre: 'bascule' | 'liste'): Promise<Vue> {
+  const courant = await c.cfg.valeur(def.module, def.cle);
+  const champs = [
+    { name: 'Valeur actuelle', value: `**${formater(def, courant)}**${JSON.stringify(courant) === JSON.stringify(def.defaut) ? ' *(défaut)*' : ''}` },
+    { name: 'Ce que ça change', value: def.aide ?? '—' },
+    { name: 'Format accepté', value: formatAttendu(def) },
+  ];
+  const rangee: ActionRowBuilder<MessageActionRowComponentBuilder>[] = [];
+  if (genre === 'bascule') {
+    rangee.push(new ActionRowBuilder<MessageActionRowComponentBuilder>().setComponents(
+      new ButtonBuilder().setCustomId(customId('botadmin', 'config-bool', def.module, def.cle, '1')).setStyle(ButtonStyle.Success).setEmoji('✅').setLabel('Oui'),
+      new ButtonBuilder().setCustomId(customId('botadmin', 'config-bool', def.module, def.cle, '0')).setStyle(ButtonStyle.Secondary).setEmoji('🚫').setLabel('Non'),
+    ) as never);
+  } else if (def.type === 'salon') {
+    rangee.push(new ActionRowBuilder<MessageActionRowComponentBuilder>().setComponents(
+      new ChannelSelectMenuBuilder()
+        .setCustomId(customId('botadmin', 'config-salon', def.module, def.cle))
+        .setPlaceholder('Choisir le salon…')
+        .setChannelTypes(ChannelType.GuildText)
+        .setMinValues(1).setMaxValues(1),
+    ) as never);
+  } else if (def.type === 'role') {
+    rangee.push(new ActionRowBuilder<MessageActionRowComponentBuilder>().setComponents(
+      new RoleSelectMenuBuilder()
+        .setCustomId(customId('botadmin', 'config-role', def.module, def.cle))
+        .setPlaceholder('Choisir le rôle…')
+        .setMinValues(1).setMaxValues(1),
+    ) as never);
+  } else if (def.type === 'choix') {
+    rangee.push(new ActionRowBuilder<MessageActionRowComponentBuilder>().setComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId(customId('botadmin', 'config-choix', def.module, def.cle))
+        .setPlaceholder('Choisir une option…')
+        .addOptions((def.choix ?? []).map((x) => ({ label: x.nom.slice(0, 90), value: valeurOption(x.valeur) }))),
+    ) as never);
+  }
+  rangee.push(new ActionRowBuilder<MessageActionRowComponentBuilder>().setComponents(
+    new ButtonBuilder().setCustomId(customId('botadmin', 'config-cle-defaut', def.module, def.cle)).setStyle(ButtonStyle.Secondary).setEmoji('🧹').setLabel('Revenir au défaut'),
+    new ButtonBuilder().setCustomId(customId('botadmin', 'config-cle-retour', def.module)).setStyle(ButtonStyle.Secondary).setEmoji('⬅️').setLabel('Tous les réglages du module'),
+  ) as never);
+  return {
+    embeds: [embed({ title: `✏️ ${def.label} · \`${def.cle}\``, fields: champs, footer: `type ${def.type}${genre === 'bascule' ? ' · un clic suffit' : ''}` })],
+    components: rangee as never,
+  };
+}
+
+/** Dire a l'humain QUOI taper avant qu'il ne devine, parce qu'une validation muette est une punition. */
+function formatAttendu(def: SettingDef): string {
+  const bornes = def.min !== undefined || def.max !== undefined
+    ? ` · entre ${def.min ?? '−'} et ${def.max ?? '∞'}` : '';
+  switch (def.type) {
+    case 'nombre': return `un nombre entier ou à virgule${bornes}`;
+    case 'pourcentage': return `un pourcentage, 0 à 100`;
+    case 'duree': return `une durée lisible : 30s, 5m, 2h, 1j, 1h30`;
+    case 'couleur': return `un hexa (#1ABC9C) ou un nom : ${NOMS_COULEURS_LISTE}`;
+    case 'liste': return `des mots séparés par des virgules · ${def.max ?? 25} au maximum`;
+    case 'texte': return `plusieurs lignes, ${def.maxLen ?? 1800} caractères max — les placeholders marchent`;
+    case 'chaine': return `une ligne, ${def.maxLen ?? 180} caractères max`;
+    case 'emoticone': return `un ou plusieurs emojis`;
+    case 'salon': return `le salon dans la liste ci-dessous (Edge vérifie qu’il a le droit d’y écrire)`;
+    case 'role': return `le rôle dans la liste ci-dessous`;
+    case 'choix': return (def.choix ?? []).map((x) => x.nom).join(' / ');
+    case 'booleen': return 'un bouton oui / non';
+    default: return 'texte libre';
+  }
+}
+
+const NOMS_COULEURS_LISTE = 'rouge, orange, jaune, vert, bleu, turquoise, violet, rose, gris, blanc, noir, blurple, or';
+
+/** Le chemin d'ecriture commun des quatre controles : valider, noter, montrer la valeur prise. */
+async function appliquer(
+  c: Ctx, modules: readonly EdgeModule[], i: MessageComponentInteraction, module: string, cle: string, brut: string,
+): Promise<void> {
+  const r = await c.cfg.regler(module, cle, brut);
+  if (!r.ok) {
+    await i.reply({ content: `🚫 ${r.raison}\n\nRetente avec le bouton ⚙️ du module, ou \`/edge config regler ${module} ${cle} <valeur>\`.`, flags: MessageFlags.Ephemeral });
+    return;
+  }
+  const avis = await verifierCible(c, r.def, r.valeur);
+  const note = `✅ \`${module}.${cle}\` = **${formater(r.def, r.valeur).replace(/\n/g, ' ').slice(0, 180)}**${avis ? `\n${avis}` : ''}`;
+  const estModale = typeof (i as unknown as { isModalSubmit?: () => boolean }).isModalSubmit === 'function'
+    && (i as unknown as { isModalSubmit: () => boolean }).isModalSubmit();
+  if (estModale) {
+    // Apres une modale, le message d'origine n'est plus éditable : on répond, avec la vue à jour
+    // en dessous pour que le nouvel état soit visible sans retaper la commande.
+    await i.reply({ ...await vueModule(c, modules, module, false), content: note, flags: MessageFlags.Ephemeral } as never);
+    return;
+  }
+  await i.update({
+    ...(await vueModule(c, modules, module, false)),
+    content: note,
+    flags: MessageFlags.Ephemeral,
+  } as never);
+}
+
 
 /** Couper / rallumer depuis le tableau de bord : même chemin que `/edge module`, y compris la resync. */
 async function basculer(c: Ctx, modules: readonly EdgeModule[], i: MessageComponentInteraction, module: string, on: boolean): Promise<void> {
