@@ -90,6 +90,39 @@ async function deleteAsset(path) {
   if (error) console.error('[store] suppression fichier échouée :', error.message);
 }
 
+// ---------------------------------------------------------------------------
+// Niveaux (XP et temps vocal) : table "edge_levels", une ligne par membre et par serveur.
+// ---------------------------------------------------------------------------
+
+const LEVELS_TABLE = 'edge_levels';
+const PAGE_SIZE = 1000; // limite par défaut de PostgREST (Supabase)
+
+// Charge toutes les lignes, page par page.
+async function loadLevelRows() {
+  const rows = [];
+  for (let from = 0; ; from += PAGE_SIZE) {
+    const { data, error } = await supabase
+      .from(LEVELS_TABLE)
+      .select('guild_id, user_id, xp, voice_seconds')
+      .order('guild_id', { ascending: true })
+      .order('user_id', { ascending: true })
+      .range(from, from + PAGE_SIZE - 1);
+    if (error) throw new Error(`Lecture Supabase impossible (table ${LEVELS_TABLE}) : ${error.message}`);
+    rows.push(...data);
+    if (data.length < PAGE_SIZE) break;
+  }
+  return rows;
+}
+
+// Enregistre des lignes (insertion ou mise à jour), par lots de 500.
+async function saveLevelRows(rows) {
+  for (let i = 0; i < rows.length; i += 500) {
+    const chunk = rows.slice(i, i + 500);
+    const { error } = await supabase.from(LEVELS_TABLE).upsert(chunk, { onConflict: 'guild_id,user_id' });
+    if (error) throw new Error(`Écriture Supabase échouée (${LEVELS_TABLE}) : ${error.message}`);
+  }
+}
+
 module.exports = {
   init,
   getModuleConfig,
@@ -97,4 +130,6 @@ module.exports = {
   updateModuleConfig,
   uploadAsset,
   deleteAsset,
+  loadLevelRows,
+  saveLevelRows,
 };

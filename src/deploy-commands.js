@@ -19,6 +19,19 @@ const commands = [
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
     .setDMPermission(false)
     .toJSON(),
+  new SlashCommandBuilder()
+    .setName('level')
+    .setDescription('Affiche ta carte de niveau (ou celle d’un membre)')
+    .addUserOption((option) =>
+      option.setName('membre').setDescription('Le membre dont afficher le niveau').setRequired(false),
+    )
+    .setDMPermission(false)
+    .toJSON(),
+  new SlashCommandBuilder()
+    .setName('leaderboard')
+    .setDescription('Affiche le classement vocal du serveur')
+    .setDMPermission(false)
+    .toJSON(),
 ];
 
 (async () => {
@@ -27,7 +40,7 @@ const commands = [
     ? Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID)
     : Routes.applicationCommands(CLIENT_ID);
   await rest.put(route, { body: commands });
-  console.log(`Commande /config enregistrée ${GUILD_ID ? `sur le serveur ${GUILD_ID}` : 'globalement'}.`);
+  console.log(`Commandes /config, /level et /leaderboard enregistrées ${GUILD_ID ? `sur le serveur ${GUILD_ID}` : 'globalement'}.`);
 })().catch((err) => {
   console.error(err);
   process.exit(1);

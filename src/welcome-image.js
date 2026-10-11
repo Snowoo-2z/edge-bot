@@ -211,21 +211,9 @@ async function fetchAvatar(url) {
   }
 }
 
-/**
- * @param {object} opts
- * @param {string} opts.title       texte principal (déjà rempli)
- * @param {string} opts.subtitle    sous-titre (déjà rempli)
- * @param {string} [opts.avatarUrl] URL de l'avatar (png)
- * @param {string} [opts.initial]   lettre affichée si pas d'avatar
- * @param {boolean} opts.showAvatar
- * @returns {Promise<Buffer>} PNG
- */
-async function renderWelcomeCard({ title, subtitle, avatarUrl, initial = '?', showAvatar = true, theme = DEFAULT_THEME }) {
-  ensureFonts();
-  const t = THEMES[theme] ?? THEMES[DEFAULT_THEME];
-  const canvas = createCanvas(W, H);
-  const g = canvas.getContext('2d');
-
+// Fond complet d'un thème : dégradé, halos, décor propre au thème, cadre.
+// Réutilisé par la carte de bienvenue et la carte de niveau.
+function paintBase(g, t) {
   // 1. Fond dégradé du thème
   const bg = g.createLinearGradient(0, 0, W, H);
   bg.addColorStop(0, t.stops[0]);
@@ -259,6 +247,24 @@ async function renderWelcomeCard({ title, subtitle, avatarUrl, initial = '?', sh
   g.lineWidth = 3;
   g.strokeStyle = t.frame ?? t.glow.replace(/[\d.]+\)$/, '0.35)');
   g.stroke();
+}
+
+/**
+ * @param {object} opts
+ * @param {string} opts.title       texte principal (déjà rempli)
+ * @param {string} opts.subtitle    sous-titre (déjà rempli)
+ * @param {string} [opts.avatarUrl] URL de l'avatar (png)
+ * @param {string} [opts.initial]   lettre affichée si pas d'avatar
+ * @param {boolean} opts.showAvatar
+ * @returns {Promise<Buffer>} PNG
+ */
+async function renderWelcomeCard({ title, subtitle, avatarUrl, initial = '?', showAvatar = true, theme = DEFAULT_THEME }) {
+  ensureFonts();
+  const t = THEMES[theme] ?? THEMES[DEFAULT_THEME];
+  const canvas = createCanvas(W, H);
+  const g = canvas.getContext('2d');
+
+  paintBase(g, t);
 
   // 4. Avatar dans un anneau
   const textX = showAvatar ? 380 : 90;
@@ -322,4 +328,17 @@ async function renderWelcomeCard({ title, subtitle, avatarUrl, initial = '?', sh
   return canvas.toBuffer('image/png');
 }
 
-module.exports = { renderWelcomeCard, THEMES, THEME_LIST, DEFAULT_THEME, W, H };
+module.exports = {
+  renderWelcomeCard,
+  paintBase,
+  fetchAvatar,
+  roundRect,
+  circle,
+  wrap,
+  ensureFonts,
+  THEMES,
+  THEME_LIST,
+  DEFAULT_THEME,
+  W,
+  H,
+};

@@ -17,3 +17,16 @@ alter table public.edge_module_configs enable row level security;
 insert into storage.buckets (id, name, public)
 values ('edge-assets', 'edge-assets', true)
 on conflict (id) do nothing;
+
+-- 3) Niveaux vocaux : une ligne par membre et par serveur (XP et temps passé en vocal).
+create table if not exists public.edge_levels (
+  guild_id      text        not null,
+  user_id       text        not null,
+  xp            bigint      not null default 0,
+  voice_seconds bigint      not null default 0,
+  updated_at    timestamptz not null default now(),
+  primary key (guild_id, user_id)
+);
+
+-- Même règle que ci-dessus : seule la clé service_role (le bot) y accède.
+alter table public.edge_levels enable row level security;

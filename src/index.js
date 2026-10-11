@@ -2,6 +2,7 @@ const { Client, GatewayIntentBits, Events } = require('discord.js');
 const { handleConfigCommand, handleConfigInteraction } = require('./config');
 const ticket = require('./modules/ticket');
 const welcome = require('./modules/welcome');
+const leveling = require('./leveling');
 const { ephemeralPayload } = require('./ui');
 const { startServer } = require('./server');
 const { startKeepAlive } = require('./keepalive');
@@ -34,6 +35,8 @@ function buildClient() {
       // GuildMembers : arrivée des membres (module Bienvenue). Intent privilégié à activer.
       GatewayIntentBits.GuildMembers,
       GatewayIntentBits.GuildMessages,
+      // GuildVoiceStates : suivi du temps passé en vocal (niveaux). Intent non privilégié.
+      GatewayIntentBits.GuildVoiceStates,
       // MessageContent : pièces jointes (import image / GIF). Intent privilégié à activer.
       GatewayIntentBits.MessageContent,
     ],
@@ -73,6 +76,8 @@ function registerHandlers(client) {
   client.on(Events.Error, (error) => console.error('[discord] erreur client :', error?.message ?? error));
 
   client.on(Events.InteractionCreate, handleInteraction);
+  client.on(Events.VoiceStateUpdate, (oldState, newState) => leveling.onVoiceStateUpdate(oldState, newState));
+  client.once(Events.ClientReady, (c) => leveling.scanVoice(c));
 
   ticket.registerEvents(client);
   welcome.registerEvents(client);
@@ -91,6 +96,8 @@ async function handleInteraction(interaction) {
   try {
     if (interaction.isChatInputCommand()) {
       if (interaction.commandName === 'config') return await handleConfigCommand(interaction);
+      if (interaction.commandName === 'level') return await leveling.handleLevel(interaction);
+      if (interaction.commandName === 'leaderboard') return await leveling.handleLeaderboard(interaction);
       return;
     }
 
@@ -193,6 +200,11 @@ async function main() {
   // Charge les réglages depuis Supabase avant d'accepter les interactions.
   console.log('[startup] Chargement des réglages depuis Supabase…');
   await withTimeout(store.init(), 20_000, 'Supabase ne répond pas après 20 s (vérifie SUPABASE_URL).');
+  // Non bloquant : si la table des niveaux n'existe pas encore, le bot démarre quand même.
+  await withTimeout(leveling.init(), 30_000, 'Lecture des niveaux trop lente (table edge_levels).').catch((err) =>
+    console.error('[niveaux] chargement impossible (la table edge_levels existe-t-elle ? voir supabase/schema.sql) :', err.message),
+  );
+  leveling.startTimers();
   console.log('[startup] Réglages chargés. Connexion à Discord…');
   // Si Discord impose une limite de débit, on attend sa fin avant toute tentative :
   // chaque demande envoyée pendant la limite la prolonge.
@@ -207,6 +219,11 @@ async function main() {
   }
   await connectWithRetry();
 }
+
+// Render envoie SIGTERM au redéploiement : on enregistre l'XP en attente avant de quitter.
+process.on('SIGTERM', () => {
+  leveling.flushOnExit().finally(() => process.exit(0));
+});
 
 main().catch((err) => {
   console.error('Démarrage impossible :', err.message);

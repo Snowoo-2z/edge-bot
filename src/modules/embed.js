@@ -1,10 +1,16 @@
+const path = require('node:path');
 const { ButtonStyle, ChannelType, ChannelSelectMenuBuilder } = require('discord.js');
-const { getModuleConfig, updateModuleConfig } = require('../store');
+const { getModuleConfig, updateModuleConfig, uploadAsset } = require('../store');
 const { embed, button, row, selectMenu, moduleSelectRow, textModal, truncate, ephemeralPayload } = require('../ui');
 const { MODULE_LIST } = require('./registry');
 
 const ID = 'embed';
 const MAX_TEMPLATES = 10;
+const UPLOAD_TIMEOUT_MS = 2 * 60 * 1000;
+const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+const IMAGE_MIME = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif' };
+const UPLOAD_LABEL = { image: 'la grande image', thumbnail: 'la miniature' };
+const pendingUploads = new Map(); // "guildId:userId" -> collector en attente d'une pièce jointe
 const MAX_FIELDS = 25; // limite Discord
 const DEFAULTS = {
   draft: {}, // brouillon en cours : title, url, description, authorName, authorIcon, footerText, image, thumbnail, fields[]
@@ -151,6 +157,10 @@ function renderMain(cfg) {
         button('cfg:embed:open:field', 'Ajouter un champ', ButtonStyle.Success, '➕'),
       ),
       row(
+        button('cfg:embed:upload:image', 'Importer une image', ButtonStyle.Secondary, '📎'),
+        button('cfg:embed:upload:thumbnail', 'Importer une miniature', ButtonStyle.Secondary, '📎'),
+      ),
+      row(
         button('cfg:embed:view:delfield', 'Supprimer un champ', ButtonStyle.Secondary, '🗑️').setDisabled(
           !d.fields?.length,
         ),
@@ -247,6 +257,82 @@ function renderClear() {
 // Interactions
 // ---------------------------------------------------------------------------
 
+// Import direct : l'utilisateur envoie l'image en pièce jointe dans le salon (2 min).
+// Le fichier est stocké dans Supabase (bucket edge-assets) ; l'URL publique remplace celle du brouillon.
+async function startUpload(interaction, guild, kind) {
+  const userId = interaction.user.id;
+  const key = `${guild.id}:${userId}`;
+  pendingUploads.get(key)?.stop('replaced');
+  await interaction.deferUpdate();
+  await interaction.followUp(
+    ephemeralPayload(
+      `📎 Envoie ${UPLOAD_LABEL[kind]} dans ce salon (2 min). Formats : PNG, JPG, WEBP, GIF · 8 Mo max.`,
+    ),
+  );
+
+  const collector = interaction.channel.createMessageCollector({
+    filter: (m) => m.author.id === userId && m.attachments.size > 0,
+    time: UPLOAD_TIMEOUT_MS,
+  });
+  pendingUploads.set(key, collector);
+
+  collector.on('collect', async (msg) => {
+    const result = await saveEmbedImage(guild, kind, msg.attachments.first());
+    if (!result.ok) {
+      const warn = await msg.reply({ embeds: [embed(`❌ ${result.reason}`)] }).catch(() => null);
+      if (warn) setTimeout(() => warn.delete().catch(() => {}), 10_000);
+      return; // on continue d'attendre un fichier valide
+    }
+    msg.delete().catch(() => {});
+    collector.stop('ok');
+  });
+
+  collector.on('end', async (_collected, reason) => {
+    if (pendingUploads.get(key) === collector) pendingUploads.delete(key);
+    if (reason === 'replaced') return;
+    try {
+      await interaction.editReply(renderMain(cfgOf(guild.id)));
+      if (reason === 'ok') {
+        await interaction.followUp(ephemeralPayload(`✅ ${UPLOAD_LABEL[kind]} enregistrée.`));
+      } else if (reason === 'time') {
+        await interaction.followUp(ephemeralPayload('⌛ Temps écoulé, aucun fichier reçu.'));
+      }
+    } catch (err) {
+      console.error('[embed] fin d’import :', err);
+    }
+  });
+}
+
+async function saveEmbedImage(guild, kind, attachment) {
+  if (!attachment) return { ok: false, reason: 'Aucune pièce jointe.' };
+  const ext = path.extname((attachment.name || '').toLowerCase());
+  if (!IMAGE_MIME[ext]) {
+    return { ok: false, reason: 'Format non supporté. Formats acceptés : PNG, JPG, WEBP, GIF.' };
+  }
+  if (attachment.size > MAX_IMAGE_BYTES) return { ok: false, reason: 'Fichier trop lourd (max 8 Mo).' };
+
+  try {
+    const res = await fetch(attachment.url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const buffer = Buffer.from(await res.arrayBuffer());
+    if (buffer.length > MAX_IMAGE_BYTES) return { ok: false, reason: 'Fichier trop lourd (max 8 Mo).' };
+
+    // Nom unique à chaque import : Discord ne garde pas un ancien fichier en cache.
+    // Les anciens fichiers ne sont pas supprimés, car un modèle sauvegardé peut encore les utiliser.
+    const filePath = `${guild.id}/embed/${kind}-${Date.now()}${ext}`;
+    const url = await uploadAsset(filePath, buffer, IMAGE_MIME[ext]);
+
+    const cfg = cfgOf(guild.id);
+    if (kind === 'image') cfg.draft.image = url;
+    else cfg.draft.thumbnail = url;
+    save(guild.id, cfg);
+    return { ok: true };
+  } catch (err) {
+    console.error('[embed] upload image :', err);
+    return { ok: false, reason: 'Impossible d’enregistrer le fichier, réessaie.' };
+  }
+}
+
 async function handleComponent(interaction) {
   const guild = interaction.guild;
   if (!guild) return;
@@ -264,6 +350,11 @@ async function handleComponent(interaction) {
         return interaction.reply(ephemeralPayload(`Maximum ${MAX_TEMPLATES} modèles. Supprime-en un avant.`));
       }
       return interaction.showModal(textModal(`cfg:embed:modal:${arg}`, spec.title, spec.fields(cfg.draft)));
+    }
+
+    case 'upload': {
+      if (!UPLOAD_LABEL[arg]) return;
+      return startUpload(interaction, guild, arg);
     }
 
     case 'delpick': {

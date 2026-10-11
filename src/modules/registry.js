@@ -17,7 +17,13 @@ const MODULE_LIST = [
     id: 'welcome',
     label: 'Bienvenue',
     emoji: '👋',
-    description: 'Carte de bienvenue violette envoyée à chaque arrivée',
+    description: 'Carte de bienvenue envoyée à chaque arrivée',
+  },
+  {
+    id: 'levels',
+    label: 'Niveaux',
+    emoji: '🏅',
+    description: 'Niveaux vocaux : thème de la carte /level',
   },
 ];
 

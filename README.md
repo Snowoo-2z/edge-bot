@@ -43,8 +43,9 @@ Dans `/config` → **🧩 Créateur d’embed**, tu construis un embed pièce pa
 Tous les embeds sont violets.
 
 - **✏️ Titre + lien**, **📝 Description**, **👤 Auteur & pied** : une fenêtre par partie.
-- **🖼️ Images** : URL d'image (grande image) et URL de miniature. Les URL doivent commencer par `https://`.
-  L'import de fichier n'est pas proposé : héberge l'image ailleurs et colle son lien.
+- **📎 Importer une image** / **📎 Importer une miniature** : clique, puis envoie l'image en pièce jointe dans le salon (2 min).
+  Formats : PNG, JPG, WEBP, GIF. 8 Mo max. L'image est stockée dans Supabase.
+- **🖼️ Images** (fenêtre) : tu peux aussi coller une URL `https://` à la place. Vider le champ retire l'image.
 - **➕ Champ** / **🗑️ Champ** : ajoute un champ (nom, valeur, « en ligne » = `oui` pour côte à côte) ou supprime-en un. 25 max.
 - **💾 Modèle** / **📂 Modèles** : sauvegarde le brouillon sous un nom, recharge-le ou supprime-le. 10 modèles max.
 - **📤 Envoyer** : choisis le salon ; l'embed y est publié tel quel. Le bot a besoin de la permission
@@ -79,6 +80,26 @@ Par défaut : titre « Bienvenue {user} ! », sous-titre « Membre n°{count} ·
 > Sans lui, le bot refuse de se connecter (le module Bienvenue reçoit les arrivées grâce à cet intent).
 
 Les polices (Inter, licence SIL OFL) sont incluses dans `assets/fonts/`. Aucun fichier n'est à installer.
+
+## Niveaux (vocal)
+
+Le temps passé en salon vocal rapporte de l'XP. **AFK, micro coupé et casque coupé comptent aussi.**
+
+- **20 XP par minute** passée en vocal. Le temps vocal total est enregistré (affiché en heures et minutes).
+- **Niveau** = racine(XP / 100) : le niveau N demande 100 × N² XP au total.
+- Les bots ne gagnent pas d'XP.
+
+Commandes (disponibles pour tout le monde) :
+- **`/level`** : carte PNG avec ton niveau, ta barre de progression, ton rang et ton temps vocal.
+  Tu peux aussi afficher celui d'un membre : `/level membre:@quelqu'un`.
+- **`/leaderboard`** : top 10 du serveur (niveau, XP, temps vocal).
+
+Thème de la carte : `/config` → **🏅 Niveaux**. Le thème par défaut est le **violet foncé**
+(les mêmes thèmes que la carte de bienvenue sont disponibles).
+
+> **Base de données** : exécute `supabase/schema.sql` dans le SQL Editor de Supabase (la section 3 crée la table
+> `edge_levels`). Sans elle, le bot démarre mais l'XP n'est pas sauvegardé (un message l'indique dans les logs).
+> Intent : `GuildVoiceStates` (non privilégié, rien à activer dans le portail).
 
 ## Installation
 
@@ -198,10 +219,13 @@ src/
   store.js              stockage Supabase (réglages + bucket d'images)
   ui.js                 helpers d'embeds (violet), boutons, menus
   welcome-image.js      génération de la carte de bienvenue (PNG)
+  level-card.js         carte de niveau /level (PNG)
+  leveling.js           XP vocal, niveaux, classement, sauvegarde Supabase
   modules/registry.js   liste des modules affichés dans le menu
   modules/ticket.js     module Ticket (panneau, tickets, textes, images/GIF)
   modules/embed.js      module Créateur d'embed (brouillon, modèles, envoi)
   modules/welcome.js    module Bienvenue (réglages, aperçu, arrivées)
+  modules/levels.js     module Niveaux (thème de la carte /level)
 assets/fonts/           polices Inter (carte de bienvenue)
 supabase/schema.sql     tables et bucket à créer dans Supabase
 ```
