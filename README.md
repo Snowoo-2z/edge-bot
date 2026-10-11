@@ -146,6 +146,48 @@ Le message est envoyé en texte seul (sans image). `{user}` est mentionné, `{le
 > `edge_levels`). Sans elle, le bot démarre mais l'XP n'est pas sauvegardé (un message l'indique dans les logs).
 > Intent : `GuildVoiceStates` (non privilégié, rien à activer dans le portail).
 
+## Logs (journal détaillé)
+
+`/config` → **Logs**. Activer le module, puis choisir le salon par défaut et, si besoin, un salon par catégorie.
+
+| Catégorie | Événements |
+|---|---|
+| Messages | message modifié (ancien et nouveau contenu), message supprimé (et auteur de la suppression si le journal d'audit le permet), suppression en masse |
+| Membres | arrivée, départ, pseudo modifié, rôles ajoutés ou retirés |
+| Vocal | connexion, déconnexion, déplacement |
+| Salons | création, suppression, renommage |
+| Rôles | création, suppression, modification (nom, couleur, permissions) |
+| Modération | ban, débannissement, expulsion, timeout appliqué ou retiré, et toutes les commandes de modération |
+
+- Les événements proches sont regroupés dans un même message (10 maximum).
+- Les messages ou salons des logs ne sont jamais journalisés (pas de boucle).
+- Les **salons ignorés** ne sont pas journalisés (messages et vocal).
+- Le journal est aussi consultable dans le tableau de bord, filtrable par catégorie. Il est conservé **30 jours**.
+- Les événements déclenchés par le bot lui-même (commandes de modération) ne sont journalisés qu'une fois.
+
+## Modération (commandes)
+
+`/config` → **Modération**. Commandes : `/ban`, `/unban`, `/kick`, `/timeout`, `/untimeout`, `/warn`,
+`/warnings`, `/unwarn`, `/purge`, `/slowmode`.
+
+- **Rôles par commande** : pour chaque commande, choisis les rôles autorisés. Sans rôle choisi, la commande
+  utilise la permission Discord correspondante (ex. « Bannir des membres »).
+- Les administrateurs et le propriétaire peuvent toujours utiliser les commandes.
+- Protections : impossible de sanctionner soi-même, le propriétaire, le bot, ou un membre de rang égal ou
+  supérieur au sien. Le rôle du bot doit aussi être au-dessus de la cible.
+- Durées : `10m`, `2h`, `1j`, `1j 12h` (timeout de 1 minute à 28 jours). Raison : 400 caractères maximum.
+- Un **MP** est envoyé au membre avant la sanction (texte modifiable, variables `{action}`, `{server}`,
+  `{reason}`, `{duration}`). Texte vide = aucun MP. Les MP fermés n'empêchent pas la sanction.
+- Avertissements : enregistrés dans Supabase (table `edge_warnings`), listés par `/warnings`, retirés par `/unwarn`
+  ou depuis le tableau de bord.
+- `/purge` supprime au plus 100 messages récents (les messages de plus de 14 jours ne peuvent pas être supprimés en masse).
+
+**Permissions Discord à donner au bot** : Bannir des membres, Expulser des membres, Exclure temporairement des
+membres (timeout), Gérer les messages, Gérer les salons (mode lent), Voir le journal d'audit (auteurs des actions
+dans les logs), Envoyer des messages et Intégrer des liens (journal), Voir les salons.
+Intents à activer dans le portail : **Server Members** et **Message Content** (déjà requis) ; l'intent
+« Guild Moderation » est non privilégié et ne nécessite rien d'autre.
+
 ## Tableau de bord web (propriétaire uniquement)
 
 Une interface web permet de gérer le bot depuis un navigateur : mêmes réglages que `/config`, plus les
@@ -159,8 +201,11 @@ aperçus, les listes (classement, suggestions, giveaways) et les envois (panneau
   personnalisé et la même origine ; aucune clé ni aucun token n'est affiché.
 - **Limite** : les sessions sont en mémoire. Après un redémarrage du service, il faut se reconnecter.
 - **Pages** : Accueil, Bienvenue, Niveaux (aperçus et classement), Suggestions, Giveaways (liste, fin manuelle),
-  Liens, Tickets (réglages, images/GIF, types, textes, publication du panneau), Créateur d'embed (brouillon,
+  Liens, Logs (réglages par catégorie et journal consultable), Modération (rôles par commande, MP, avertissements),
+  Tickets (réglages, images/GIF, types, textes, publication du panneau), Créateur d'embed (brouillon,
   modèles, image importée, envoi).
+- **Compatibilité** : l'interface s'adapte aux téléphones, tablettes, portables et grands écrans. Elle fonctionne
+  dans les navigateurs récents (Chrome, Edge, Firefox, Safari). Sur petit écran, la navigation passe en haut de page.
 - **Création d'un giveaway** : toujours avec `/giveaway` dans Discord (le tableau de bord gère la liste et la fin anticipée).
 
 Le code est dans `src/dashboard/` (serveur, validation, API) et `src/dashboard/public/` (interface, sans dépendance).
@@ -301,6 +346,11 @@ src/
   modules/embed.js      module Créateur d'embed (brouillon, modèles, envoi)
   modules/welcome.js    module Bienvenue (réglages, aperçu, arrivées)
   modules/levels.js     module Niveaux (thème de la carte /level)
+  modules/logs.js       module Logs (réglages, envoi groupé, écriture Supabase)
+  log-events.js         écouteurs Discord alimentant le journal
+  modules/moderation.js module Modération (rôles par commande, actions, avertissements)
+  moderation-commands.js définition des commandes /ban… /slowmode
+  duration.js           lecture des durées (« 10m », « 1j 12h »)
 assets/fonts/           polices Inter (carte de bienvenue)
 supabase/schema.sql     tables et bucket à créer dans Supabase
 ```

@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits, Events, RESTEvents } = require('discord.js');
+const { Client, GatewayIntentBits, Events, Partials, RESTEvents } = require('discord.js');
 const { handleConfigCommand, handleConfigInteraction } = require('./config');
 const ticket = require('./modules/ticket');
 const welcome = require('./modules/welcome');
@@ -6,6 +6,10 @@ const leveling = require('./leveling');
 const suggestions = require('./modules/suggestions');
 const links = require('./modules/links');
 const giveaways = require('./modules/giveaways');
+const logs = require('./modules/logs');
+const moderation = require('./modules/moderation');
+const { registerLogEvents } = require('./log-events');
+const { buildModerationCommands } = require('./moderation-commands');
 const { ephemeralPayload } = require('./ui');
 const { startServer } = require('./server');
 const { createDashboard } = require('./dashboard');
@@ -32,6 +36,8 @@ const RETRY_MAX_MS = 600_000;
 // Client Discord courant (recréé à chaque tentative de connexion).
 let bot = null;
 
+const MODERATION_COMMANDS = new Set(buildModerationCommands().map((c) => c.name));
+
 function buildClient() {
   const client = new Client({
     intents: [
@@ -39,11 +45,16 @@ function buildClient() {
       // GuildMembers : arrivée des membres (module Bienvenue). Intent privilégié à activer.
       GatewayIntentBits.GuildMembers,
       GatewayIntentBits.GuildMessages,
+      // GuildModeration : bans et débans (journal + commandes). Intent non privilégié.
+      GatewayIntentBits.GuildModeration,
       // GuildVoiceStates : suivi du temps passé en vocal (niveaux). Intent non privilégié.
       GatewayIntentBits.GuildVoiceStates,
       // MessageContent : pièces jointes (import image / GIF). Intent privilégié à activer.
       GatewayIntentBits.MessageContent,
     ],
+    // Partials : messages et salons non présents en cache (suppressions et modifications
+    // d'anciens messages restent journalisées).
+    partials: [Partials.Message, Partials.Channel],
   });
   registerHandlers(client);
   return client;
@@ -93,6 +104,7 @@ function registerHandlers(client) {
   links.registerEvents(client);
   suggestions.registerEvents(client);
   giveaways.registerEvents(client);
+  registerLogEvents(client);
 }
 
 // Journal des interactions reçues : permet de voir si Discord les transmet au bot.
@@ -119,6 +131,7 @@ async function handleInteraction(interaction) {
       if (interaction.commandName === 'leaderboard') return await leveling.handleLeaderboard(interaction);
       if (interaction.commandName === 'suggestion') return await suggestions.handleCommand(interaction);
       if (interaction.commandName === 'giveaway') return await giveaways.handleCommand(interaction);
+      if (MODERATION_COMMANDS.has(interaction.commandName)) return await moderation.handleCommand(interaction);
       return;
     }
 
@@ -239,6 +252,7 @@ async function main() {
     console.error('[niveaux] chargement impossible (la table edge_levels existe-t-elle ? voir supabase/schema.sql) :', err.message),
   );
   leveling.startTimers();
+  logs.start();
   await withTimeout(suggestions.init(), 30_000, 'Lecture des suggestions trop lente (table edge_suggestions).').catch((err) =>
     console.error('[suggestions] chargement impossible (la table edge_suggestions existe-t-elle ? voir supabase/schema.sql) :', err.message),
   );
@@ -262,7 +276,7 @@ async function main() {
 
 // Render envoie SIGTERM au redéploiement : on enregistre l'XP en attente avant de quitter.
 process.on('SIGTERM', () => {
-  leveling.flushOnExit().finally(() => process.exit(0));
+  Promise.all([leveling.flushOnExit(), logs.flushOnExit()]).finally(() => process.exit(0));
 });
 
 main().catch((err) => {

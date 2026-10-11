@@ -2,6 +2,7 @@
 // - Si GUILD_ID est défini : enregistrement instantané sur ce serveur (idéal pour tester).
 // - Sinon : enregistrement global (peut prendre jusqu'à 1 h à apparaître).
 const { REST, Routes, SlashCommandBuilder, PermissionFlagsBits, ChannelType } = require('discord.js');
+const { buildModerationCommands } = require('./moderation-commands');
 
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 // Accepte CLIENT_ID ou DISCORD_CLIENT_ID (les deux noms sont courants).
@@ -58,6 +59,7 @@ const commands = [
     )
     .setDMPermission(false)
     .toJSON(),
+  ...buildModerationCommands(),
 ];
 
 (async () => {
@@ -66,7 +68,7 @@ const commands = [
     ? Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID)
     : Routes.applicationCommands(CLIENT_ID);
   await rest.put(route, { body: commands });
-  console.log(`Commandes /config, /level, /leaderboard, /suggestion et /giveaway enregistrées ${GUILD_ID ? `sur le serveur ${GUILD_ID}` : 'globalement'}.`);
+  console.log(`${commands.length} commandes enregistrées ${GUILD_ID ? `sur le serveur ${GUILD_ID}` : 'globalement'} (config, level, leaderboard, suggestion, giveaway, ban, unban, kick, timeout, untimeout, warn, warnings, unwarn, purge, slowmode).`);
 })().catch((err) => {
   console.error(err);
   process.exit(1);

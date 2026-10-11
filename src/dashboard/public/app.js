@@ -367,6 +367,8 @@
     { id: 'giveaways', label: 'Giveaways', icon: '🎁', module: 'giveaways', desc: 'Commande /giveaway et tirages au sort.' },
     { id: 'liens', label: 'Liens', icon: '🔗', module: 'links', desc: 'Blocage des liens et salons libres.' },
     { id: 'tickets', label: 'Tickets', icon: '🎫', module: 'ticket', desc: 'Panneau, types, images et textes.' },
+    { id: 'logs', label: 'Logs', icon: '📜', module: 'logs', desc: 'Journal détaillé des événements du serveur.' },
+    { id: 'moderation', label: 'Modération', icon: '🛡️', module: 'moderation', desc: 'Commandes de sanction et rôles autorisés.' },
     { id: 'embed', label: 'Créateur d’embed', icon: '🧩', desc: 'Construire un embed, modèles, envoi.' },
   ];
 
@@ -388,6 +390,8 @@
       liens: viewLinks,
       tickets: viewTickets,
       embed: viewEmbed,
+      logs: viewLogs,
+      moderation: viewModeration,
     };
 
     const select = h(
@@ -462,7 +466,7 @@
         'div',
         { class: 'card' },
         h('h2', { text: 'Commandes disponibles' }),
-        h('p', { class: 'muted', text: '/config (réglages, dans Discord) · /level · /leaderboard · /suggestion · /giveaway' }),
+        h('p', { class: 'muted', text: '/config (réglages, dans Discord) · /level · /leaderboard · /suggestion · /giveaway · /ban · /unban · /kick · /timeout · /untimeout · /warn · /warnings · /unwarn · /purge · /slowmode' }),
         h('p', { class: 'small muted', text: 'Ce tableau de bord modifie les mêmes réglages que /config. Les changements sont appliqués tout de suite.' }),
       ),
       h('div', { class: 'grid' }, tiles),
@@ -1293,6 +1297,285 @@
       null,
       pageHead('🧩 Créateur d’embed', 'Construis l’embed, enregistre-le en modèle, puis envoie-le dans un salon.'),
       h('div', { class: 'two' }, h('div', null, editor, templatesCard), h('div', null, previewCard, sendCard)),
+    );
+  }
+
+  // -------------------------------------------------------------------------
+  // Logs : réglages par catégorie et journal consultable
+  // -------------------------------------------------------------------------
+
+  const LOG_PAGE = 50;
+  const CATEGORY_LABEL = (key) => (S.data.logCategories || []).find((c) => c.key === key)?.label ?? key;
+
+  function channelNameOf(id) {
+    if (!id) return null;
+    const c = (S.data.meta.channels || []).find((x) => x.id === id);
+    return c ? `#${c.name}` : 'salon supprimé';
+  }
+
+  function viewLogs() {
+    const cfg = clone(S.data.modules.logs);
+    const cats = S.data.logCategories || [];
+    const categoryCards = cats.map((cat) =>
+      h(
+        'div',
+        { class: 'cat-row' },
+        h('div', { class: 'cat-title', text: `${cat.emoji} ${cat.label}` }),
+        fieldSwitch('Activée', null, cfg.categories[cat.key], (v) => (cfg.categories[cat.key] = v)),
+        fieldChannel(
+          'Salon dédié',
+          cfg.channels[cat.key],
+          TEXT_KINDS,
+          (v) => (cfg.channels[cat.key] = v),
+          null,
+          '— Salon par défaut —',
+        ),
+      ),
+    );
+
+    // Journal : filtre, pages successives
+    const listBox = h('div', { class: 'log-list' }, h('p', { class: 'muted', text: 'Chargement…' }));
+    const moreBox = h('div', { class: 'actions' });
+    let category = '';
+    let nextBefore = null;
+    let loadedRows = 0;
+
+    const renderRows = (rows, append) => {
+      if (!append) listBox.replaceChildren();
+      if (!rows.length && !append) {
+        listBox.append(h('p', { class: 'muted', text: 'Aucun événement pour le moment.' }));
+        return;
+      }
+      for (const r of rows) listBox.append(logRow(r));
+    };
+    const load = async (append = false) => {
+      const params = new URLSearchParams({ limit: String(LOG_PAGE) });
+      if (category) params.set('category', category);
+      if (append && nextBefore) params.set('before', nextBefore);
+      const res = await api('GET', `${gp('/logs')}?${params.toString()}`);
+      loadedRows = append ? loadedRows + res.rows.length : res.rows.length;
+      nextBefore = res.nextBefore;
+      renderRows(res.rows, append);
+      moreBox.replaceChildren(
+        nextBefore ? button('Charger plus', () => load(true)) : h('span', { class: 'hint', text: loadedRows ? 'Fin du journal affiché.' : '' }),
+      );
+    };
+    const filter = h(
+      'select',
+      {
+        'aria-label': 'Filtrer par catégorie',
+        onchange: async (e) => {
+          category = e.target.value;
+          listBox.replaceChildren(h('p', { class: 'muted', text: 'Chargement…' }));
+          try {
+            await load(false);
+          } catch (err) {
+            toast(err.message, false);
+          }
+        },
+      },
+      [h('option', { value: '', text: 'Toutes les catégories' }), ...cats.map((c) => h('option', { value: c.key, text: `${c.emoji} ${c.label}` }))],
+    );
+    setTimeout(() => load(false).catch((err) => listBox.replaceChildren(h('p', { class: 'error', text: err.message }))), 0);
+
+    return h(
+      'section',
+      null,
+      pageHead('📜 Logs', 'Journal détaillé du serveur : messages, membres, vocal, salons, rôles et modération.'),
+      h(
+        'div',
+        { class: 'card' },
+        h('h2', { text: 'Réglages' }),
+        fieldSwitch('Journal activé', 'Les événements sont enregistrés (30 jours) et envoyés dans les salons choisis.', cfg.enabled, (v) => (cfg.enabled = v)),
+        fieldChannel('Salon par défaut', cfg.channelId, TEXT_KINDS, (v) => (cfg.channelId = v), 'Reçoit les catégories qui n’ont pas de salon dédié. Sans salon, les événements restent consultables ici.'),
+        h('div', { class: 'cat-grid' }, categoryCards),
+        fieldChecks(
+          'Salons ignorés',
+          channelsOf([CH.TEXT, CH.ANNOUNCE, CH.FORUM]).map((c) => ({ id: c.id, label: channelLabel(c) })),
+          cfg.ignoredChannelIds,
+          (v) => (cfg.ignoredChannelIds = v),
+          'Les messages et événements vocaux de ces salons ne sont pas journalisés.',
+        ),
+        saveButton(() =>
+          saveModule('logs', {
+            enabled: cfg.enabled,
+            channelId: cfg.channelId,
+            categories: cfg.categories,
+            channels: cfg.channels,
+            ignoredChannelIds: cfg.ignoredChannelIds,
+          }),
+        ),
+      ),
+      h(
+        'div',
+        { class: 'card' },
+        h('div', { class: 'page-head' }, h('h2', { text: 'Journal' }), h('div', { class: 'field filter' }, filter)),
+        listBox,
+        moreBox,
+      ),
+    );
+  }
+
+  function logRow(r) {
+    const who = [];
+    if (r.actorId) who.push(`Par ${r.actorName ?? r.actorId}`);
+    if (r.targetId && r.targetId !== r.actorId) who.push(`Cible ${r.targetName ?? r.targetId}`);
+    const channel = r.channelId ? channelNameOf(r.channelId) : null;
+    return h(
+      'article',
+      { class: 'log-row' },
+      h(
+        'div',
+        { class: 'log-head' },
+        h('time', { class: 'muted small', datetime: r.createdAt, text: fmtDate(r.createdAt) }),
+        h('span', { class: 'pill', text: CATEGORY_LABEL(r.category) }),
+        h('strong', { text: r.title }),
+      ),
+      r.description ? h('div', { class: 'log-desc', text: r.description }) : null,
+      h('div', { class: 'small muted', text: [who.join(' · '), channel ? `Salon ${channel}` : null].filter(Boolean).join(' · ') }),
+    );
+  }
+
+  // -------------------------------------------------------------------------
+  // Modération : rôles par commande, MP au membre, avertissements
+  // -------------------------------------------------------------------------
+
+  function viewModeration() {
+    const cfg = clone(S.data.modules.moderation);
+    cfg.roles = cfg.roles || {};
+    const commands = S.data.moderationCommands || [];
+    const rolesCount = (key) => (cfg.roles[key] || []).length;
+
+    const commandBlocks = commands.map((c) =>
+      h(
+        'details',
+        { class: 'cmd-block' },
+        h(
+          'summary',
+          null,
+          h('strong', { text: `/${c.key}` }),
+          h('span', { class: 'muted', text: ` · ${c.label}` }),
+          h('span', { class: rolesCount(c.key) ? 'pill on' : 'pill', text: rolesCount(c.key) ? `${rolesCount(c.key)} rôle(s)` : 'permission Discord' }),
+        ),
+        h('p', { class: 'hint', text: `Sans rôle choisi, la commande demande la permission Discord « ${c.permission} ».` }),
+        fieldChecks(
+          'Rôles autorisés',
+          roleItems(),
+          cfg.roles[c.key] || [],
+          (v) => (cfg.roles[c.key] = v),
+          'Les administrateurs et le propriétaire peuvent toujours utiliser la commande.',
+        ),
+      ),
+    );
+
+    // Avertissements
+    const warnBox = h('div', { class: 'table-wrap' }, h('p', { class: 'muted', text: 'Chargement…' }));
+    let userFilter = '';
+    const loadWarnings = async () => {
+      const path = userFilter ? `/warnings?user=${encodeURIComponent(userFilter)}` : '/warnings';
+      const { rows } = await api('GET', gp(path));
+      if (!rows.length) {
+        warnBox.replaceChildren(h('p', { class: 'muted', text: 'Aucun avertissement.' }));
+        return;
+      }
+      warnBox.replaceChildren(
+        h(
+          'div',
+          { class: 'warn-list' },
+          rows.map((w) =>
+            h(
+              'div',
+              { class: 'item' },
+              h(
+                'div',
+                { class: 'grow' },
+                h('div', null, h('strong', { text: `#${w.id} · ${w.userName ?? w.userId}` }), h('span', { class: 'muted small', text: ` · ${fmtDate(w.createdAt)} · par ${w.moderatorName ?? w.moderatorId}` })),
+                h('div', { class: 'small', text: w.reason }),
+              ),
+              h(
+                'div',
+                { class: 'tools' },
+                button(
+                  'Retirer',
+                  async () => {
+                    if (!confirm(`Retirer l’avertissement #${w.id} ?`)) return;
+                    await api('DELETE', gp(`/warnings/${w.id}`));
+                    toast('Avertissement retiré.');
+                    await loadWarnings();
+                  },
+                  { cls: 'danger small' },
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    };
+    const applyFilter = async () => {
+      userFilter = userInput.value.trim();
+      await loadWarnings();
+    };
+    const userInput = h('input', {
+      type: 'text',
+      placeholder: 'ID du membre (vide = tout le serveur)',
+      'aria-label': 'Filtrer par identifiant de membre',
+      onkeydown: (e) => {
+        if (e.key === 'Enter') applyFilter().catch((err) => toast(err.message, false));
+      },
+    });
+    setTimeout(() => loadWarnings().catch((err) => warnBox.replaceChildren(h('p', { class: 'error', text: err.message }))), 0);
+
+    return h(
+      'section',
+      null,
+      pageHead('🛡️ Modération', 'Commandes de sanction. Chaque commande a ses propres rôles autorisés.'),
+      h(
+        'div',
+        { class: 'card' },
+        h('h2', { text: 'Réglages' }),
+        fieldSwitch('Commandes de modération activées', null, cfg.enabled, (v) => (cfg.enabled = v)),
+        fieldSwitch('Envoyer un MP au membre sanctionné', 'Le texte ci-dessous est envoyé avant la sanction.', cfg.notifyTarget, (v) => (cfg.notifyTarget = v)),
+        fieldText('Texte du MP', cfg.texts?.dm ?? '', {
+          max: 500,
+          multiline: true,
+          hint: 'Variables : {action}, {server}, {reason}, {duration}. Laisse vide pour ne rien envoyer.',
+          onInput: (v) => {
+            cfg.texts = { ...(cfg.texts || {}), dm: v };
+          },
+        }),
+        saveButton(() =>
+          saveModule('moderation', {
+            enabled: cfg.enabled,
+            notifyTarget: cfg.notifyTarget,
+            texts: { dm: cfg.texts?.dm ?? '' },
+            roles: cfg.roles,
+          }),
+        ),
+      ),
+      h(
+        'div',
+        { class: 'card' },
+        h('h2', { text: 'Rôles par commande' }),
+        h('p', { class: 'hint', text: 'Ouvre une commande pour choisir les rôles qui peuvent l’utiliser.' }),
+        commandBlocks,
+      ),
+      h(
+        'div',
+        { class: 'card' },
+        h('h2', { text: 'Avertissements' }),
+        h(
+          'div',
+          { class: 'row' },
+          h('div', { class: 'field' }, userInput),
+          button('Filtrer', applyFilter),
+          button('Tout afficher', async () => {
+            userFilter = '';
+            userInput.value = '';
+            await loadWarnings();
+          }),
+        ),
+        warnBox,
+      ),
     );
   }
 

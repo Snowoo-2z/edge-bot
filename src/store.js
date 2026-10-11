@@ -161,8 +161,86 @@ async function saveGiveaway(row) {
   if (error) throw new Error(`Écriture Supabase échouée (${GIVEAWAYS_TABLE}) : ${error.message}`);
 }
 
+// ---------------------------------------------------------------------------
+// Journal (module logs) : une ligne par événement, purgée après 30 jours.
+// ---------------------------------------------------------------------------
+const LOGS_TABLE = 'edge_logs';
+const LOG_SELECT = 'id, category, event, title, description, actor_id, target_id, channel_id, created_at';
+
+async function insertLogs(rows) {
+  for (let i = 0; i < rows.length; i += 500) {
+    const { error } = await supabase.from(LOGS_TABLE).insert(rows.slice(i, i + 500));
+    if (error) throw new Error(`Écriture Supabase échouée (${LOGS_TABLE}) : ${error.message}`);
+  }
+}
+
+// Page de journal, la plus récente d'abord. `before` = created_at ISO de la dernière ligne vue.
+async function loadLogs({ guildId, category = null, before = null, limit = 50 }) {
+  let query = supabase
+    .from(LOGS_TABLE)
+    .select(LOG_SELECT)
+    .eq('guild_id', guildId)
+    .order('created_at', { ascending: false })
+    .order('id', { ascending: false })
+    .limit(limit);
+  if (category) query = query.eq('category', category);
+  if (before) query = query.lt('created_at', before);
+  const { data, error } = await query;
+  if (error) throw new Error(`Lecture Supabase échouée (${LOGS_TABLE}) : ${error.message}`);
+  return data ?? [];
+}
+
+async function pruneLogs(olderThanIso) {
+  const { error } = await supabase.from(LOGS_TABLE).delete().lt('created_at', olderThanIso);
+  if (error) throw new Error(`Purge Supabase échouée (${LOGS_TABLE}) : ${error.message}`);
+}
+
+// ---------------------------------------------------------------------------
+// Avertissements (commandes /warn, /warnings, /unwarn).
+// ---------------------------------------------------------------------------
+const WARNINGS_TABLE = 'edge_warnings';
+const WARNING_SELECT = 'id, user_id, moderator_id, reason, created_at';
+
+async function addWarning(row) {
+  const { data, error } = await supabase.from(WARNINGS_TABLE).insert(row).select(WARNING_SELECT).single();
+  if (error) throw new Error(`Écriture Supabase échouée (${WARNINGS_TABLE}) : ${error.message}`);
+  return data;
+}
+
+// Avertissements d'un membre (userId) ou de tout le serveur (userId omis), les plus récents d'abord.
+async function loadWarnings(guildId, userId = null, limit = 200) {
+  let query = supabase
+    .from(WARNINGS_TABLE)
+    .select(WARNING_SELECT)
+    .eq('guild_id', guildId)
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  if (userId) query = query.eq('user_id', userId);
+  const { data, error } = await query;
+  if (error) throw new Error(`Lecture Supabase échouée (${WARNINGS_TABLE}) : ${error.message}`);
+  return data ?? [];
+}
+
+// Supprime un avertissement du serveur. Retourne la ligne supprimée (user_id, reason…), ou null.
+async function deleteWarning(guildId, id) {
+  const { data, error } = await supabase
+    .from(WARNINGS_TABLE)
+    .delete()
+    .eq('guild_id', guildId)
+    .eq('id', id)
+    .select(WARNING_SELECT + ', guild_id');
+  if (error) throw new Error(`Suppression Supabase échouée (${WARNINGS_TABLE}) : ${error.message}`);
+  return data?.[0] ?? null;
+}
+
 module.exports = {
   init,
+  insertLogs,
+  loadLogs,
+  pruneLogs,
+  addWarning,
+  loadWarnings,
+  deleteWarning,
   loadOpenSuggestions,
   saveSuggestion,
   loadOpenGiveaways,

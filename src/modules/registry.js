@@ -43,6 +43,18 @@ const MODULE_LIST = [
     emoji: '🔗',
     description: 'Blocage des liens et rôles autorisés',
   },
+  {
+    id: 'logs',
+    label: 'Logs',
+    emoji: '📜',
+    description: 'Journal détaillé : messages, membres, vocal, salons, rôles, modération',
+  },
+  {
+    id: 'moderation',
+    label: 'Modération',
+    emoji: '🛡️',
+    description: 'Commandes ban, timeout, warn, purge… avec rôles autorisés par commande',
+  },
 ];
 
 module.exports = { MODULE_LIST };

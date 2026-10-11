@@ -74,3 +74,44 @@ create table if not exists public.edge_giveaways (
 
 -- Même règle que ci-dessus : seule la clé service_role (le bot) y accède.
 alter table public.edge_giveaways enable row level security;
+
+-- ---------------------------------------------------------------------------
+-- 6. Journal (module Logs) : une ligne par événement du serveur.
+--    Purgé automatiquement après 30 jours par le bot.
+-- ---------------------------------------------------------------------------
+create table if not exists public.edge_logs (
+  id           bigint generated always as identity primary key,
+  guild_id     text        not null,
+  category     text        not null,
+  event        text        not null,
+  title        text        not null,
+  description  text        not null default '',
+  actor_id     text,
+  target_id    text,
+  channel_id   text,
+  created_at   timestamptz not null default now()
+);
+
+create index if not exists edge_logs_guild_created_idx on public.edge_logs (guild_id, created_at desc);
+create index if not exists edge_logs_guild_category_idx on public.edge_logs (guild_id, category, created_at desc);
+
+-- Même règle que ci-dessus : seule la clé service_role (le bot) y accède.
+alter table public.edge_logs enable row level security;
+
+-- ---------------------------------------------------------------------------
+-- 7. Avertissements (commandes /warn, /warnings, /unwarn).
+--    Le numéro affiché (#id) est l'identifiant de la ligne.
+-- ---------------------------------------------------------------------------
+create table if not exists public.edge_warnings (
+  id            bigint generated always as identity primary key,
+  guild_id      text        not null,
+  user_id       text        not null,
+  moderator_id  text        not null,
+  reason        text        not null,
+  created_at    timestamptz not null default now()
+);
+
+create index if not exists edge_warnings_guild_user_idx on public.edge_warnings (guild_id, user_id, created_at desc);
+
+-- Même règle que ci-dessus : seule la clé service_role (le bot) y accède.
+alter table public.edge_warnings enable row level security;

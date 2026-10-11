@@ -7,6 +7,8 @@ const levels = require('../modules/levels');
 const suggestions = require('../modules/suggestions');
 const giveaways = require('../modules/giveaways');
 const links = require('../modules/links');
+const logsModule = require('../modules/logs');
+const moderation = require('../modules/moderation');
 const ticket = require('../modules/ticket');
 const embedModule = require('../modules/embed');
 const leveling = require('../leveling');
@@ -29,6 +31,8 @@ const MODULES = {
   giveaways: { module: giveaways, sanitize: validate.sanitizeGiveaways },
   links: { module: links, sanitize: validate.sanitizeLinks },
   ticket: { module: ticket, sanitize: validate.sanitizeTicket },
+  logs: { module: logsModule, sanitize: validate.sanitizeLogs },
+  moderation: { module: moderation, sanitize: validate.sanitizeModeration },
 };
 
 const ALL_MODULE_IDS = [...Object.keys(MODULES), embedModule.ID];
@@ -46,6 +50,17 @@ function route(method, pattern, handler, options = {}) {
       '$',
   );
   routes.push({ method, regex, names, handler, auth: options.auth ?? true });
+}
+
+// Nom affiché d'un identifiant (membre du serveur, sinon utilisateur connu du bot), ou null.
+function nameOf(guild, id) {
+  if (!id) return null;
+  return guild.members.cache.get(id)?.displayName ?? guild.client?.users?.cache?.get(id)?.username ?? null;
+}
+
+function truncateText(value, max) {
+  const s = String(value ?? '');
+  return s.length > max ? s.slice(0, max - 1) + '…' : s;
 }
 
 function createApi({ getClient }) {
@@ -128,6 +143,8 @@ function createApi({ getClient }) {
       themes: { cards: THEME_LIST, defaultWelcome: DEFAULT_THEME, defaultLevels: LEVEL_DEFAULT_THEME },
       // Textes du ticket (libellés et limites) : la vue du tableau de bord suit ticket.js.
       ticketTexts: ticket.TEXTS.map(({ key, label, style, max }) => ({ key, label, style, max })),
+      logCategories: logsModule.CATEGORIES.map(({ key, label, emoji }) => ({ key, label, emoji })),
+      moderationCommands: moderation.COMMAND_KEYS.map((key) => ({ key, label: moderation.COMMANDS[key].label, permission: moderation.COMMANDS[key].perm_label })),
       modules,
     });
   });
@@ -140,7 +157,10 @@ function createApi({ getClient }) {
     const current = configOf(guild, params.module);
     const patch = def.sanitize(guild, body, current);
     const next = { ...current, ...patch };
-    if (patch.texts) next.texts = { ...(current.texts ?? {}), ...patch.texts };
+    // Objets imbriqués : fusion, pour qu'une mise à jour partielle ne supprime pas les autres clés.
+    for (const key of ['texts', 'roles', 'categories', 'channels']) {
+      if (patch[key]) next[key] = { ...(current[key] ?? {}), ...patch[key] };
+    }
     saveConfig(guild, params.module, next);
     console.log(`[dashboard] module ${params.module} modifié (serveur ${guild.name}).`);
     sendJson(res, 200, { config: next });
@@ -166,6 +186,71 @@ function createApi({ getClient }) {
       voiceSeconds: rec.voiceSeconds,
     }));
     sendJson(res, 200, { rows, total: leveling.guildRanking(guild.id).length });
+  });
+
+  // Journal (module Logs) : pages de 50 lignes, la plus récente d'abord.
+  route('GET', '/api/guilds/:gid/logs', async ({ res, params, query }) => {
+    const { guild } = resolveGuild(params);
+    const category = query.get('category') || null;
+    if (category && !logsModule.CATEGORY_KEYS.includes(category)) throw new HttpError(400, 'Catégorie inconnue.');
+    const before = query.get('before') || null;
+    if (before && Number.isNaN(Date.parse(before))) throw new HttpError(400, 'Curseur invalide.');
+    const limit = Math.min(100, Math.max(1, Number.parseInt(query.get('limit') ?? '50', 10) || 50));
+    const data = await store.loadLogs({ guildId: guild.id, category, before, limit });
+    const rows = data.map((r) => ({
+      id: String(r.id),
+      category: r.category,
+      event: r.event,
+      title: r.title,
+      description: r.description,
+      actorId: r.actor_id,
+      actorName: nameOf(guild, r.actor_id),
+      targetId: r.target_id,
+      targetName: nameOf(guild, r.target_id),
+      channelId: r.channel_id,
+      createdAt: r.created_at,
+    }));
+    sendJson(res, 200, { rows, nextBefore: rows.length === limit ? rows[rows.length - 1].createdAt : null });
+  });
+
+  // Avertissements du serveur (ou d'un membre : ?user=ID).
+  route('GET', '/api/guilds/:gid/warnings', async ({ res, params, query }) => {
+    const { guild } = resolveGuild(params);
+    const user = query.get('user') || null;
+    if (user && !validate.isSnowflake(user)) throw new HttpError(400, 'Identifiant de membre invalide.');
+    const data = await store.loadWarnings(guild.id, user);
+    const rows = data.map((w) => ({
+      id: w.id,
+      userId: w.user_id,
+      userName: nameOf(guild, w.user_id),
+      moderatorId: w.moderator_id,
+      moderatorName: nameOf(guild, w.moderator_id),
+      reason: w.reason,
+      createdAt: w.created_at,
+    }));
+    sendJson(res, 200, { rows });
+  });
+
+  // Retrait d'un avertissement depuis le tableau de bord (journalisé comme une action de modération).
+  route('DELETE', '/api/guilds/:gid/warnings/:id', async ({ res, params }) => {
+    const { guild } = resolveGuild(params);
+    const id = Number.parseInt(params.id, 10);
+    if (!Number.isInteger(id) || id < 1) throw new HttpError(400, 'Numéro d’avertissement invalide.');
+    const removed = await store.deleteWarning(guild.id, id);
+    if (!removed) throw new HttpError(404, 'Avertissement introuvable.');
+    logsModule.log(guild, {
+      category: 'moderation',
+      event: 'unwarn',
+      title: 'Avertissement retiré (tableau de bord)',
+      targetId: removed.user_id,
+      fields: [
+        { name: 'Membre', value: `<@${removed.user_id}>`, inline: true },
+        { name: 'Numéro', value: `#${id}`, inline: true },
+        { name: 'Raison d’origine', value: truncateText(removed.reason, 300) },
+      ],
+    });
+    console.log(`[dashboard] avertissement ${id} retiré (serveur ${guild.name}).`);
+    sendJson(res, 200, { ok: true });
   });
 
   route('GET', '/api/guilds/:gid/suggestions', async ({ res, params }) => {

@@ -4,6 +4,8 @@
 const { ChannelType } = require('discord.js');
 const { THEMES } = require('../welcome-image');
 const ticket = require('../modules/ticket');
+const logs = require('../modules/logs');
+const moderation = require('../modules/moderation');
 
 const SNOWFLAKE = /^\d{17,20}$/;
 const TEXT_KINDS = [ChannelType.GuildText, ChannelType.GuildAnnouncement];
@@ -257,6 +259,48 @@ function sanitizeDraft(input) {
   return draft;
 }
 
+// Dictionnaire { clé connue : valeur } ; les clés inconnues sont ignorées.
+function mapOf(value, keys, build, label) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) fail(`${label} : objet attendu.`);
+  const out = {};
+  for (const key of Object.keys(value)) {
+    if (keys.includes(key)) out[key] = build(value[key], `${label} (${key})`);
+  }
+  return out;
+}
+
+function sanitizeLogs(guild, input) {
+  return pick(input, ['enabled', 'channelId', 'categories', 'channels', 'ignoredChannelIds'], (key, value) => {
+    switch (key) {
+      case 'enabled':
+        return bool(value, 'Module Logs');
+      case 'channelId':
+        return channelId(guild, value, 'Salon par défaut du journal', TEXT_KINDS);
+      case 'categories':
+        return mapOf(value, logs.CATEGORY_KEYS, (v, label) => bool(v, label), 'Catégories du journal');
+      case 'channels':
+        return mapOf(value, logs.CATEGORY_KEYS, (v, label) => channelId(guild, v, label, TEXT_KINDS), 'Salons des catégories');
+      case 'ignoredChannelIds':
+        return channelIds(guild, value, 'Salons ignorés', [...FORUM_KINDS, ChannelType.GuildVoice]);
+    }
+  });
+}
+
+function sanitizeModeration(guild, input) {
+  return pick(input, ['enabled', 'notifyTarget', 'texts', 'roles'], (key, value) => {
+    switch (key) {
+      case 'enabled':
+      case 'notifyTarget':
+        return bool(value, key === 'enabled' ? 'Module Modération' : 'MP au membre');
+      case 'texts':
+        if (!value || typeof value !== 'object' || Array.isArray(value)) fail('Textes : objet attendu.');
+        return pick(value, ['dm'], (k, v) => text(v, 'Message au membre', 500));
+      case 'roles':
+        return mapOf(value, moderation.COMMAND_KEYS, (v, label) => roleIds(guild, v, label), 'Rôles par commande');
+    }
+  });
+}
+
 module.exports = {
   ValidationError,
   isSnowflake,
@@ -267,6 +311,8 @@ module.exports = {
   sanitizeSuggestions,
   sanitizeGiveaways,
   sanitizeLinks,
+  sanitizeLogs,
+  sanitizeModeration,
   sanitizeTicket,
   sanitizeDraft,
   TEXT_KINDS,
