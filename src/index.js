@@ -126,21 +126,26 @@ function isAuthError(err) {
 }
 
 // Diagnostic réseau (une seule fois au démarrage) : l'API Discord répond-elle, et sous quelle limite ?
+// Retourne le délai (en secondes) imposé par Discord, ou 0.
 async function probeDiscord() {
   const started = Date.now();
   try {
     const res = await fetch('https://discord.com/api/v10/gateway', { signal: AbortSignal.timeout(10_000) });
-    const retryAfter = res.headers.get('retry-after');
+    const retryAfter = Number(res.headers.get('retry-after'));
     const scope = res.headers.get('x-ratelimit-scope');
     console.log(
       `[probe] discord.com/api/v10/gateway : HTTP ${res.status} en ${Date.now() - started} ms` +
-        (res.status === 429 ? ` (limite de débit : retry-after ${retryAfter ?? '?'} s, portée ${scope ?? '?'})` : ''),
+        (res.status === 429 ? ` (limite de débit : retry-after ${retryAfter || '?'} s, portée ${scope ?? '?'})` : ''),
     );
+    return res.status === 429 && retryAfter > 0 ? retryAfter : 0;
   } catch (err) {
     const cause = err.cause?.code ?? err.cause?.message ?? err.name ?? err.message;
     console.warn(`[probe] discord.com injoignable après ${Date.now() - started} ms : ${cause}`);
+    return 0;
   }
 }
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // Essaie de se connecter à Discord, avec un client neuf à chaque tentative et une pause qui s'allonge.
 async function connectWithRetry() {
@@ -175,7 +180,7 @@ async function connectWithRetry() {
     await client.destroy().catch(() => {});
 
     console.log(`[discord] Nouvel essai dans ${Math.round(pauseMs / 1000)} s.`);
-    await new Promise((resolve) => setTimeout(resolve, pauseMs));
+    await sleep(pauseMs);
     pauseMs = Math.min(pauseMs * 2, RETRY_MAX_MS);
   }
 }
@@ -189,7 +194,17 @@ async function main() {
   console.log('[startup] Chargement des réglages depuis Supabase…');
   await withTimeout(store.init(), 20_000, 'Supabase ne répond pas après 20 s (vérifie SUPABASE_URL).');
   console.log('[startup] Réglages chargés. Connexion à Discord…');
-  await probeDiscord();
+  // Si Discord impose une limite de débit, on attend sa fin avant toute tentative :
+  // chaque demande envoyée pendant la limite la prolonge.
+  const retryAfterS = await probeDiscord();
+  if (retryAfterS > 0) {
+    const waitS = retryAfterS + 10;
+    console.log(
+      `[discord] Limite de débit active : aucune tentative avant ${waitS} s (environ ${Math.ceil(waitS / 60)} min). ` +
+        'Évite de redéployer pendant ce délai.',
+    );
+    await sleep(waitS * 1000);
+  }
   await connectWithRetry();
 }
 
