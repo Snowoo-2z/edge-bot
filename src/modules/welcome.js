@@ -1,14 +1,15 @@
 const { AttachmentBuilder, ButtonStyle, ChannelType, ChannelSelectMenuBuilder, MessageFlags } = require('discord.js');
 const { getModuleConfig, updateModuleConfig } = require('../store');
-const { embed, button, row, toggleButton, textModal, moduleSelectRow, ephemeralPayload, truncate } = require('../ui');
+const { embed, button, row, selectMenu, toggleButton, textModal, moduleSelectRow, ephemeralPayload, truncate } = require('../ui');
 const { MODULE_LIST } = require('./registry');
-const { renderWelcomeCard } = require('../welcome-image');
+const { renderWelcomeCard, THEMES, THEME_LIST, DEFAULT_THEME } = require('../welcome-image');
 
 const ID = 'welcome';
 const DEFAULTS = {
   enabled: false,
   channelId: null,
   showAvatar: true,
+  theme: DEFAULT_THEME,
   texts: {
     title: 'Bienvenue {user} !',
     subtitle: 'Membre n°{count} · {server}',
@@ -56,6 +57,7 @@ function renderMain(guild, cfg) {
           { name: 'Module', value: cfg.enabled ? '🟢 Activé' : '⚪ Désactivé', inline: true },
           { name: 'Salon', value: channel, inline: true },
           { name: 'Avatar', value: cfg.showAvatar ? '🟢 Affiché' : '⚪ Masqué', inline: true },
+          { name: 'Thème', value: themeLabel(cfg.theme), inline: true },
           { name: 'Titre', value: truncate(cfg.texts.title, 200), inline: false },
           { name: 'Sous-titre', value: truncate(cfg.texts.subtitle, 200), inline: false },
           { name: 'Message', value: truncate(cfg.texts.message, 300), inline: false },
@@ -63,6 +65,17 @@ function renderMain(guild, cfg) {
     ],
     components: [
       moduleSelectRow(MODULE_LIST, ID),
+      selectMenu(
+        'cfg:welcome:pick:theme',
+        'Choisir le thème de la carte',
+        THEME_LIST.map((t) => ({
+          label: t.label,
+          value: t.id,
+          emoji: t.emoji,
+          description: t.description,
+          default: t.id === cfg.theme,
+        })),
+      ),
       row(
         toggleButton('cfg:welcome:toggle:enabled', 'Module', cfg.enabled),
         toggleButton('cfg:welcome:toggle:showAvatar', 'Avatar', cfg.showAvatar),
@@ -72,6 +85,11 @@ function renderMain(guild, cfg) {
       ),
     ],
   };
+}
+
+function themeLabel(id) {
+  const t = THEMES[id] ?? THEMES[DEFAULT_THEME];
+  return `${t.emoji} ${t.label}`;
 }
 
 function renderChannel() {
@@ -99,6 +117,7 @@ async function buildCard(guild, user, displayName, cfg) {
     avatarUrl: user.displayAvatarURL({ extension: 'png', size: 256 }),
     initial: displayName,
     showAvatar: cfg.showAvatar,
+    theme: cfg.theme,
   });
 }
 
@@ -120,7 +139,15 @@ async function handleComponent(interaction) {
     }
 
     case 'pick': {
-      cfg.channelId = interaction.values[0];
+      if (arg === 'theme') {
+        const theme = interaction.values[0];
+        if (!THEMES[theme]) return;
+        cfg.theme = theme;
+      } else if (arg === 'channel') {
+        cfg.channelId = interaction.values[0];
+      } else {
+        return;
+      }
       updateModuleConfig(guild.id, ID, cfg);
       return interaction.update(renderMain(guild, cfg));
     }
@@ -137,7 +164,7 @@ async function handleComponent(interaction) {
         const displayName = member?.displayName ?? interaction.user.username;
         const png = await buildCard(guild, interaction.user, displayName, cfg);
         return interaction.followUp({
-          embeds: [embed().setImage('attachment://welcome.png')],
+          content: `👁️ Aperçu · thème : ${themeLabel(cfg.theme)}`,
           files: [new AttachmentBuilder(png, { name: 'welcome.png' })],
           flags: MessageFlags.Ephemeral,
         });
@@ -180,7 +207,7 @@ function registerEvents(client) {
       const vars = { user: `<@${member.id}>`, server: member.guild.name, count: member.guild.memberCount };
       await channel.send({
         content: fill(cfg.texts.message, vars),
-        embeds: [embed().setImage('attachment://welcome.png')],
+        // Pas d'embed autour de l'image : Discord la réduirait. L'image est envoyée seule.
         files: [new AttachmentBuilder(png, { name: 'welcome.png' })],
         allowedMentions: { users: [member.id] },
       });

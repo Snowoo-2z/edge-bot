@@ -54,9 +54,16 @@ Tous les embeds sont violets.
 ## Bienvenue
 
 Dans `/config` → **👋 Bienvenue** : à chaque arrivée d'un membre, le bot envoie dans le salon choisi un message
-suivi d'une **carte de bienvenue violette** (image PNG générée par le bot, 1000×400, avec l'avatar du membre).
+suivi d'une **carte de bienvenue** (image PNG générée par le bot, 1000×400, avec l'avatar du membre).
+L'image est envoyée seule, sans cadre d'embed (un embed la réduirait).
 
 - **Module** : ON / OFF. **Avatar** : affiché ou masqué sur la carte.
+- **Thème** : menu pour choisir le fond de la carte :
+  - 💜 **Violet** (par défaut)
+  - 🌑 **Violet foncé** : version plus sombre
+  - 🎃 **Halloween** : noir, violet et orange, avec une lune (octobre)
+  - 🎄 **Noël** : vert sapin, rouge et neige
+  Le thème est choisi à la main : il ne change jamais tout seul à une date donnée.
 - **📍 Salon** : choisis le salon d'arrivée.
 - **✏️ Textes** : titre et sous-titre de l'image, message au-dessus de l'image.
 - **👁️ Aperçu** : génère la carte avec ton compte, visible seulement par toi.
