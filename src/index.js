@@ -17,8 +17,12 @@ if (missing.length) {
 }
 const token = process.env.DISCORD_TOKEN;
 
-// Une tentative de connexion dure au plus 15 s ; si elle échoue, on recrée le client et on réessaie.
-const LOGIN_TRY_MS = 15_000;
+// Une tentative de connexion dure au plus 2 min (discord.js attend lui-même une éventuelle limite de débit).
+// Entre deux tentatives, on attend 60 s, puis le délai double à chaque échec (plafond 10 min)
+// pour ne pas maintenir la limite de débit de Discord.
+const LOGIN_TRY_MS = 120_000;
+const RETRY_MIN_MS = 60_000;
+const RETRY_MAX_MS = 600_000;
 
 // Client Discord courant (recréé à chaque tentative de connexion).
 let bot = null;
@@ -121,22 +125,27 @@ function isAuthError(err) {
   return err?.code === 'TokenInvalid' || err?.status === 401 || /invalid token|401/i.test(err?.message ?? '');
 }
 
-// Diagnostic réseau : vérifie si l'API Discord répond depuis cet hébergement (sans changer la connexion).
+// Diagnostic réseau (une seule fois au démarrage) : l'API Discord répond-elle, et sous quelle limite ?
 async function probeDiscord() {
   const started = Date.now();
   try {
     const res = await fetch('https://discord.com/api/v10/gateway', { signal: AbortSignal.timeout(10_000) });
-    console.log(`[probe] discord.com/api/v10/gateway : HTTP ${res.status} en ${Date.now() - started} ms`);
+    const retryAfter = res.headers.get('retry-after');
+    const scope = res.headers.get('x-ratelimit-scope');
+    console.log(
+      `[probe] discord.com/api/v10/gateway : HTTP ${res.status} en ${Date.now() - started} ms` +
+        (res.status === 429 ? ` (limite de débit : retry-after ${retryAfter ?? '?'} s, portée ${scope ?? '?'})` : ''),
+    );
   } catch (err) {
     const cause = err.cause?.code ?? err.cause?.message ?? err.name ?? err.message;
     console.warn(`[probe] discord.com injoignable après ${Date.now() - started} ms : ${cause}`);
   }
 }
 
-// Essaie de se connecter à Discord toutes les 15 s, avec un client neuf à chaque tentative.
+// Essaie de se connecter à Discord, avec un client neuf à chaque tentative et une pause qui s'allonge.
 async function connectWithRetry() {
+  let pauseMs = RETRY_MIN_MS;
   for (let attempt = 1; ; attempt++) {
-    probeDiscord();
     const client = buildClient();
     bot = client;
 
@@ -161,9 +170,13 @@ async function connectWithRetry() {
       console.error(`[discord] Connexion refusée (tentative n°${attempt}) :`, result.error.message);
       if (isAuthError(result.error)) throw result.error;
     } else {
-      console.warn(`[discord] Pas connecté après ${LOGIN_TRY_MS / 1000} s (tentative n°${attempt}). Nouvel essai…`);
+      console.warn(`[discord] Pas connecté après ${LOGIN_TRY_MS / 1000} s (tentative n°${attempt}).`);
     }
     await client.destroy().catch(() => {});
+
+    console.log(`[discord] Nouvel essai dans ${Math.round(pauseMs / 1000)} s.`);
+    await new Promise((resolve) => setTimeout(resolve, pauseMs));
+    pauseMs = Math.min(pauseMs * 2, RETRY_MAX_MS);
   }
 }
 
@@ -176,6 +189,7 @@ async function main() {
   console.log('[startup] Chargement des réglages depuis Supabase…');
   await withTimeout(store.init(), 20_000, 'Supabase ne répond pas après 20 s (vérifie SUPABASE_URL).');
   console.log('[startup] Réglages chargés. Connexion à Discord…');
+  await probeDiscord();
   await connectWithRetry();
 }
 
