@@ -222,15 +222,33 @@ function createApi({ getClient }) {
     if (!ctx.text) throw new HttpError(400, 'Message de test vide.');
     const cfg = configOf(guild, ai.ID);
     try {
-      const { text, actions } = await ai.answerDetailed(cfg, ctx.text, ctx);
+      const { text, actions, silent } = await ai.answerDetailed(cfg, ctx.text, ctx);
       sendJson(res, 200, {
         reply: text.slice(0, ai.LIMITS.reply),
+        decision: silent === null ? 'reply' : 'silent',
+        reason: silent ?? '',
         actions: actions.map((a) => ({ name: a.name })),
       });
     } catch (err) {
       if (err instanceof aiClient.AiError) throw new HttpError(err.code === 'no_key' ? 503 : 502, err.message);
       throw err;
     }
+  });
+
+  // Journal des décisions de l'IA (répondre ou se taire, avec la raison) : 100 dernières.
+  route('GET', '/api/guilds/:gid/ai/decisions', async ({ res, params }) => {
+    const { guild } = resolveGuild(params);
+    const rows = await store.listAiDecisions(guild.id, 100);
+    sendJson(res, 200, {
+      rows: rows.map((r) => ({
+        at: r.created_at,
+        channelName: r.channel_id ? (guild.channels.cache.get(r.channel_id)?.name ?? r.channel_id) : null,
+        userName: r.user_id ? nameOf(guild, r.user_id) : null,
+        decision: r.decision,
+        reason: r.reason,
+        excerpt: r.excerpt,
+      })),
+    });
   });
 
   // Mémoire des membres (IA) : liste du serveur, modification et effacement par personne.

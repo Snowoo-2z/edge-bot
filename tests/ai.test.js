@@ -42,6 +42,14 @@ store.listAiMemories = async (g) =>
     .filter(([k]) => k.startsWith(`${g}:`))
     .map(([k, notes]) => ({ user_id: k.split(':')[1], notes, updated_at: '2026-10-11T08:00:00Z' }));
 
+// Journal des décisions de l'IA : table en mémoire.
+const decisionLog = [];
+store.insertAiDecision = async (row) => {
+  decisionLog.push({ ...row });
+};
+store.listAiDecisions = async (g) => decisionLog.filter((d) => d.guild_id === g).reverse().map((d) => ({ ...d }));
+store.purgeAiDecisions = async () => {};
+
 const ai = require('../src/modules/ai');
 const aiClient = require('../src/ai-client');
 const validate = require('../src/dashboard/validate');
@@ -469,6 +477,31 @@ describe('routes du tableau de bord (module IA)', () => {
     assert.equal(memoryWrites.length, 0, 'aucune écriture pendant un test');
   });
 
+  it('journal des décisions et test simulé : une décision « se taire » est visible', async () => {
+    decisionLog.length = 0;
+    decisionLog.push({
+      guild_id: GID,
+      channel_id: TEXT,
+      user_id: '850000000000000021',
+      decision: 'silent',
+      reason: 'Conversation en cours',
+      excerpt: 'vous en pensez quoi',
+      created_at: '2026-10-11T08:00:00Z',
+    });
+    const r = await call('GET', `${AI}/decisions`);
+    assert.equal(r.status, 200);
+    assert.equal(r.data.rows[0].channelName, 'general');
+    assert.equal(r.data.rows[0].decision, 'silent');
+    assert.equal(r.data.rows[0].reason, 'Conversation en cours');
+    assert.equal(r.data.rows[0].excerpt, 'vous en pensez quoi');
+    process.env.MISTRAL_API_KEY = 'cle-de-test';
+    mistral = toolReply([toolCall('stay_silent', { reason: 'Rien à ajouter' })]);
+    const t = await call('POST', `${AI}/test`, { message: 'salut' });
+    assert.equal(t.status, 200, JSON.stringify(t.data));
+    assert.equal(t.data.decision, 'silent');
+    assert.equal(t.data.reason, 'Rien à ajouter');
+  });
+
   it('aperçu : les outils proposés sont listés (mémoire active)', async () => {
     mistral = () => assert.fail('l’aperçu ne doit pas appeler Mistral');
     const r = await call('POST', `${AI}/preview`, { message: 'bonjour' });
@@ -802,7 +835,7 @@ describe('ai : historique court et mémoire dans les réponses Discord', () => {
     await ai.handleMessage(client, message('quoi manger ?', '851000000000000006'));
     assert.match(bodies[0].messages[0].content, /Est végétarien/);
     assert.doesNotMatch(bodies[1].messages[0].content, /Est végétarien/);
-    assert.equal(bodies[0].tools.map((t) => t.function.name).join(','), 'remember,forget');
+    assert.equal(bodies[0].tools.map((t) => t.function.name).join(','), 'stay_silent,remember,forget');
   });
 
   it('historique : plafond de 6 messages gardés', async () => {
@@ -813,4 +846,127 @@ describe('ai : historique court et mémoire dans les réponses Discord', () => {
     assert.equal(last.length, ai.LIMITS.history + 1, 'historique (6) + message courant');
     assert.equal(last.at(-1).content, 'm5');
   });
+});
+
+// ---------------------------------------------------------------------------
+describe('ai : silence et contexte du salon', () => {
+  const G3 = '832000000000000003';
+  const CH3 = '842000000000000003';
+  const client = { user: { id: BOT } };
+  const sent = [];
+  const bodies = [];
+  const fetchCalls = [];
+  let channelHistory = [];
+  let channelFetchError = null;
+  const msg = (content, { id = '900', userId = '853000000000000001', mention = false } = {}) => ({
+    id,
+    content,
+    channelId: CH3,
+    guild: { id: G3, name: 'Serveur Test' },
+    author: { id: userId, bot: false, username: 'lea', displayName: 'Léa' },
+    mentions: { users: { has: (x) => mention && x === BOT }, roles: new Map() },
+    channel: {
+      name: 'général',
+      sendTyping: async () => {},
+      messages: {
+        fetch: async (opts) => {
+          fetchCalls.push(opts);
+          if (channelFetchError) throw channelFetchError;
+          return new Map(channelHistory.map((m) => [m.id, m]));
+        },
+      },
+    },
+    reply: async (payload) => {
+      sent.push(payload.content);
+      return payload;
+    },
+  });
+
+  beforeEach(() => {
+    sent.length = 0;
+    bodies.length = 0;
+    fetchCalls.length = 0;
+    decisionLog.length = 0;
+    channelHistory = [];
+    channelFetchError = null;
+    process.env.MISTRAL_API_KEY = 'cle-de-test';
+    mistral = async (url, init) => {
+      bodies.push(JSON.parse(init.body));
+      return okReply('Réponse')();
+    };
+    store.updateModuleConfig(G3, ai.ID, { ...structuredClone(ai.DEFAULTS), enabled: true, channelIds: [CH3], cooldownSeconds: 0 });
+  });
+
+  it('salon libre : le modèle choisit de ne pas répondre → rien n’est envoyé, décision et raison journalisées', async () => {
+    mistral = async (url, init) => {
+      bodies.push(JSON.parse(init.body));
+      return toolReply([toolCall('stay_silent', { reason: 'Deux membres discutent déjà' })])();
+    };
+    await ai.handleMessage(client, msg('vous en pensez quoi ?'));
+    assert.equal(sent.length, 0);
+    assert.deepEqual(decisionLog.map((d) => [d.decision, d.reason]), [['silent', 'Deux membres discutent déjà']]);
+    assert.ok(bodies[0].tools.some((t) => t.function.name === 'stay_silent'), 'l’outil de silence est proposé');
+  });
+
+  it('sur mention : le bot répond toujours ; stay_silent n’est pas proposé', async () => {
+    await ai.handleMessage(client, msg(`<@${BOT}> ça va ?`, { mention: true }));
+    assert.deepEqual(sent, ['Réponse']);
+    assert.equal((bodies[0].tools ?? []).some((t) => t.function.name === 'stay_silent'), false);
+    assert.equal(decisionLog.at(-1).decision, 'reply');
+  });
+
+  it('sur mention, un silence demandé quand même par le modèle est ignoré', async () => {
+    mistral = sequence(toolReply([toolCall('stay_silent', { reason: 'x' })]), okReply('Oui !'));
+    await ai.handleMessage(client, msg(`<@${BOT}> tu es là ?`, { mention: true }));
+    assert.deepEqual(sent, ['Oui !']);
+  });
+
+  it('contexte : les 15 derniers messages, du plus ancien au plus récent, dans le message utilisateur', async () => {
+    channelHistory = [
+      { id: '903', content: 'Je suis d’accord', author: { id: '853000000000000002', username: 'tom' } },
+      { id: '902', content: 'Le bot a raison', author: { id: BOT, username: 'edge' } },
+      { id: '901', content: 'Qui a fini le dossier ?', author: { id: '853000000000000003', username: 'max', displayName: 'Max' } },
+    ];
+    await ai.handleMessage(client, msg('et toi ?', { id: '904' }));
+    assert.deepEqual(fetchCalls, [{ limit: 15, before: '904' }]);
+    const system = bodies[0].messages[0];
+    const user = bodies[0].messages.at(-1); // après l'historique court du membre
+    assert.doesNotMatch(system.content, /Qui a fini le dossier|Derniers messages/, 'rien du salon dans le prompt système');
+    const u = user.content;
+    assert.match(u, /Max : Qui a fini le dossier/);
+    assert.ok(u.indexOf('Max :') < u.indexOf('Bot :') && u.indexOf('Bot :') < u.indexOf('tom :'), 'ordre chronologique');
+    assert.match(u, /Message auquel répondre, de Léa :\net toi \?$/);
+  });
+
+  it('lecture du salon impossible : la réponse part quand même, sans contexte', async () => {
+    channelFetchError = new Error('Missing Access');
+    await ai.handleMessage(client, msg('salut', { id: '910' }));
+    assert.deepEqual(sent, ['Réponse']);
+    assert.doesNotMatch(bodies[0].messages.at(-1).content, /Derniers messages/);
+  });
+
+  it('limite de taille : les messages les plus récents sont gardés, les plus anciens écartés', async () => {
+    channelHistory = Array.from({ length: 15 }, (_, k) => ({
+      id: String(950 - k),
+      content: `Message ${k} ` + 'x'.repeat(300),
+      author: { id: '853000000000000004', username: 'ana' },
+    }));
+    await ai.handleMessage(client, msg('ok', { id: '960' }));
+    const u = bodies[0].messages.at(-1).content;
+    const lines = u.split('\n').filter((l) => l.startsWith('ana : '));
+    assert.ok(lines.length >= 10 && lines.length < 15, `lignes gardées : ${lines.length}`);
+    assert.ok(u.includes('Message 0 '), 'le plus récent est gardé');
+    assert.ok(!u.includes('Message 14 '), 'le plus ancien est écarté');
+  });
+
+  it('outils : stay_silent proposé seulement si demandé ; texte du salon nettoyé', () => {
+    assert.deepEqual(ai.toolsFor(cfg3(), [], { staySilent: true }).map((t) => t.function.name), ['stay_silent']);
+    assert.deepEqual(ai.toolsFor(cfg3(), [], {}), []);
+    assert.equal(ai.sanitizeLine('<@123456789012345678> salut <#123456789012345678> @everyone', 100), '@membre salut #salon @tous');
+    assert.equal(ai.sanitizeLine('x'.repeat(500), 300).length, 300);
+  });
+
+  function cfg3() {
+    return { ...structuredClone(ai.DEFAULTS) };
+  }
 });

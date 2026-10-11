@@ -2022,8 +2022,10 @@
       resultBlock = h(
         'div',
         { class: 'card' },
-        h('h3', { text: 'Réponse de Mistral' }),
-        h('p', { class: 'ai-pre', text: test.text }),
+        h('h3', { text: test.decision === 'silent' ? 'Le bot se tait' : 'Réponse de Mistral' }),
+        test.decision === 'silent'
+          ? h('p', { class: 'hint', text: `Raison donnée par le modèle : ${test.reason || '—'}. Rien n’aurait été envoyé dans le salon.` })
+          : h('p', { class: 'ai-pre', text: test.text }),
         test.actions?.length
           ? h('p', { class: 'hint', text: `Actions demandées par le modèle (simulées, rien n’a été enregistré ni attribué) : ${test.actions.map((a) => a.name).join(', ')}` })
           : null,
@@ -2037,6 +2039,7 @@
     });
 
     const memoryBox = h('div', null, h('p', { class: 'muted', text: 'Chargement…' }));
+    const decisionsBox = h('div', null, h('p', { class: 'muted', text: 'Chargement…' }));
 
     const root = h(
       'section',
@@ -2160,6 +2163,18 @@
       h(
         'div',
         { class: 'card', 'data-nosave': true },
+        h('h3', { text: 'Décisions récentes' }),
+        h('p', {
+          class: 'hint',
+          text:
+            'Les 100 dernières fois où le bot a répondu ou s’est tu dans un salon libre, avec la raison. Conservé 30 jours. Les réponses aux mentions ne sont jamais silencieuses.',
+        }),
+        h('div', { class: 'actions' }, button('Actualiser', () => loadAiDecisions(decisionsBox), { cls: 'small' })),
+        decisionsBox,
+      ),
+      h(
+        'div',
+        { class: 'card', 'data-nosave': true },
         h('h2', { text: 'Tester' }),
         fieldText('Message d’exemple', S.aiTestInput ?? '', {
           max: 500,
@@ -2183,7 +2198,7 @@
           }),
           button('Tester avec Mistral (consomme des tokens)', async () => {
             const res = await api('POST', gp('/ai/test'), testBody());
-            S.aiTest = { kind: 'reply', text: res.reply, actions: res.actions ?? [] };
+            S.aiTest = { kind: 'reply', text: res.reply, actions: res.actions ?? [], decision: res.decision, reason: res.reason };
             rerender();
           }),
         ),
@@ -2199,7 +2214,52 @@
     root.addEventListener('input', onAiEdit);
     root.addEventListener('change', onAiEdit);
     loadAiMemories(memoryBox);
+    loadAiDecisions(decisionsBox);
     return root;
+  }
+
+  // Journal des décisions : répondre ou se taire, avec la raison (lecture seule).
+  async function loadAiDecisions(box) {
+    try {
+      const { rows } = await api('GET', gp('/ai/decisions'));
+      if (!rows.length) {
+        box.replaceChildren(h('p', { class: 'muted', text: 'Aucune décision enregistrée pour le moment.' }));
+        return;
+      }
+      box.replaceChildren(
+        h(
+          'div',
+          { class: 'table-wrap' },
+          h(
+            'table',
+            null,
+            h(
+              'thead',
+              null,
+              h('tr', null, ...['Date', 'Salon', 'Membre', 'Décision', 'Raison', 'Extrait'].map((t) => h('th', { text: t }))),
+            ),
+            h(
+              'tbody',
+              null,
+              ...rows.map((r) =>
+                h(
+                  'tr',
+                  null,
+                  h('td', { text: fmtDate(r.at) }),
+                  h('td', { text: r.channelName ? `#${r.channelName}` : '—' }),
+                  h('td', { text: r.userName ?? '—' }),
+                  h('td', { text: r.decision === 'silent' ? 'Silence' : 'Réponse' }),
+                  h('td', { text: r.reason || '—' }),
+                  h('td', { text: r.excerpt || '—' }),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    } catch (err) {
+      box.replaceChildren(h('p', { class: 'error', text: err.message }));
+    }
   }
 
   // Notes par membre (liste et modification directes, sans passer par la sauvegarde du module).

@@ -327,7 +327,39 @@ async function listAiMemories(guildId) {
   return data ?? [];
 }
 
+// ---------------------------------------------------------------------------
+// Journal des décisions du module IA : répondre ou ne pas répondre, avec la raison.
+// Table edge_ai_decisions (section 11 de schema.sql). Purgé après AI_DECISIONS_DAYS jours par le bot.
+// ---------------------------------------------------------------------------
+const AI_DECISIONS_TABLE = 'edge_ai_decisions';
+
+async function insertAiDecision(row) {
+  const { error } = await supabase.from(AI_DECISIONS_TABLE).insert(row);
+  if (error) throw new Error(`Écriture Supabase échouée (${AI_DECISIONS_TABLE}) : ${error.message}`);
+}
+
+// Dernières décisions d'un serveur, les plus récentes d'abord.
+async function listAiDecisions(guildId, limit = 100) {
+  const { data, error } = await supabase
+    .from(AI_DECISIONS_TABLE)
+    .select('channel_id, user_id, decision, reason, excerpt, created_at')
+    .eq('guild_id', guildId)
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  if (error) throw new Error(`Lecture Supabase échouée (${AI_DECISIONS_TABLE}) : ${error.message}`);
+  return data ?? [];
+}
+
+// Supprime les décisions plus anciennes que cutoff (date ISO).
+async function purgeAiDecisions(cutoff) {
+  const { error } = await supabase.from(AI_DECISIONS_TABLE).delete().lt('created_at', cutoff);
+  if (error) throw new Error(`Purge Supabase échouée (${AI_DECISIONS_TABLE}) : ${error.message}`);
+}
+
 module.exports = {
+  insertAiDecision,
+  listAiDecisions,
+  purgeAiDecisions,
   loadAiMemory,
   saveAiMemory,
   deleteAiMemory,

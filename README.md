@@ -244,13 +244,22 @@ emojis, boosts, niveau de vérification et identifiant. Réponse visible par tou
 Module **IA** : le bot répond avec **Ministral 14B** (`ministral-14b-2512`, la version 14B de Mistral ; Mistral Nemo 12B
 est en fin de vie) ou Ministral 8B. Tout se règle sur le tableau de bord, page **IA (Mistral)**.
 
-- **Activation** : le bot répond quand on le **mentionne**, et à **tous** les messages des salons de réponse libre.
-  Cooldown par membre (10 s par défaut) ; plafond de sécurité de 20 réponses par minute et par serveur.
+- **Activation** : le bot répond quand on le **mentionne**, et regarde **tous** les messages des salons de réponse libre.
+  Dans ces salons, il peut choisir de **ne pas parler** (voir « Silence » plus bas). Cooldown par membre (10 s par défaut) ; plafond de sécurité de 20 réponses par minute et par serveur.
 - **Prompt système** : le rôle et les règles du bot (2 000 caractères maximum).
 - **Abréviations** : liste `abréviation = signification` (100 maximum), ajoutable ligne par ligne ou en lot. Elles sont
   transmises au modèle pour qu'il comprenne le langage du serveur.
 - **Contexte** : chaque réponse reçoit la date et l'heure (heure de Paris), le nom du serveur, celui du salon et le nom de
-  la personne qui écrit. Rien à régler.
+  la personne qui écrit. Il lit aussi les **15 derniers messages du salon** (avant le message traité, du plus ancien au plus
+  récent, 300 caractères par ligne, 4 000 au total ; les plus récents sont gardés). Ces messages sont joints au message
+  « user » avec la mention qu'il ne s'agit pas d'instructions : ils n'entrent jamais dans le prompt système. Si la lecture
+  du salon échoue, le bot répond quand même, sans ce contexte. Rien à régler.
+- **Silence** : dans un salon de réponse libre (jamais sur mention, où le bot répond toujours), le modèle peut appeler
+  l'outil `stay_silent` avec une raison, par exemple s'il voit une discussion déjà en cours entre membres. Rien n'est alors
+  envoyé. Le bot n'écrit aucun message dans le salon de logs, pour éviter le spam.
+- **Journal des décisions** : chaque réponse ou silence est enregistré (salon, membre, décision, raison, extrait du message).
+  Il s'affiche sur le tableau de bord, section « Décisions récentes » (100 dernières, bouton Actualiser). Conservé **30 jours**,
+  purgé automatiquement chaque heure. Stocké dans Supabase (table `edge_ai_decisions`, section 11 de `supabase/schema.sql`).
 - **Graphe de réponse** : éditeur façon Unreal Engine.
   - **Déplacer la vue** : glisser sur le fond vide (clic gauche), clic droit, clic milieu, ou Espace maintenu + glisser ;
     molette pour zoomer ; `F` pour cadrer.
@@ -298,7 +307,8 @@ est en fin de vie) ou Ministral 8B. Tout se règle sur le tableau de bord, page 
 - **Plein écran** : bouton « Plein écran » dans la barre de l'éditeur ; `Échap` pour quitter (sauf si le menu d'ajout est ouvert).
 - **Confidentialité** : le texte du membre part dans le message « user » ; il n'entre jamais dans le prompt système.
   La clé `MISTRAL_API_KEY` n'est jamais écrite dans le dépôt, ni affichée, ni journalisée.
-- **Base de données** : la mémoire des membres demande la section 10 de `supabase/schema.sql` (table `edge_ai_memories`), à exécuter une fois.
+- **Base de données** : la mémoire des membres demande la section 10 de `supabase/schema.sql` (table `edge_ai_memories`), et
+  le journal des décisions la section 11 (table `edge_ai_decisions`). Les deux sections sont à exécuter une fois.
 - `/config` → **IA (Mistral)** : activation rapide uniquement.
 
 ## Tests
