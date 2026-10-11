@@ -63,7 +63,16 @@ function withTimeout(promise, ms, message) {
   ]).finally(() => clearTimeout(timer));
 }
 
+// Journal des interactions reçues : permet de voir si Discord les transmet au bot.
+function describeInteraction(interaction) {
+  if (interaction.isChatInputCommand()) return `commande /${interaction.commandName}`;
+  if (interaction.isModalSubmit()) return `modale ${interaction.customId}`;
+  return `${interaction.componentType ? 'composant' : 'interaction'} ${interaction.customId ?? ''}`;
+}
+
 client.on(Events.InteractionCreate, async (interaction) => {
+  const started = Date.now();
+  console.log(`[interaction] reçue : ${describeInteraction(interaction)} (${interaction.guildId ?? 'MP'})`);
   try {
     if (interaction.isChatInputCommand()) {
       if (interaction.commandName === 'config') return await handleConfigCommand(interaction);
@@ -80,8 +89,15 @@ client.on(Events.InteractionCreate, async (interaction) => {
       ? interaction.followUp(payload)
       : interaction.reply(payload);
     reply.catch(() => {});
+  } finally {
+    const ms = Date.now() - started;
+    if (ms > 2500) console.warn(`[interaction] traitement lent : ${ms} ms`);
   }
 });
+
+// Messages internes de discord.js (avertissements, erreurs de client).
+client.on(Events.Warn, (message) => console.warn('[discord] avertissement :', message));
+client.on(Events.Error, (error) => console.error('[discord] erreur client :', error?.message ?? error));
 
 ticket.registerEvents(client);
 welcome.registerEvents(client);
