@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits, Events } = require('discord.js');
+const { Client, GatewayIntentBits, Events, RESTEvents } = require('discord.js');
 const { handleConfigCommand, handleConfigInteraction } = require('./config');
 const ticket = require('./modules/ticket');
 const welcome = require('./modules/welcome');
@@ -76,6 +76,10 @@ function registerHandlers(client) {
   });
 
   client.on(Events.Warn, (message) => console.warn('[discord] avertissement :', message));
+  // Limites de débit REST : une attente ici retarde toutes les réponses aux interactions.
+  client.rest.on(RESTEvents.RateLimited, (info) =>
+    console.warn(`[rest] limite de débit : ${info.method} ${info.route} (attente ${Math.ceil(info.timeToReset / 1000)} s, global ${info.global})`),
+  );
   client.on(Events.Error, (error) => console.error('[discord] erreur client :', error?.message ?? error));
 
   client.on(Events.InteractionCreate, handleInteraction);
@@ -99,7 +103,14 @@ function describeInteraction(interaction) {
 
 async function handleInteraction(interaction) {
   const started = Date.now();
-  console.log(`[interaction] reçue : ${describeInteraction(interaction)} (${interaction.guildId ?? 'MP'})`);
+  const label = describeInteraction(interaction);
+  console.log(`[interaction] reçue : ${label} (${interaction.guildId ?? 'MP'})`);
+  // Discord annule une interaction sans réponse au bout de 3 s (« l'application ne répond pas »).
+  const watchdog = setTimeout(() => {
+    if (!interaction.replied && !interaction.deferred) {
+      console.warn(`[interaction] pas encore acquittée après 2,5 s : ${label}`);
+    }
+  }, 2500);
   try {
     if (interaction.isChatInputCommand()) {
       if (interaction.commandName === 'config') return await handleConfigCommand(interaction);
@@ -123,7 +134,10 @@ async function handleInteraction(interaction) {
       : interaction.reply(payload);
     reply.catch(() => {});
   } finally {
+    clearTimeout(watchdog);
     const ms = Date.now() - started;
+    const acked = interaction.replied || interaction.deferred;
+    console.log(`[interaction] ${label} traitée en ${ms} ms (acquittée : ${acked ? 'oui' : 'non'})`);
     if (ms > 2500) console.warn(`[interaction] traitement lent : ${ms} ms`);
   }
 }

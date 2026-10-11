@@ -238,8 +238,12 @@ async function fetchChannel(guild, channelId) {
 async function handleCommand(interaction) {
   const guild = interaction.guild;
   if (!guild) return interaction.reply(ephemeralPayload('Cette commande ne fonctionne que sur un serveur.'));
+  // Accusé de réception immédiat (Discord attend une réponse dans les 3 s) ; tout le reste est édité ensuite.
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  const say = (text) => interaction.editReply({ embeds: [embed(text)] });
+
   const cfg = cfgOf(guild.id);
-  if (!cfg.enabled) return interaction.reply(ephemeralPayload('Les giveaways ne sont pas activés sur ce serveur.'));
+  if (!cfg.enabled) return say('Les giveaways ne sont pas activés sur ce serveur.');
 
   const allowed = canCreate({
     cfg,
@@ -247,27 +251,20 @@ async function handleCommand(interaction) {
     isManager: interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild),
   });
   if (!allowed) {
-    return interaction.reply(
-      ephemeralPayload('Tu n’as pas la permission de créer un giveaway. Demande à un admin de te donner un rôle autorisé.'),
-    );
+    return say('Tu n’as pas la permission de créer un giveaway. Demande à un admin de te donner un rôle autorisé.');
   }
 
   const prize = interaction.options.getString('prix', true).trim();
   const durationMs = parseDuration(interaction.options.getString('duree', true));
   if (!durationMs) {
-    return interaction.reply(
-      ephemeralPayload('Durée invalide. Exemples : `30m`, `2h`, `3j`, `1j 12h`. Minimum 1 minute, maximum 30 jours.'),
-    );
+    return say('Durée invalide. Exemples : `30m`, `2h`, `3j`, `1j 12h`. Minimum 1 minute, maximum 30 jours.');
   }
   const winnersCount = Math.min(MAX_WINNERS, Math.max(1, interaction.options.getInteger('gagnants') ?? 1));
 
   const chosenId = interaction.options.getChannel('salon')?.id ?? cfg.channelId ?? interaction.channelId;
   const channel = await fetchChannel(guild, chosenId);
-  if (!channel?.isTextBased()) {
-    return interaction.reply(ephemeralPayload('Salon introuvable ou non textuel.'));
-  }
+  if (!channel?.isTextBased()) return say('Salon introuvable ou non textuel.');
 
-  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   const now = Date.now();
   const g = {
     id: crypto.randomUUID().slice(0, 8),
@@ -288,13 +285,13 @@ async function handleCommand(interaction) {
     g.message_id = message.id;
   } catch (err) {
     console.error('[giveaways] publication impossible :', err.message);
-    return interaction.editReply({ content: '❌ Impossible de publier le giveaway (permissions du bot dans ce salon ?).' });
+    return say('❌ Impossible de publier le giveaway (permissions du bot dans ce salon ?).');
   }
   giveaways.set(g.id, g);
   persist(g);
   const endUnix = Math.floor(Date.parse(g.ends_at) / 1000);
   return interaction.editReply({
-    content: `✅ Giveaway publié dans <#${channel.id}>. Fin <t:${endUnix}:R>.`,
+    embeds: [embed(`✅ Giveaway publié dans <#${channel.id}>. Fin <t:${endUnix}:R>.`)],
   });
 }
 

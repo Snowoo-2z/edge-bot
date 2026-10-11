@@ -182,19 +182,17 @@ async function handleCommand(interaction) {
 async function handleSubmit(interaction) {
   const guild = interaction.guild;
   if (!guild) return;
+  // Accusé de réception immédiat (Discord attend une réponse dans les 3 s) ; tout le reste est édité ensuite.
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  const say = (text) => interaction.editReply({ embeds: [embed(text)] });
+
   const cfg = cfgOf(guild.id);
-  if (!cfg.enabled || !cfg.channelId) {
-    return interaction.reply(ephemeralPayload('Les suggestions ne sont pas activées sur ce serveur.'));
-  }
+  if (!cfg.enabled || !cfg.channelId) return say('Les suggestions ne sont pas activées sur ce serveur.');
   const channel =
     guild.channels.cache.get(cfg.channelId) ?? (await guild.channels.fetch(cfg.channelId).catch(() => null));
-  if (!channel?.isTextBased()) {
-    return interaction.reply(ephemeralPayload('Le salon des suggestions est introuvable. Un admin doit le reconfigurer.'));
-  }
+  if (!channel?.isTextBased()) return say('Le salon des suggestions est introuvable. Un admin doit le reconfigurer.');
 
   const content = interaction.fields.getTextInputValue('content').trim();
-  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-
   const now = Date.now();
   const s = {
     id: crypto.randomUUID().slice(0, 8),
@@ -214,11 +212,11 @@ async function handleSubmit(interaction) {
     s.message_id = message.id;
   } catch (err) {
     console.error('[suggestions] publication impossible :', err.message);
-    return interaction.editReply({ content: '❌ Impossible de publier la suggestion (permissions du bot dans ce salon ?).' });
+    return say('❌ Impossible de publier la suggestion (permissions du bot dans ce salon ?).');
   }
   suggestions.set(s.id, s);
   persist(s);
-  return interaction.editReply({ content: `✅ Ta suggestion a été publiée dans <#${channel.id}>. Les votes durent 3 jours.` });
+  return interaction.editReply({ embeds: [embed(`✅ Ta suggestion a été publiée dans <#${channel.id}>. Les votes durent 3 jours.`)] });
 }
 
 async function handleVote(interaction) {
