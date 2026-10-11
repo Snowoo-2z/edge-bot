@@ -1,12 +1,11 @@
 // Module « Niveaux » de /config : thème de la carte /level, annonces de passage de niveau.
-// Les règles d'XP (vocal toutes les 30 s, messages) sont dans src/xp-rules.js et src/leveling.js.
+// Les règles de gain d'XP ne sont volontairement pas affichées dans Discord (voir src/xp-rules.js).
 const { AttachmentBuilder, ButtonStyle, ChannelType, ChannelSelectMenuBuilder, MessageFlags } = require('discord.js');
 const { getModuleConfig, updateModuleConfig } = require('../store');
 const { embed, button, row, selectMenu, toggleButton, textModal, moduleSelectRow, ephemeralPayload, truncate } = require('../ui');
 const { MODULE_LIST } = require('./registry');
 const { THEMES, THEME_LIST } = require('../welcome-image');
 const { renderLevelCard, LEVEL_DEFAULT_THEME } = require('../level-card');
-const { VOICE_XP, VOICE_TICK_MS, TEXT_XP } = require('../xp-rules');
 
 const ID = 'levels';
 const DEFAULT_LEVEL_UP = 'Bravo à {user} qui passe {level}';
@@ -51,11 +50,6 @@ function renderMain(guild) {
         { name: 'Annonces de niveau', value: cfg.enabled ? '🟢 Activées' : '⚪ Désactivées', inline: true },
         { name: 'Salon des annonces', value: channel, inline: true },
         { name: 'Message d’annonce', value: truncate(levelUpText(cfg), 300), inline: false },
-        {
-          name: 'Gains',
-          value: `Vocal : ${VOICE_XP} XP toutes les ${VOICE_TICK_MS / 1000} s · Messages : ${TEXT_XP} XP par message`,
-          inline: false,
-        },
         { name: 'Commandes', value: '`/level` · `/leaderboard`', inline: false },
       ),
     ],

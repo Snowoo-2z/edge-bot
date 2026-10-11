@@ -1,5 +1,5 @@
 // Carte du classement (PNG) : top du serveur, avec rang, pseudo, niveau et temps vocal.
-// Les montants d'XP ne sont jamais affichés.
+// Les montants d'XP ne sont pas affichés sur le classement.
 // Même système de thèmes que les autres cartes ; la hauteur s'adapte au nombre de lignes.
 const { createCanvas } = require('@napi-rs/canvas');
 const { ensureFonts, paintBase, roundRect, circle, wrap, THEMES, W } = require('./welcome-image');

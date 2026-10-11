@@ -87,7 +87,9 @@ Le temps passé en salon vocal et les messages écrits rapportent de l'XP. **AFK
 
 - **20 XP toutes les 30 secondes** passées en vocal. Le temps vocal total est enregistré (affiché en heures et minutes).
 - **5 XP par message** écrit, sans limite de fréquence.
-- **L'XP n'est jamais affichée** : ni sur la carte `/level`, ni sur le classement. On y voit le niveau, le rang et le temps vocal.
+- **Carte `/level`** : niveau, barre de progression, XP actuelle / XP du niveau suivant, rang et temps vocal.
+- **Classement** : rang, pseudo, niveau et temps vocal (sans montant d'XP).
+- Les règles de gain ne sont pas affichées dans Discord.
 - **Niveau** = racine(XP / 100) : le niveau N demande 100 × N² XP au total.
 - Les bots ne gagnent pas d'XP.
 
