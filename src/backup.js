@@ -12,6 +12,7 @@
 const crypto = require('crypto');
 const { ChannelType, OverwriteType } = require('discord.js');
 const store = require('./store');
+const { packJson, unpackJson } = require('./pack');
 const { embed, toggleButton, row, moduleSelectRow } = require('./ui');
 const { MODULE_LIST } = require('./modules/registry');
 const { log: logEntry } = require('./modules/logs');
@@ -175,7 +176,8 @@ async function enforceRetention(guildId) {
 
 async function createBackup(guild, kind = 'manual') {
   const { summary, data, skipped } = await capture(guild, kind);
-  const row = await store.insertBackup({ guild_id: guild.id, kind, guild_name: guild.name, summary, data });
+  // Données compressées (gzip + base64) : une sauvegarde prend ~5 à 10 fois moins de place en base.
+  const row = await store.insertBackup({ guild_id: guild.id, kind, guild_name: guild.name, summary, data_z: packJson(data) });
   await enforceRetention(guild.id);
   return { id: row.id, kind: row.kind, createdAt: row.created_at, summary: row.summary, skipped };
 }
@@ -363,7 +365,9 @@ async function startRestore(guild, backupId, confirmName) {
   if (!row) fail('Sauvegarde introuvable pour ce serveur.');
   return startJob(guild.id, 'restore', async () => {
     const safety = await createBackup(guild, 'pre_restore');
-    const report = await applySnapshot(guild, row.data);
+    const snapshot = row.data_z ? unpackJson(row.data_z) : row.data; // anciennes lignes : jsonb non compressé
+    if (!snapshot) fail('Sauvegarde vide ou illisible.');
+    const report = await applySnapshot(guild, snapshot);
     logEntry(guild, {
       category: 'moderation',
       event: 'backupRestore',

@@ -375,6 +375,7 @@
     { id: 'securite', label: 'Sécurité', icon: '🛡️', status: (m) => m.security.raid.enabled || m.security.nuke.enabled, desc: 'Anti-raid, anti-nuke, verrouillage et liste blanche.' },
     { id: 'roles-reaction', label: 'Rôles réaction', icon: '🎭', status: (m) => (m.reaction_roles.panels || []).length > 0, desc: 'Panneaux : réagir à un message donne un rôle.' },
     { id: 'sauvegardes', label: 'Sauvegardes', icon: '💾', module: 'backups', desc: 'Sauvegarde quotidienne, création et restauration.' },
+    { id: 'ia', label: 'IA (Mistral)', icon: '🤖', module: 'ai', desc: 'Réponses du bot : prompt, abréviations, nœuds par mots-clés.' },
     { id: 'embed', label: 'Créateur d’embed', icon: '🧩', desc: 'Construire un embed, modèles, envoi.' },
   ];
 
@@ -401,6 +402,7 @@
       securite: viewSecurity,
       'roles-reaction': viewReactionRoles,
       sauvegardes: viewBackups,
+      ia: viewAi,
     };
 
     const select = h(
@@ -774,6 +776,323 @@
   // -------------------------------------------------------------------------
   // Liens
   // -------------------------------------------------------------------------
+
+  // -------------------------------------------------------------------------
+  // IA (Mistral) : prompt système, abréviations, nœuds déclenchés par mots-clés
+  // -------------------------------------------------------------------------
+
+  const AI_MODELS = [
+    { value: 'ministral-14b-2512', label: 'Ministral 14B (recommandé)' },
+    { value: 'ministral-8b-2512', label: 'Ministral 8B (plus léger, moins cher)' },
+  ];
+  const AI_TEMPS = [
+    { value: '0.2', label: 'Précis (0,2)' },
+    { value: '0.5', label: 'Équilibré (0,5)' },
+    { value: '0.8', label: 'Créatif (0,8)' },
+  ];
+  const AI_MAX_ABBR = 100;
+  const AI_MAX_NODES = 50;
+
+  // Brouillon gardé dans S : ajouter ou supprimer une ligne ne fait pas perdre les autres saisies.
+  function aiDraft() {
+    if (!S.aiDraft || S.aiDraft.gid !== S.gid) {
+      const cfg = clone(S.data.modules.ai) ?? {};
+      cfg.abbreviations = cfg.abbreviations ?? [];
+      cfg.nodes = cfg.nodes ?? [];
+      cfg.channelIds = cfg.channelIds ?? [];
+      S.aiDraft = { gid: S.gid, cfg };
+    }
+    return S.aiDraft.cfg;
+  }
+
+  // « abréviation = signification » ou « abréviation : signification », une par ligne.
+  function parseAbbreviationLines(raw) {
+    return String(raw ?? '')
+      .split('\n')
+      .map((line) => {
+        const m = line.match(/^([^=:]+)[=:](.+)$/);
+        return m ? { short: m[1].trim(), meaning: m[2].trim() } : null;
+      })
+      .filter((x) => x && x.short && x.meaning);
+  }
+
+  function viewAi() {
+    const d = aiDraft();
+    const test = S.aiTest ?? null;
+
+    const save = async () => {
+      const payload = {
+        enabled: d.enabled,
+        model: d.model,
+        systemPrompt: d.systemPrompt,
+        temperature: d.temperature,
+        maxReplyTokens: d.maxReplyTokens,
+        channelIds: d.channelIds,
+        cooldownSeconds: d.cooldownSeconds,
+        abbreviations: d.abbreviations,
+        nodes: d.nodes,
+      };
+      const res = await api('PUT', gp('/modules/ai'), payload);
+      S.data.modules.ai = res.config;
+      S.aiDraft = null;
+      toast('Module IA enregistré.');
+      rerender();
+    };
+
+    const abbrRows = d.abbreviations.map((a, i) =>
+      h(
+        'div',
+        { class: 'row' },
+        fieldText('Abréviation', a.short, { max: 30, onInput: (v) => (a.short = v) }),
+        fieldText('Signification', a.meaning, { max: 200, onInput: (v) => (a.meaning = v) }),
+        h(
+          'div',
+          { class: 'actions' },
+          button(
+            'Supprimer',
+            async () => {
+              d.abbreviations.splice(i, 1);
+              rerender();
+            },
+            { cls: 'danger small' },
+          ),
+        ),
+      ),
+    );
+
+    const addBulk = async () => {
+      const parsed = parseAbbreviationLines(S.aiBulk);
+      if (!parsed.length) throw new Error('Aucune ligne reconnue : écris « abréviation = signification ».');
+      const seen = new Set(d.abbreviations.map((a) => a.short.toLowerCase()));
+      let added = 0;
+      for (const item of parsed) {
+        if (seen.has(item.short.toLowerCase())) continue;
+        if (d.abbreviations.length >= AI_MAX_ABBR) break;
+        seen.add(item.short.toLowerCase());
+        d.abbreviations.push(item);
+        added += 1;
+      }
+      S.aiBulk = '';
+      toast(`${added} abréviation(s) ajoutée(s). Pense à enregistrer.`);
+      rerender();
+    };
+
+    const nodeCards = d.nodes.map((n, i) =>
+      h(
+        'div',
+        null,
+        h(
+          'div',
+          { class: 'node' },
+          h(
+            'div',
+            { class: 'page-head' },
+            h('strong', { text: `Nœud ${i + 1} · ${n.label || (n.keywords ?? [])[0] || 'sans nom'}` }),
+            h(
+              'div',
+              { class: 'actions' },
+              button(
+                '↑',
+                async () => {
+                  if (i === 0) return;
+                  [d.nodes[i - 1], d.nodes[i]] = [d.nodes[i], d.nodes[i - 1]];
+                  rerender();
+                },
+                { cls: 'small', title: 'Monter' },
+              ),
+              button(
+                '↓',
+                async () => {
+                  if (i >= d.nodes.length - 1) return;
+                  [d.nodes[i + 1], d.nodes[i]] = [d.nodes[i], d.nodes[i + 1]];
+                  rerender();
+                },
+                { cls: 'small', title: 'Descendre' },
+              ),
+              button(
+                'Supprimer',
+                async () => {
+                  d.nodes.splice(i, 1);
+                  rerender();
+                },
+                { cls: 'danger small' },
+              ),
+            ),
+          ),
+          fieldSwitch('Nœud actif', null, n.enabled !== false, (v) => (n.enabled = v)),
+          fieldText('Nom du nœud (facultatif)', n.label ?? '', { max: 60, onInput: (v) => (n.label = v) }),
+          fieldText('Déclencheur : mots-clés (séparés par des virgules)', (n.keywords ?? []).join(', '), {
+            max: 1000,
+            hint: 'Mot entier : « bug » ne déclenche pas « bugs ». Accents et majuscules sont ignorés.',
+            onInput: (v) => (n.keywords = v.split(',').map((s) => s.trim()).filter(Boolean)),
+          }),
+          fieldText('Action : consigne ajoutée au prompt', n.instruction ?? '', {
+            max: 500,
+            multiline: true,
+            required: true,
+            hint: 'Ajoutée au prompt système uniquement pour les messages qui déclenchent ce nœud.',
+            onInput: (v) => (n.instruction = v),
+          }),
+        ),
+        i < d.nodes.length - 1 ? h('div', { class: 'node-arrow', text: '↓' }) : null,
+      ),
+    );
+
+    let resultBlock = null;
+    if (test?.kind === 'preview') {
+      resultBlock = h(
+        'div',
+        { class: 'card' },
+        h('h3', { text: 'Prompt système final (version enregistrée)' }),
+        h('p', {
+          class: 'hint',
+          text: test.matched.length
+            ? `Nœuds déclenchés : ${test.matched.map((m) => m.label).join(', ')}`
+            : 'Aucun nœud déclenché par ce message.',
+        }),
+        h('pre', { class: 'ai-pre', text: test.system }),
+      );
+    } else if (test?.kind === 'reply') {
+      resultBlock = h(
+        'div',
+        { class: 'card' },
+        h('h3', { text: 'Réponse de Mistral' }),
+        h('p', { class: 'ai-pre', text: test.text }),
+      );
+    }
+
+    return h(
+      'section',
+      null,
+      pageHead(
+        '🤖 IA (Mistral)',
+        'Le bot répond avec Ministral 14B. Prompt, abréviations et nœuds se règlent ici ; enregistre avant de tester.',
+      ),
+      h(
+        'div',
+        { class: 'card' },
+        fieldSwitch(
+          'IA activée',
+          'Le bot répond quand on le mentionne, et librement dans les salons choisis.',
+          d.enabled,
+          (v) => (d.enabled = v),
+        ),
+        fieldSelect(
+          'Modèle',
+          d.model,
+          AI_MODELS,
+          (v) => (d.model = v),
+          'Clé requise : MISTRAL_API_KEY sur l’hébergeur. Elle n’apparaît jamais ici.',
+        ),
+        fieldSelect('Créativité', String(d.temperature), AI_TEMPS, (v) => (d.temperature = Number(v))),
+        fieldNumber('Longueur maximale de la réponse (tokens, 50 à 1000)', d.maxReplyTokens, {
+          min: 50,
+          max: 1000,
+          onInput: (v) => (d.maxReplyTokens = v),
+        }),
+        fieldNumber('Délai entre deux réponses à un même membre (secondes, 0 à 600)', d.cooldownSeconds, {
+          min: 0,
+          max: 600,
+          onInput: (v) => (d.cooldownSeconds = v),
+        }),
+        fieldChecks(
+          'Salons de réponse libre',
+          channelsOf(TEXT_KINDS).map((c) => ({ id: c.id, label: channelLabel(c) })),
+          d.channelIds,
+          (v) => (d.channelIds = v),
+          'Sans salon choisi, le bot ne répond que lorsqu’on le mentionne.',
+        ),
+      ),
+      h(
+        'div',
+        { class: 'card' },
+        h('h2', { text: 'Prompt système' }),
+        fieldText('Rôle et règles du bot', d.systemPrompt, {
+          max: 2000,
+          multiline: true,
+          required: true,
+          onInput: (v) => (d.systemPrompt = v),
+        }),
+      ),
+      h(
+        'div',
+        { class: 'card' },
+        h('h2', { text: `Abréviations (${d.abbreviations.length} / ${AI_MAX_ABBR})` }),
+        h('p', { class: 'hint', text: 'Le bot comprendra ces abréviations dans les messages des membres.' }),
+        d.abbreviations.length
+          ? h('div', null, abbrRows)
+          : h('p', { class: 'muted', text: 'Aucune abréviation pour le moment.' }),
+        h(
+          'div',
+          { class: 'actions' },
+          button(
+            'Ajouter une abréviation',
+            async () => {
+              if (d.abbreviations.length >= AI_MAX_ABBR) throw new Error(`${AI_MAX_ABBR} abréviations maximum.`);
+              d.abbreviations.push({ short: '', meaning: '' });
+              rerender();
+            },
+            { cls: 'primary' },
+          ),
+        ),
+        h('h3', { text: 'Ajout en lot' }),
+        fieldText('Une par ligne : abréviation = signification', S.aiBulk ?? '', {
+          max: 5000,
+          multiline: true,
+          onInput: (v) => (S.aiBulk = v),
+        }),
+        h('div', { class: 'actions' }, button('Ajouter ces lignes', addBulk)),
+      ),
+      h(
+        'div',
+        { class: 'card' },
+        h('h2', { text: `Nœuds (${d.nodes.length} / ${AI_MAX_NODES})` }),
+        h('p', {
+          class: 'hint',
+          text: 'Un nœud = un déclencheur (mots-clés) → une action (consigne ajoutée au prompt). Ils s’appliquent dans l’ordre.',
+        }),
+        d.nodes.length ? h('div', null, nodeCards) : h('p', { class: 'muted', text: 'Aucun nœud pour le moment.' }),
+        h(
+          'div',
+          { class: 'actions' },
+          button(
+            'Ajouter un nœud',
+            async () => {
+              if (d.nodes.length >= AI_MAX_NODES) throw new Error(`${AI_MAX_NODES} nœuds maximum.`);
+              d.nodes.push({ enabled: true, label: '', keywords: [], instruction: '' });
+              rerender();
+            },
+            { cls: 'primary' },
+          ),
+        ),
+      ),
+      h(
+        'div',
+        { class: 'card' },
+        h('h2', { text: 'Tester' }),
+        fieldText('Message d’exemple', S.aiTestInput ?? '', {
+          max: 500,
+          onInput: (v) => (S.aiTestInput = v),
+        }),
+        h(
+          'div',
+          { class: 'actions' },
+          button('Voir le prompt final', async () => {
+            const res = await api('POST', gp('/ai/preview'), { message: S.aiTestInput ?? '' });
+            S.aiTest = { kind: 'preview', ...res };
+            rerender();
+          }),
+          button('Tester avec Mistral (consomme des tokens)', async () => {
+            const res = await api('POST', gp('/ai/test'), { message: S.aiTestInput ?? '' });
+            S.aiTest = { kind: 'reply', text: res.reply };
+            rerender();
+          }),
+        ),
+        resultBlock,
+      ),
+      saveButton(save, 'Enregistrer le module IA'),
+    );
+  }
 
   function viewLinks() {
     const cfg = clone(S.data.modules.links);

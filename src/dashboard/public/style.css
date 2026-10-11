@@ -204,3 +204,8 @@ th { color: var(--muted); font-weight: 600; font-size: .82rem; }
   .cat-grid { grid-template-columns: minmax(0, 1fr); }
   .filter { width: 100%; }
 }
+
+/* Module IA : nœuds (déclencheur → action) et aperçu du prompt */
+.node { border: 1px solid var(--line); border-left: 4px solid var(--purple); border-radius: var(--radius); padding: 12px; margin-bottom: 4px; background: var(--panel); }
+.node-arrow { text-align: center; color: var(--muted); font-size: 1.2rem; line-height: 1.2; margin-bottom: 4px; }
+.ai-pre { white-space: pre-wrap; word-break: break-word; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px; font-family: inherit; font-size: .9rem; }

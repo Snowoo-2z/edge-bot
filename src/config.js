@@ -11,6 +11,7 @@ const giveaways = require('./modules/giveaways');
 const logs = require('./modules/logs');
 const moderation = require('./modules/moderation');
 const reactionRoles = require('./modules/reaction-roles');
+const ai = require('./modules/ai');
 const security = require('./modules/security');
 const backups = require('./backup');
 
@@ -25,6 +26,7 @@ const MODULES = {
   [giveaways.ID]: giveaways,
   [logs.ID]: logs,
   [moderation.ID]: moderation,
+  [ai.ID]: ai,
   [reactionRoles.ID]: reactionRoles,
   [security.ID]: security,
   [backups.ID]: backups,

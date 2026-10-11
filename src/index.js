@@ -5,6 +5,7 @@ const welcome = require('./modules/welcome');
 const leveling = require('./leveling');
 const suggestions = require('./modules/suggestions');
 const links = require('./modules/links');
+const ai = require('./modules/ai');
 const giveaways = require('./modules/giveaways');
 const logs = require('./modules/logs');
 const moderation = require('./modules/moderation');
@@ -109,6 +110,7 @@ function registerHandlers(client) {
   ticket.registerEvents(client);
   welcome.registerEvents(client);
   links.registerEvents(client);
+  ai.registerEvents(client);
   suggestions.registerEvents(client);
   giveaways.registerEvents(client);
   registerLogEvents(client);

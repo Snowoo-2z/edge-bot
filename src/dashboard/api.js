@@ -12,6 +12,8 @@ const moderation = require('../modules/moderation');
 const ticket = require('../modules/ticket');
 const security = require('../modules/security');
 const reactionRoles = require('../modules/reaction-roles');
+const ai = require('../modules/ai');
+const aiClient = require('../ai-client');
 const backup = require('../backup');
 const embedModule = require('../modules/embed');
 const leveling = require('../leveling');
@@ -38,6 +40,7 @@ const MODULES = {
   moderation: { module: moderation, sanitize: validate.sanitizeModeration },
   backups: { module: backup, sanitize: validate.sanitizeBackups },
   security: { module: security, sanitize: validate.sanitizeSecurity },
+  ai: { module: ai, sanitize: validate.sanitizeAi },
 };
 
 // Modules dont les données passent par des routes dédiées (panneaux, pairs, publication) :
@@ -170,6 +173,35 @@ function createApi({ getClient }) {
       moderationCommands: moderation.COMMAND_KEYS.map((key) => ({ key, label: moderation.COMMANDS[key].label, permission: moderation.COMMANDS[key].perm_label })),
       modules,
     });
+  });
+
+  // Aperçu du prompt final pour un message donné : aucun appel à Mistral.
+  route('POST', '/api/guilds/:gid/ai/preview', async ({ req, res, params }) => {
+    const { guild } = resolveGuild(params);
+    const body = await readJson(req);
+    const cfg = configOf(guild, ai.ID);
+    const { system, matched } = ai.composeSystemPrompt(cfg, ai.cleanUserText(body?.message));
+    sendJson(res, 200, { system, matched: matched.map((n) => ({ id: n.id, label: n.label || n.keywords[0] })) });
+  });
+
+  // Test réel : un appel à Mistral avec le prompt courant (consomme des tokens).
+  route('POST', '/api/guilds/:gid/ai/test', async ({ req, res, params }) => {
+    const { guild } = resolveGuild(params);
+    const body = await readJson(req);
+    const raw = String(body?.message ?? '');
+    if (raw.length > ai.LIMITS.testMessageChars) {
+      throw new HttpError(400, `Message de test : ${ai.LIMITS.testMessageChars} caractères maximum.`);
+    }
+    const userText = ai.cleanUserText(raw);
+    if (!userText) throw new HttpError(400, 'Message de test vide.');
+    const cfg = configOf(guild, ai.ID);
+    try {
+      const reply = await ai.answer(cfg, userText);
+      sendJson(res, 200, { reply: reply.slice(0, ai.LIMITS.reply) });
+    } catch (err) {
+      if (err instanceof aiClient.AiError) throw new HttpError(err.code === 'no_key' ? 503 : 502, err.message);
+      throw err;
+    }
   });
 
   route('PUT', '/api/guilds/:gid/modules/:module', async ({ req, res, params }) => {

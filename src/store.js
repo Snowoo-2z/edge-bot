@@ -260,7 +260,7 @@ async function loadBackups(guildId) {
 async function loadBackup(guildId, id) {
   const { data, error } = await supabase
     .from(BACKUPS_TABLE)
-    .select(BACKUP_LIST_SELECT + ', data')
+    .select(BACKUP_LIST_SELECT + ', data, data_z')
     .eq('guild_id', guildId)
     .eq('id', id)
     .maybeSingle();

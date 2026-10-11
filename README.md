@@ -230,12 +230,38 @@ uniquement depuis le tableau de bord**.
   et les panneaux de rôles sont remis à jour avec les nouveaux identifiants.
 - Restauration protégée : double confirmation (boîte de confirmation puis saisie du nom exact du serveur). Une
   **sauvegarde de sécurité** est créée juste avant ; si elle échoue, la restauration est annulée.
-- Données : table Supabase `edge_backups` (contenu en JSON). Voir `supabase/schema.sql`, section 8.
+- Données : table Supabase `edge_backups`. Le contenu est **compressé** (JSON → gzip → base64, colonne `data_z`), ce qui
+  réduit la place en base d'environ 5 à 12 fois (mesure sur un instantané de test). Les sauvegardes plus anciennes
+  (colonne `data`, non compressée) restent restaurables. Voir `supabase/schema.sql`, sections 8 et 9.
 
 ## Commande /server
 
 `/server` affiche les informations du serveur : nombre de membres, date de création, propriétaire, salons, rôles,
 emojis, boosts, niveau de vérification et identifiant. Réponse visible par tous.
+
+## IA (Mistral)
+
+Module **IA** : le bot répond avec **Ministral 14B** (`ministral-14b-2512`, la version 14B de Mistral ; Mistral Nemo 12B
+est en fin de vie) ou Ministral 8B. Tout se règle sur le tableau de bord, page **IA (Mistral)**.
+
+- **Activation** : le bot répond quand on le **mentionne**, et à **tous** les messages des salons de réponse libre.
+  Cooldown par membre (10 s par défaut) ; plafond de sécurité de 20 réponses par minute et par serveur.
+- **Prompt système** : le rôle et les règles du bot (2 000 caractères maximum).
+- **Abréviations** : liste `abréviation = signification` (100 maximum), ajoutable ligne par ligne ou en lot. Elles sont
+  transmises au modèle pour qu'il comprenne le langage du serveur.
+- **Nœuds** : un nœud = un **déclencheur** (mots-clés, mots entiers, sans tenir compte des accents ni de la casse) et une
+  **action** (consigne ajoutée au prompt pour ce message seulement). Ordre d'application : celui de la liste. 50 nœuds maximum.
+  Le prompt complet (prompt + abréviations + toutes les consignes) ne peut pas dépasser 12 000 caractères.
+- **Tester** : « Voir le prompt final » montre le prompt exact sans appel réseau ; « Tester avec Mistral » fait un appel réel
+  (consomme des tokens). Enregistre d'abord les modifications : les tests utilisent la version enregistrée.
+- **Confidentialité** : le texte du membre part dans le message « user » ; il n'entre jamais dans le prompt système.
+  La clé `MISTRAL_API_KEY` n'est jamais écrite dans le dépôt, ni affichée, ni journalisée.
+- `/config` → **IA (Mistral)** : activation rapide uniquement.
+
+## Tests
+
+`npm test` lance les tests automatisés (`tests/`, `node:test`) : module IA, validation, routes du tableau de bord,
+client Mistral (stubbé), compression des sauvegardes. Aucun appel à Discord, Supabase ou Mistral n'est fait.
 
 ## Tableau de bord web (propriétaire uniquement)
 
@@ -319,6 +345,7 @@ npm start
    | `SUPABASE_URL` | oui | URL du projet Supabase |
    | `SUPABASE_SERVICE_ROLE_KEY` | oui | clé service_role Supabase |
    | `DASHBOARD_PASSWORD` | non | mot de passe du tableau de bord web (12 caractères minimum ; sans cette variable, `/dashboard` est désactivé) |
+   | `MISTRAL_API_KEY` | non | clé API Mistral pour le module IA (sans elle : pas de réponse IA, le test du tableau de bord renvoie 503) |
    | `NODE_VERSION` | non | `22` |
 
 4. **Create Web Service**. Le service écoute sur le port fourni par Render (`PORT`).

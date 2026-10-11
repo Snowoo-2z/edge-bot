@@ -135,3 +135,11 @@ create index if not exists edge_backups_guild_created_idx on public.edge_backups
 
 -- Même règle que ci-dessus : seule la clé service_role (le bot) y accède.
 alter table public.edge_backups enable row level security;
+
+-- ---------------------------------------------------------------------------
+-- 9. Compression des sauvegardes (à exécuter une fois, après la section 8)
+--    Les nouvelles sauvegardes sont stockées dans « data_z » (JSON compressé gzip, en base64).
+--    Les anciennes lignes gardent « data » (jsonb) : le bot lit les deux formats.
+-- ---------------------------------------------------------------------------
+alter table public.edge_backups add column if not exists data_z text;
+alter table public.edge_backups alter column data drop not null;

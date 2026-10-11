@@ -50,6 +50,12 @@ const MODULE_LIST = [
     description: 'Journal détaillé : messages, membres, vocal, salons, rôles, modération',
   },
   {
+    id: 'ai',
+    label: 'IA (Mistral)',
+    emoji: '🤖',
+    description: 'Réponses du bot avec Mistral : prompt, abréviations, nœuds par mots-clés',
+  },
+  {
     id: 'reaction_roles',
     label: 'Rôles par réaction',
     emoji: '🎭',

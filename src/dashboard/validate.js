@@ -6,6 +6,8 @@ const { THEMES } = require('../welcome-image');
 const ticket = require('../modules/ticket');
 const logs = require('../modules/logs');
 const moderation = require('../modules/moderation');
+const ai = require('../modules/ai');
+const crypto = require('node:crypto');
 
 const SNOWFLAKE = /^\d{17,20}$/;
 const TEXT_KINDS = [ChannelType.GuildText, ChannelType.GuildAnnouncement];
@@ -365,7 +367,90 @@ function sanitizeBackups(guild, input) {
   return pick(input, ['enabled'], (key, value) => bool(value, 'Sauvegarde quotidienne'));
 }
 
+// ---------------------------------------------------------------------------
+// Module IA : prompt, abréviations et nœuds
+// ---------------------------------------------------------------------------
+
+function number(value, label, min, max) {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < min || value > max) {
+    fail(`${label} : valeur entre ${min} et ${max} attendue.`);
+  }
+  return value;
+}
+
+function abbreviationsList(value) {
+  if (!Array.isArray(value)) fail('Abréviations : liste attendue.');
+  if (value.length > ai.LIMITS.abbrCount) fail(`Abréviations : ${ai.LIMITS.abbrCount} maximum.`);
+  const seen = new Set();
+  return value.map((item, i) => {
+    const short = text(item?.short, `Abréviation ${i + 1}`, ai.LIMITS.abbrShort, { required: true });
+    const meaning = text(item?.meaning, `Signification de « ${short} »`, ai.LIMITS.abbrMeaning, { required: true });
+    const key = short.toLowerCase();
+    if (seen.has(key)) fail(`Abréviation en double : « ${short} ».`);
+    seen.add(key);
+    return { short, meaning };
+  });
+}
+
+function nodesList(value) {
+  if (!Array.isArray(value)) fail('Nœuds : liste attendue.');
+  if (value.length > ai.LIMITS.nodeCount) fail(`Nœuds : ${ai.LIMITS.nodeCount} maximum.`);
+  const ids = new Set();
+  return value.map((item, i) => {
+    const label = text(item?.label ?? '', `Nœud ${i + 1} : nom`, ai.LIMITS.nodeLabel);
+    const instruction = text(item?.instruction, `Nœud ${i + 1} : consigne`, ai.LIMITS.instruction, { required: true });
+    if (!Array.isArray(item?.keywords)) fail(`Nœud ${i + 1} : liste de mots-clés attendue.`);
+    if (item.keywords.length > ai.LIMITS.keywordsPerNode) fail(`Nœud ${i + 1} : ${ai.LIMITS.keywordsPerNode} mots-clés maximum.`);
+    const keywords = item.keywords.map((k, j) =>
+      text(k, `Nœud ${i + 1}, mot-clé ${j + 1}`, ai.LIMITS.keywordLen, { required: true }),
+    );
+    if (!keywords.length) fail(`Nœud ${i + 1} : au moins un mot-clé.`);
+    if (typeof item.enabled !== 'boolean' && item.enabled !== undefined) fail(`Nœud ${i + 1} : activé, oui ou non attendu.`);
+    let id = typeof item.id === 'string' && /^[a-z0-9-]{1,40}$/i.test(item.id) ? item.id : crypto.randomUUID();
+    if (ids.has(id)) id = crypto.randomUUID();
+    ids.add(id);
+    return { id, enabled: item.enabled ?? true, label, keywords, instruction };
+  });
+}
+
+function sanitizeAi(guild, input, current = {}) {
+  const patch = pick(
+    input,
+    ['enabled', 'model', 'systemPrompt', 'temperature', 'maxReplyTokens', 'channelIds', 'cooldownSeconds', 'abbreviations', 'nodes'],
+    (key, value) => {
+      switch (key) {
+        case 'enabled':
+          return bool(value, 'Module IA');
+        case 'model':
+          return oneOf(value, ai.MODELS, 'Modèle');
+        case 'systemPrompt':
+          return text(value, 'Prompt système', ai.LIMITS.promptChars, { required: true });
+        case 'temperature':
+          return number(value, 'Créativité', 0, 1);
+        case 'maxReplyTokens':
+          return integer(value, 'Longueur de réponse (tokens)', 50, 1000);
+        case 'channelIds':
+          return channelIds(guild, value, 'Salons de réponse libre', TEXT_KINDS, 10);
+        case 'cooldownSeconds':
+          return integer(value, 'Délai entre deux réponses (secondes)', 0, 600);
+        case 'abbreviations':
+          return abbreviationsList(value);
+        case 'nodes':
+          return nodesList(value);
+        default:
+          return undefined;
+      }
+    },
+  );
+  const merged = { ...current, ...patch };
+  if (ai.promptBudget(merged) > ai.LIMITS.maxPromptChars) {
+    fail(`Prompt complet trop long (${ai.LIMITS.maxPromptChars} caractères maximum, prompt + abréviations + consignes). Raccourcis une consigne.`);
+  }
+  return patch;
+}
+
 module.exports = {
+  sanitizeAi,
   ValidationError,
   sanitizeBackups,
   sanitizeSecurity,
