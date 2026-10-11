@@ -252,9 +252,11 @@ est en fin de vie) ou Ministral 8B. Tout se règle sur le tableau de bord, page 
 - **Contexte** : chaque réponse reçoit la date et l'heure (heure de Paris), le nom du serveur, celui du salon et le nom de
   la personne qui écrit. Rien à régler.
 - **Graphe de réponse** : éditeur façon Unreal Engine.
-  - **Déplacer la vue** : clic droit, clic milieu, ou Espace maintenu + glisser ; molette pour zoomer ; `F` pour cadrer.
-  - **Sélectionner** : clic sur un nœud ; `Maj` + clic pour ajouter ; glisser sur le fond vide dessine un rectangle ;
-    `Ctrl+A` tout sélectionner. Glisser un nœud sélectionné déplace tout le groupe.
+  - **Déplacer la vue** : glisser sur le fond vide (clic gauche), clic droit, clic milieu, ou Espace maintenu + glisser ;
+    molette pour zoomer ; `F` pour cadrer.
+  - **Sélectionner** : clic sur un nœud (un clic sur le fond vide désélectionne) ; `Maj` + clic pour ajouter ou retirer ;
+    `Maj` + glisser sur le fond dessine un rectangle de sélection ; `Ctrl+A` tout sélectionner. Glisser un nœud
+    sélectionné déplace tout le groupe.
   - **Ajouter** : clic droit sur le fond, puis taper dans la recherche (« prix » trouve le nœud qui contient « prix » et le
     centre ; `Entrée` prend le premier résultat ; `Échap` ferme).
   - **Copier / coller** : `Ctrl+C`, `Ctrl+V` (collé à la souris), `Ctrl+D` (dupliqué, les fils entre les copies sont recréés).

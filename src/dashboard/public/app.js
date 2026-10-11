@@ -1429,7 +1429,7 @@
         class: 'hint graph-help',
         text:
           'Glisse depuis une sortie (à droite) vers une entrée (à gauche). Clic droit sur le fond : ajouter un nœud. ' +
-          'Glisser sur le fond : sélection (Maj pour ajouter). Clic droit, clic milieu ou Espace + glisser : déplacer la vue. ' +
+          'Glisser sur le fond : déplacer la vue. Clic sur un nœud : sélectionner (Maj + clic pour ajouter). Maj + glisser sur le fond : rectangle de sélection. ' +
           'Ctrl+Z / Ctrl+Y : annuler / rétablir. Ctrl+C, Ctrl+V, Ctrl+D : copier, coller, dupliquer. Ctrl+A : tout sélectionner. F : cadrer. Suppr : supprimer.',
       }),
     );
@@ -1611,7 +1611,8 @@
   }
 
   // Clic gauche sur une broche : fil. Clic gauche sur un nœud : sélection et glisser (groupe).
-  // Clic gauche sur le fond : rectangle de sélection. Clic droit, clic milieu ou Espace + glisser : vue.
+  // Glisser sur le fond : déplacement de la vue. Maj + glisser sur le fond : rectangle de sélection.
+  // Maj + clic : ajouter ou retirer un nœud. Clic droit, clic milieu ou Espace + glisser : vue.
   function onGraphPointerDown(e) {
     const view = aiView();
     view.panMoved = false; // un nouveau geste repart de zéro (le menu ne s'ouvre pas après un glisser)
@@ -1671,14 +1672,13 @@
         before: clone(graphNow()),
       };
       paintSelection();
-    } else if (e.button === 1 || e.button === 2 || (e.button === 0 && view.space)) {
-      view.drag = { kind: 'pan', start: { x: e.clientX, y: e.clientY }, pan0: { x: view.panX, y: view.panY }, moved: false };
+    } else if (e.button === 1 || e.button === 2 || (e.button === 0 && (view.space || !e.shiftKey))) {
+      // Fond vide, glisser de base : déplacement de la vue. Un simple clic sur le fond désélectionne.
+      view.drag = { kind: 'pan', start: { x: e.clientX, y: e.clientY }, pan0: { x: view.panX, y: view.panY }, moved: false, deselect: e.button === 0 && !view.space };
       view.panMoved = false;
-    } else if (e.button === 0) {
-      // Fond vide : rectangle de sélection (Maj : ajoute à la sélection).
-      const additive = e.shiftKey;
-      view.drag = { kind: 'marquee', start: worldPoint(e), additive, base: additive ? new Set(view.sel) : new Set(), moved: false, rect: null };
-      if (!additive) view.sel = new Set();
+    } else {
+      // Maj + glisser sur le fond : rectangle de sélection, ajouté à la sélection existante.
+      view.drag = { kind: 'marquee', start: worldPoint(e), additive: true, base: new Set(view.sel), moved: false, rect: null };
       paintSelection();
     }
   }
@@ -1768,7 +1768,11 @@
     view.drag = null;
     if (!d) return;
     if (d.kind === 'pan') {
-      // Rien à faire : la vue a déjà suivi le pointeur.
+      // La vue a déjà suivi le pointeur ; un simple clic sur le fond vide désélectionne.
+      if (d.deselect && !d.moved && view.sel.size) {
+        view.sel = new Set();
+        repaintGraph();
+      }
     } else if (d.kind === 'node') {
       if (d.moved) {
         pushHistory(d.before, null);
