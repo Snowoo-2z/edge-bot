@@ -1,22 +1,27 @@
 // Système de niveaux basé sur le temps passé en vocal.
 //  - Chaque minute passée dans un salon vocal (AFK, micro coupé, casque coupé compris) rapporte XP_PER_MINUTE.
+//  - Chaque message écrit rapporte TEXT_XP, au plus un gain par TEXT_COOLDOWN_MS et par membre (anti-spam).
+//    Le vocal rapporte donc plus d'XP que le texte.
 //  - Le temps vocal cumulé est compté en secondes (affiché en heures / minutes).
 //  - Niveau = racine(XP / 100) : le niveau N demande 100 × N² XP au total.
 //  - Données en mémoire, sauvegardées par lots dans Supabase (table edge_levels).
 const { AttachmentBuilder } = require('discord.js');
 const store = require('./store');
 const { getModuleConfig } = require('./store');
-const { embed } = require('./ui');
-const { renderLevelCard, LEVEL_DEFAULT_THEME, formatVoice } = require('./level-card');
+const { renderLevelCard, LEVEL_DEFAULT_THEME } = require('./level-card');
+const { renderLeaderboardCard } = require('./leaderboard-card');
 const levelsModule = require('./modules/levels');
 
 const XP_PER_MINUTE = 20;
+const TEXT_XP = 5;
+const TEXT_COOLDOWN_MS = 60_000;
 const TICK_MS = 60_000;
 const FLUSH_MS = 60_000;
 const LEADERBOARD_SIZE = 10;
 
 const records = new Map(); // "guildId:userId" -> { guildId, userId, xp, voiceSeconds, dirty }
 const inVoice = new Set(); // "guildId:userId" actuellement dans un salon vocal (hors bots)
+const lastTextAt = new Map(); // "guildId:userId" -> date du dernier gain texte
 
 const keyOf = (guildId, userId) => `${guildId}:${userId}`;
 
@@ -70,6 +75,18 @@ function scanVoice(client) {
       inVoice.add(keyOf(guild.id, state.id));
     }
   }
+}
+
+// Message écrit sur un serveur : gain d'XP texte, limité par TEXT_COOLDOWN_MS.
+function onMessage(message) {
+  if (!message.guild || !message.author || message.author.bot) return;
+  const key = keyOf(message.guild.id, message.author.id);
+  const now = Date.now();
+  if (now - (lastTextAt.get(key) ?? 0) < TEXT_COOLDOWN_MS) return;
+  lastTextAt.set(key, now);
+  const rec = recordOf(message.guild.id, message.author.id);
+  rec.xp += TEXT_XP;
+  rec.dirty = true;
 }
 
 // Appelée chaque minute : crédite l'XP et le temps vocal à tous les membres présents en vocal.
@@ -153,22 +170,30 @@ async function handleLevel(interaction) {
 
 async function handleLeaderboard(interaction) {
   const guild = interaction.guild;
-  const top = guildRanking(guild.id).slice(0, LEADERBOARD_SIZE);
-  const medals = ['🥇', '🥈', '🥉'];
+  await interaction.deferReply();
 
-  const lines = top.map((rec, i) => {
-    const place = medals[i] ?? `**${i + 1}.**`;
-    return `${place} <@${rec.userId}> · niveau **${levelFromXp(rec.xp)}** · ${Math.floor(rec.xp).toLocaleString('fr-FR')} XP · 🎙️ ${formatVoice(rec.voiceSeconds)}`;
+  const top = guildRanking(guild.id).slice(0, LEADERBOARD_SIZE);
+  const ids = top.map((rec) => rec.userId);
+  const members = ids.length ? await guild.members.fetch({ user: ids }).catch(() => null) : null;
+  const rows = top.map((rec, i) => ({
+    rank: i + 1,
+    name: members?.get(rec.userId)?.displayName ?? `Membre ${rec.userId.slice(-4)}`,
+    level: levelFromXp(rec.xp),
+    xp: rec.xp,
+    voiceSeconds: rec.voiceSeconds,
+  }));
+
+  const { theme } = getModuleConfig(guild.id, levelsModule.ID, levelsModule.DEFAULTS);
+  const png = await renderLeaderboardCard({
+    rows,
+    theme: theme ?? LEVEL_DEFAULT_THEME,
+    subtitle: `${XP_PER_MINUTE} XP par minute en vocal · ${TEXT_XP} XP par message écrit`,
   });
 
-  const e = embed(
-    lines.length
-      ? lines.join('\n')
-      : 'Personne n’a encore gagné d’XP. Rejoins un salon vocal pour commencer !',
-  ).setTitle('🏆 Classement vocal');
-  e.setFooter({ text: `${XP_PER_MINUTE} XP par minute en vocal · AFK compris` });
-
-  return interaction.reply({ embeds: [e], allowedMentions: { parse: [] } });
+  return interaction.editReply({
+    files: [new AttachmentBuilder(png, { name: 'leaderboard.png' })],
+    allowedMentions: { parse: [] },
+  });
 }
 
 // Sauvegarde immédiate à l'arrêt du service (Render envoie SIGTERM lors d'un redéploiement).
@@ -178,8 +203,10 @@ async function flushOnExit() {
 
 module.exports = {
   XP_PER_MINUTE,
+  TEXT_XP,
   init,
   onVoiceStateUpdate,
+  onMessage,
   scanVoice,
   tick,
   flush,

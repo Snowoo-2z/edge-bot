@@ -24,11 +24,11 @@ function themeLabel(id) {
 function renderMain(guild) {
   const cfg = cfgOf(guild.id);
   return {
-    content: '🏅 **Module Niveaux** · le temps passé en vocal rapporte de l’XP (AFK compris).',
+    content: '🏅 **Module Niveaux** · le vocal rapporte de l’XP (AFK compris), les messages aussi, un peu moins.',
     embeds: [
       embed().addFields(
         { name: 'Thème de la carte /level', value: themeLabel(cfg.theme), inline: true },
-        { name: 'Gain', value: '20 XP par minute en vocal', inline: true },
+        { name: 'Gain', value: '20 XP par minute en vocal · 5 XP par message (1 gain par minute)', inline: false },
         { name: 'Commandes', value: '`/level` · `/leaderboard`', inline: false },
       ),
     ],

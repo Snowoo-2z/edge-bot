@@ -77,6 +77,7 @@ function registerHandlers(client) {
 
   client.on(Events.InteractionCreate, handleInteraction);
   client.on(Events.VoiceStateUpdate, (oldState, newState) => leveling.onVoiceStateUpdate(oldState, newState));
+  client.on(Events.MessageCreate, (message) => leveling.onMessage(message));
   client.once(Events.ClientReady, (c) => leveling.scanVoice(c));
 
   ticket.registerEvents(client);

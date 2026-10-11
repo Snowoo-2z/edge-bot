@@ -67,11 +67,11 @@ function seeded(seed) {
 }
 
 // Neige : points de tailles variées, plus denses vers le bas.
-function drawSnow(g, count) {
+function drawSnow(g, count, h = H) {
   const rand = seeded(7);
   for (let i = 0; i < count; i++) {
     const x = rand() * W;
-    const y = rand() * H;
+    const y = rand() * h;
     const r = 1 + rand() * rand() * 4;
     g.fillStyle = `rgba(255,255,255,${(0.35 + rand() * 0.55).toFixed(2)})`;
     circle(g, x, y, r);
@@ -213,35 +213,35 @@ async function fetchAvatar(url) {
 
 // Fond complet d'un thème : dégradé, halos, décor propre au thème, cadre.
 // Réutilisé par la carte de bienvenue et la carte de niveau.
-function paintBase(g, t) {
+function paintBase(g, t, h = H) {
   // 1. Fond dégradé du thème
-  const bg = g.createLinearGradient(0, 0, W, H);
+  const bg = g.createLinearGradient(0, 0, W, h);
   bg.addColorStop(0, t.stops[0]);
   bg.addColorStop(0.55, t.stops[1]);
   bg.addColorStop(1, t.stops[2]);
   g.fillStyle = bg;
-  g.fillRect(0, 0, W, H);
+  g.fillRect(0, 0, W, h);
 
   // 2. Halos décoratifs
   g.fillStyle = 'rgba(255,255,255,0.06)';
   circle(g, 860, 30, 240);
   g.fill();
-  circle(g, -30, 390, 180);
+  circle(g, -30, h - 10, 180);
   g.fill();
   g.fillStyle = t.glow.replace(/[\d.]+\)$/, '0.10)');
-  circle(g, 930, 350, 90);
+  circle(g, 930, h - 50, 90);
   g.fill();
 
   // 2b. Décor propre au thème
   if (t.decor === 'bats') {
     drawBats(g);
   } else if (t.decor === 'noel') {
-    drawSnow(g, 80);
+    drawSnow(g, 80, h);
     drawGarland(g);
   }
 
   // 3. Cadre arrondi
-  roundRect(g, 28, 28, W - 56, H - 56, 34);
+  roundRect(g, 28, 28, W - 56, h - 56, 34);
   g.fillStyle = 'rgba(255,255,255,0.07)';
   g.fill();
   g.lineWidth = 3;
