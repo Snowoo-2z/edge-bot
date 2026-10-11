@@ -85,18 +85,23 @@ Les polices (Inter, licence SIL OFL) sont incluses dans `assets/fonts/`. Aucun f
 
 Le temps passé en salon vocal et les messages écrits rapportent de l'XP. **AFK, micro coupé et casque coupé comptent aussi en vocal.**
 
-- **20 XP par minute** passée en vocal. Le temps vocal total est enregistré (affiché en heures et minutes).
-- **5 XP par message** écrit. Un seul gain par minute et par membre (anti-spam) : le vocal rapporte donc plus que le texte.
+- **20 XP toutes les 30 secondes** passées en vocal. Le temps vocal total est enregistré (affiché en heures et minutes).
+- **5 XP par message** écrit, sans limite de fréquence.
+- **L'XP n'est jamais affichée** : ni sur la carte `/level`, ni sur le classement. On y voit le niveau, le rang et le temps vocal.
 - **Niveau** = racine(XP / 100) : le niveau N demande 100 × N² XP au total.
 - Les bots ne gagnent pas d'XP.
 
 Commandes (disponibles pour tout le monde) :
 - **`/level`** : carte PNG avec ton niveau, ta barre de progression, ton rang et ton temps vocal.
   Tu peux aussi afficher celui d'un membre : `/level membre:@quelqu'un`.
-- **`/leaderboard`** : image PNG du top 10 du serveur (rang, pseudo, niveau, XP, temps vocal), dans le thème des niveaux.
+- **`/leaderboard`** : image PNG du top 10 du serveur (rang, pseudo, niveau, temps vocal), dans le thème des niveaux.
 
 Thème de la carte : `/config` → **🏅 Niveaux**. Le thème par défaut est le **violet foncé**
 (les mêmes thèmes que la carte de bienvenue sont disponibles).
+
+**Annonces de niveau** (même module) : active le bouton **Annonces**, choisis le salon avec **Salon**,
+et modifie le message avec **Message**. Par défaut : `Bravo à {user} qui passe {level}`.
+Le message est envoyé en texte seul (sans image). `{user}` est mentionné, `{level}` est le niveau atteint.
 
 > **Base de données** : exécute `supabase/schema.sql` dans le SQL Editor de Supabase (la section 3 crée la table
 > `edge_levels`). Sans elle, le bot démarre mais l'XP n'est pas sauvegardé (un message l'indique dans les logs).
@@ -222,7 +227,8 @@ src/
   welcome-image.js      génération de la carte de bienvenue (PNG)
   level-card.js         carte de niveau /level (PNG)
   leaderboard-card.js   carte du classement /leaderboard (PNG)
-  leveling.js           XP vocal et texte, niveaux, classement, sauvegarde Supabase
+  leveling.js           XP vocal et texte, niveaux, annonces, classement, sauvegarde Supabase
+  xp-rules.js           valeurs de gain d'XP (vocal, texte)
   modules/registry.js   liste des modules affichés dans le menu
   modules/ticket.js     module Ticket (panneau, tickets, textes, images/GIF)
   modules/embed.js      module Créateur d'embed (brouillon, modèles, envoi)

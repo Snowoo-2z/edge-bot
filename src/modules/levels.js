@@ -1,19 +1,33 @@
-// Module « Niveaux » de /config : thème de la carte de niveau (commande /level).
-// Les règles d'XP (20 XP par minute en vocal) sont dans src/leveling.js.
-const { AttachmentBuilder, ButtonStyle, MessageFlags } = require('discord.js');
+// Module « Niveaux » de /config : thème de la carte /level, annonces de passage de niveau.
+// Les règles d'XP (vocal toutes les 30 s, messages) sont dans src/xp-rules.js et src/leveling.js.
+const { AttachmentBuilder, ButtonStyle, ChannelType, ChannelSelectMenuBuilder, MessageFlags } = require('discord.js');
 const { getModuleConfig, updateModuleConfig } = require('../store');
-const { embed, button, row, selectMenu, moduleSelectRow, ephemeralPayload } = require('../ui');
+const { embed, button, row, selectMenu, toggleButton, textModal, moduleSelectRow, ephemeralPayload, truncate } = require('../ui');
 const { MODULE_LIST } = require('./registry');
 const { THEMES, THEME_LIST } = require('../welcome-image');
 const { renderLevelCard, LEVEL_DEFAULT_THEME } = require('../level-card');
+const { VOICE_XP, VOICE_TICK_MS, TEXT_XP } = require('../xp-rules');
 
 const ID = 'levels';
+const DEFAULT_LEVEL_UP = 'Bravo à {user} qui passe {level}';
 const DEFAULTS = {
   theme: LEVEL_DEFAULT_THEME,
+  enabled: false, // annonces de passage de niveau
+  channelId: null,
+  texts: { levelUp: DEFAULT_LEVEL_UP },
 };
 
 function cfgOf(guildId) {
   return getModuleConfig(guildId, ID, DEFAULTS);
+}
+
+function levelUpText(cfg) {
+  return cfg.texts?.levelUp || DEFAULT_LEVEL_UP;
+}
+
+// {user} : mention (pour les annonces). {level} : niveau atteint.
+function fill(template, vars) {
+  return String(template).replace(/\{(user|level)\}/g, (_, k) => vars[k] ?? `{${k}}`);
 }
 
 function themeLabel(id) {
@@ -21,14 +35,27 @@ function themeLabel(id) {
   return `${t.emoji} ${t.label}`;
 }
 
+function render(view, guild) {
+  if (view === 'channel') return renderChannel();
+  return renderMain(guild);
+}
+
 function renderMain(guild) {
   const cfg = cfgOf(guild.id);
+  const channel = cfg.channelId ? `<#${cfg.channelId}>` : '⚠️ non défini';
   return {
-    content: '🏅 **Module Niveaux** · le vocal rapporte de l’XP (AFK compris), les messages aussi, un peu moins.',
+    content: '🏅 **Module Niveaux** · carte /level, classement et annonces de passage de niveau.',
     embeds: [
       embed().addFields(
         { name: 'Thème de la carte /level', value: themeLabel(cfg.theme), inline: true },
-        { name: 'Gain', value: '20 XP par minute en vocal · 5 XP par message (1 gain par minute)', inline: false },
+        { name: 'Annonces de niveau', value: cfg.enabled ? '🟢 Activées' : '⚪ Désactivées', inline: true },
+        { name: 'Salon des annonces', value: channel, inline: true },
+        { name: 'Message d’annonce', value: truncate(levelUpText(cfg), 300), inline: false },
+        {
+          name: 'Gains',
+          value: `Vocal : ${VOICE_XP} XP toutes les ${VOICE_TICK_MS / 1000} s · Messages : ${TEXT_XP} XP par message`,
+          inline: false,
+        },
         { name: 'Commandes', value: '`/level` · `/leaderboard`', inline: false },
       ),
     ],
@@ -45,7 +72,29 @@ function renderMain(guild) {
           default: t.id === cfg.theme,
         })),
       ),
-      row(button('cfg:levels:preview', 'Aperçu de la carte', ButtonStyle.Success, '👁️')),
+      row(
+        toggleButton('cfg:levels:toggle:enabled', 'Annonces', cfg.enabled),
+        button('cfg:levels:view:channel', 'Salon', ButtonStyle.Primary, '📍'),
+        button('cfg:levels:open:texts', 'Message', ButtonStyle.Primary, '✏️'),
+        button('cfg:levels:preview', 'Aperçu de la carte', ButtonStyle.Success, '👁️'),
+      ),
+    ],
+  };
+}
+
+function renderChannel() {
+  return {
+    embeds: [embed('Choisis le salon où sont annoncés les passages de niveau.')],
+    components: [
+      row(
+        new ChannelSelectMenuBuilder()
+          .setCustomId('cfg:levels:pick:channel')
+          .setPlaceholder('Sélectionne un salon')
+          .setChannelTypes(ChannelType.GuildText)
+          .setMinValues(1)
+          .setMaxValues(1),
+      ),
+      row(button('cfg:levels:view:main', '◀ Retour', ButtonStyle.Danger)),
     ],
   };
 }
@@ -58,15 +107,43 @@ async function handleComponent(interaction) {
 
   switch (action) {
     case 'view':
-      return interaction.update(renderMain(guild));
+      return interaction.update(render(arg, guild));
 
-    case 'pick': {
-      if (arg !== 'theme') return;
-      const theme = interaction.values[0];
-      if (!THEMES[theme]) return;
-      cfg.theme = theme;
+    case 'toggle': {
+      if (arg !== 'enabled') return;
+      cfg.enabled = !cfg.enabled;
       updateModuleConfig(guild.id, ID, cfg);
       return interaction.update(renderMain(guild));
+    }
+
+    case 'pick': {
+      if (arg === 'theme') {
+        const theme = interaction.values[0];
+        if (!THEMES[theme]) return;
+        cfg.theme = theme;
+      } else if (arg === 'channel') {
+        cfg.channelId = interaction.values[0];
+      } else {
+        return;
+      }
+      updateModuleConfig(guild.id, ID, cfg);
+      return interaction.update(renderMain(guild));
+    }
+
+    case 'open': {
+      if (arg !== 'texts') return;
+      return interaction.showModal(
+        textModal('cfg:levels:modal:texts', 'Message d’annonce', [
+          {
+            key: 'levelUp',
+            label: 'Message de passage de niveau',
+            max: 300,
+            required: true,
+            value: levelUpText(cfg),
+            placeholder: 'Variables : {user} (mention), {level} (niveau atteint)',
+          },
+        ]),
+      );
     }
 
     case 'preview': {
@@ -99,4 +176,15 @@ async function handleComponent(interaction) {
   }
 }
 
-module.exports = { ID, DEFAULTS, render: (_view, guild) => renderMain(guild), handleComponent };
+async function handleModal(interaction) {
+  const guild = interaction.guild;
+  if (!guild) return;
+  const cfg = cfgOf(guild.id);
+  const value = interaction.fields.getTextInputValue('levelUp').trim();
+  if (value) cfg.texts = { ...cfg.texts, levelUp: value };
+  updateModuleConfig(guild.id, ID, cfg);
+  await interaction.deferUpdate();
+  return interaction.editReply(renderMain(guild));
+}
+
+module.exports = { ID, DEFAULTS, render, handleComponent, handleModal, fill, levelUpText };

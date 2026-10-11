@@ -17,9 +17,9 @@ function formatVoice(seconds) {
  * @param {string} opts.name          pseudo affiché
  * @param {string} [opts.avatarUrl]   URL de l'avatar (png)
  * @param {number} opts.level
- * @param {number} opts.xp            XP totale
+ * @param {number} opts.xp            XP totale (sert à la barre, jamais affichée)
  * @param {number} opts.levelStartXp  XP à partir de laquelle le niveau actuel commence
- * @param {number} opts.nextLevelXp   XP du niveau suivant
+ * @param {number} opts.nextLevelXp   XP du niveau suivant (sert à la barre)
  * @param {number} opts.rank          position dans le serveur
  * @param {number} opts.voiceSeconds  temps total en vocal
  * @param {string} [opts.theme]
@@ -110,11 +110,8 @@ async function renderLevelCard({
 
   g.font = '500 26px EdgeText';
   g.fillStyle = 'rgba(255,255,255,0.88)';
-  g.fillText(
-    `${Math.floor(xp).toLocaleString('fr-FR')} / ${nextLevelXp.toLocaleString('fr-FR')} XP`,
-    barX,
-    barY + barH + 42,
-  );
+  // Pas de montant d'XP sur la carte : seul le niveau suivant est indiqué.
+  g.fillText(`Prochain niveau : ${level + 1}`, barX, barY + barH + 42);
 
   // Rang et temps vocal : ligne du bas, à droite de la barre (le pseudo garde toute la largeur)
   g.textAlign = 'right';

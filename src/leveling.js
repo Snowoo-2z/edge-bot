@@ -1,9 +1,10 @@
-// Système de niveaux basé sur le temps passé en vocal.
-//  - Chaque minute passée dans un salon vocal (AFK, micro coupé, casque coupé compris) rapporte XP_PER_MINUTE.
-//  - Chaque message écrit rapporte TEXT_XP, au plus un gain par TEXT_COOLDOWN_MS et par membre (anti-spam).
-//    Le vocal rapporte donc plus d'XP que le texte.
+// Système de niveaux (vocal et texte).
+//  - Toutes les 30 s passées dans un salon vocal (AFK, micro ou casque coupés compris) : VOICE_XP.
+//  - Chaque message écrit : TEXT_XP (sans limite de fréquence). Le vocal rapporte donc plus que le texte.
 //  - Le temps vocal cumulé est compté en secondes (affiché en heures / minutes).
 //  - Niveau = racine(XP / 100) : le niveau N demande 100 × N² XP au total.
+//  - Passage de niveau : message texte dans le salon choisi (module Niveaux), sans image.
+//  - L'XP n'est jamais affichée aux membres (ni carte /level, ni /leaderboard).
 //  - Données en mémoire, sauvegardées par lots dans Supabase (table edge_levels).
 const { AttachmentBuilder } = require('discord.js');
 const store = require('./store');
@@ -11,17 +12,14 @@ const { getModuleConfig } = require('./store');
 const { renderLevelCard, LEVEL_DEFAULT_THEME } = require('./level-card');
 const { renderLeaderboardCard } = require('./leaderboard-card');
 const levelsModule = require('./modules/levels');
+const { VOICE_XP, VOICE_TICK_MS, TEXT_XP } = require('./xp-rules');
 
-const XP_PER_MINUTE = 20;
-const TEXT_XP = 5;
-const TEXT_COOLDOWN_MS = 60_000;
-const TICK_MS = 60_000;
 const FLUSH_MS = 60_000;
 const LEADERBOARD_SIZE = 10;
 
 const records = new Map(); // "guildId:userId" -> { guildId, userId, xp, voiceSeconds, dirty }
 const inVoice = new Set(); // "guildId:userId" actuellement dans un salon vocal (hors bots)
-const lastTextAt = new Map(); // "guildId:userId" -> date du dernier gain texte
+let discordClient = null; // renseigné au démarrage, sert à envoyer les annonces de niveau
 
 const keyOf = (guildId, userId) => `${guildId}:${userId}`;
 
@@ -41,6 +39,36 @@ function recordOf(guildId, userId) {
     records.set(key, rec);
   }
   return rec;
+}
+
+// Ajoute de l'XP et annonce le passage de niveau si le seuil est franchi.
+function addXp(guildId, userId, amount) {
+  const rec = recordOf(guildId, userId);
+  const before = levelFromXp(rec.xp);
+  rec.xp += amount;
+  rec.dirty = true;
+  const after = levelFromXp(rec.xp);
+  if (after > before) announceLevelUp(guildId, userId, after);
+  return rec;
+}
+
+// Message de passage de niveau dans le salon configuré (si le module est activé).
+function announceLevelUp(guildId, userId, level) {
+  if (!discordClient) return;
+  const cfg = getModuleConfig(guildId, levelsModule.ID, levelsModule.DEFAULTS);
+  if (!cfg.enabled || !cfg.channelId) return;
+  const guild = discordClient.guilds.cache.get(guildId);
+  if (!guild) return;
+  const content = levelsModule.fill(levelsModule.levelUpText(cfg), { user: `<@${userId}>`, level });
+  (async () => {
+    try {
+      const channel = guild.channels.cache.get(cfg.channelId) ?? (await guild.channels.fetch(cfg.channelId));
+      if (!channel?.isTextBased()) return;
+      await channel.send({ content, allowedMentions: { users: [userId] } });
+    } catch (err) {
+      console.error('[niveaux] annonce de niveau :', err.message);
+    }
+  })();
 }
 
 // Charge les niveaux existants depuis Supabase (au démarrage).
@@ -67,8 +95,9 @@ function onVoiceStateUpdate(oldState, newState) {
   else inVoice.delete(key);
 }
 
-// Au démarrage : repère les membres déjà présents dans un salon vocal.
+// Au démarrage : mémorise le client et repère les membres déjà présents dans un salon vocal.
 function scanVoice(client) {
+  discordClient = client;
   for (const guild of client.guilds.cache.values()) {
     for (const state of guild.voiceStates.cache.values()) {
       if (!state.channelId || state.member?.user.bot) continue;
@@ -77,26 +106,18 @@ function scanVoice(client) {
   }
 }
 
-// Message écrit sur un serveur : gain d'XP texte, limité par TEXT_COOLDOWN_MS.
+// Message écrit sur un serveur : gain d'XP texte (bots et messages privés exclus).
 function onMessage(message) {
   if (!message.guild || !message.author || message.author.bot) return;
-  const key = keyOf(message.guild.id, message.author.id);
-  const now = Date.now();
-  if (now - (lastTextAt.get(key) ?? 0) < TEXT_COOLDOWN_MS) return;
-  lastTextAt.set(key, now);
-  const rec = recordOf(message.guild.id, message.author.id);
-  rec.xp += TEXT_XP;
-  rec.dirty = true;
+  addXp(message.guild.id, message.author.id, TEXT_XP);
 }
 
-// Appelée chaque minute : crédite l'XP et le temps vocal à tous les membres présents en vocal.
+// Appelée toutes les 30 s : crédite l'XP et le temps vocal à tous les membres présents en vocal.
 function tick() {
   for (const key of inVoice) {
     const [guildId, userId] = key.split(':');
-    const rec = recordOf(guildId, userId);
-    rec.xp += XP_PER_MINUTE;
-    rec.voiceSeconds += TICK_MS / 1000;
-    rec.dirty = true;
+    const rec = addXp(guildId, userId, VOICE_XP);
+    rec.voiceSeconds += VOICE_TICK_MS / 1000;
   }
 }
 
@@ -121,7 +142,7 @@ async function flush() {
 }
 
 function startTimers() {
-  setInterval(tick, TICK_MS).unref();
+  setInterval(tick, VOICE_TICK_MS).unref();
   setInterval(() => flush(), FLUSH_MS).unref();
 }
 
@@ -150,6 +171,7 @@ async function handleLevel(interaction) {
   const rank = rankOf(guild.id, target.id);
   const { theme } = getModuleConfig(guild.id, levelsModule.ID, levelsModule.DEFAULTS);
 
+  // L'XP sert à la barre de progression uniquement : elle n'est pas écrite sur la carte.
   const png = await renderLevelCard({
     name,
     avatarUrl: target.displayAvatarURL({ extension: 'png', size: 256 }),
@@ -179,7 +201,6 @@ async function handleLeaderboard(interaction) {
     rank: i + 1,
     name: members?.get(rec.userId)?.displayName ?? `Membre ${rec.userId.slice(-4)}`,
     level: levelFromXp(rec.xp),
-    xp: rec.xp,
     voiceSeconds: rec.voiceSeconds,
   }));
 
@@ -187,7 +208,7 @@ async function handleLeaderboard(interaction) {
   const png = await renderLeaderboardCard({
     rows,
     theme: theme ?? LEVEL_DEFAULT_THEME,
-    subtitle: `${XP_PER_MINUTE} XP par minute en vocal · ${TEXT_XP} XP par message écrit`,
+    subtitle: 'Top 10 du serveur',
   });
 
   return interaction.editReply({
@@ -202,7 +223,8 @@ async function flushOnExit() {
 }
 
 module.exports = {
-  XP_PER_MINUTE,
+  VOICE_XP,
+  VOICE_TICK_MS,
   TEXT_XP,
   init,
   onVoiceStateUpdate,

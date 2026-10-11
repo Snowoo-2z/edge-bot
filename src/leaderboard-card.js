@@ -1,4 +1,5 @@
-// Carte du classement (PNG) : top du serveur, avec rang, pseudo, niveau, XP et temps vocal.
+// Carte du classement (PNG) : top du serveur, avec rang, pseudo, niveau et temps vocal.
+// Les montants d'XP ne sont jamais affichés.
 // Même système de thèmes que les autres cartes ; la hauteur s'adapte au nombre de lignes.
 const { createCanvas } = require('@napi-rs/canvas');
 const { ensureFonts, paintBase, roundRect, circle, wrap, THEMES, W } = require('./welcome-image');
@@ -12,7 +13,7 @@ const MEDAL = ['#f2c14e', '#cfd8dc', '#c98a4b'];
 
 /**
  * @param {object} opts
- * @param {Array<{rank:number, name:string, level:number, xp:number, voiceSeconds:number}>} opts.rows
+ * @param {Array<{rank:number, name:string, level:number, voiceSeconds:number}>} opts.rows
  * @param {string} [opts.theme]
  * @param {string} [opts.subtitle]
  * @returns {Promise<Buffer>} PNG
@@ -74,13 +75,12 @@ async function renderLeaderboardCard({ rows, theme = LEVEL_DEFAULT_THEME, subtit
     // Niveau
     g.font = '500 24px EdgeText';
     g.fillStyle = t.light;
-    g.fillText(`Niv. ${row.level}`, 470, cy + 9);
+    g.fillText(`Niveau ${row.level}`, 560, cy + 9);
 
-    // XP et temps vocal (alignés à droite)
+    // Temps vocal (aligné à droite)
     g.textAlign = 'right';
     g.font = '500 24px EdgeText';
     g.fillStyle = 'rgba(255,255,255,0.9)';
-    g.fillText(`${Math.floor(row.xp).toLocaleString('fr-FR')} XP`, 730, cy + 9);
     g.fillText(formatVoice(row.voiceSeconds), W - 90, cy + 9);
   });
 
