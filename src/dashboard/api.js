@@ -175,13 +175,20 @@ function createApi({ getClient }) {
     });
   });
 
+  // Contexte d'un message de test : texte, salon (optionnel) et mention du bot (simulée).
+  const aiContext = (body) => ({
+    text: ai.cleanUserText(body?.message),
+    channelId: validate.isSnowflake(body?.channelId) ? body.channelId : undefined,
+    mentioned: body?.mentioned === true,
+  });
+
   // Aperçu du prompt final pour un message donné : aucun appel à Mistral.
   route('POST', '/api/guilds/:gid/ai/preview', async ({ req, res, params }) => {
     const { guild } = resolveGuild(params);
     const body = await readJson(req);
     const cfg = configOf(guild, ai.ID);
-    const { system, matched } = ai.composeSystemPrompt(cfg, ai.cleanUserText(body?.message));
-    sendJson(res, 200, { system, matched: matched.map((n) => ({ id: n.id, label: n.label || n.keywords[0] })) });
+    const { system, active } = ai.composeSystemPrompt(cfg, aiContext(body));
+    sendJson(res, 200, { system, active: active.map((a) => ({ id: a.id, text: a.text })) });
   });
 
   // Test réel : un appel à Mistral avec le prompt courant (consomme des tokens).
@@ -192,11 +199,11 @@ function createApi({ getClient }) {
     if (raw.length > ai.LIMITS.testMessageChars) {
       throw new HttpError(400, `Message de test : ${ai.LIMITS.testMessageChars} caractères maximum.`);
     }
-    const userText = ai.cleanUserText(raw);
-    if (!userText) throw new HttpError(400, 'Message de test vide.');
+    const ctx = aiContext(body);
+    if (!ctx.text) throw new HttpError(400, 'Message de test vide.');
     const cfg = configOf(guild, ai.ID);
     try {
-      const reply = await ai.answer(cfg, userText);
+      const reply = await ai.answer(cfg, ctx.text, { channelId: ctx.channelId, mentioned: ctx.mentioned });
       sendJson(res, 200, { reply: reply.slice(0, ai.LIMITS.reply) });
     } catch (err) {
       if (err instanceof aiClient.AiError) throw new HttpError(err.code === 'no_key' ? 503 : 502, err.message);

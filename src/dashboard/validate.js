@@ -7,7 +7,7 @@ const ticket = require('../modules/ticket');
 const logs = require('../modules/logs');
 const moderation = require('../modules/moderation');
 const ai = require('../modules/ai');
-const crypto = require('node:crypto');
+const AiGraph = require('./public/ai-graph');
 
 const SNOWFLAKE = /^\d{17,20}$/;
 const TEXT_KINDS = [ChannelType.GuildText, ChannelType.GuildAnnouncement];
@@ -392,31 +392,24 @@ function abbreviationsList(value) {
   });
 }
 
-function nodesList(value) {
-  if (!Array.isArray(value)) fail('Nœuds : liste attendue.');
-  if (value.length > ai.LIMITS.nodeCount) fail(`Nœuds : ${ai.LIMITS.nodeCount} maximum.`);
-  const ids = new Set();
-  return value.map((item, i) => {
-    const label = text(item?.label ?? '', `Nœud ${i + 1} : nom`, ai.LIMITS.nodeLabel);
-    const instruction = text(item?.instruction, `Nœud ${i + 1} : consigne`, ai.LIMITS.instruction, { required: true });
-    if (!Array.isArray(item?.keywords)) fail(`Nœud ${i + 1} : liste de mots-clés attendue.`);
-    if (item.keywords.length > ai.LIMITS.keywordsPerNode) fail(`Nœud ${i + 1} : ${ai.LIMITS.keywordsPerNode} mots-clés maximum.`);
-    const keywords = item.keywords.map((k, j) =>
-      text(k, `Nœud ${i + 1}, mot-clé ${j + 1}`, ai.LIMITS.keywordLen, { required: true }),
-    );
-    if (!keywords.length) fail(`Nœud ${i + 1} : au moins un mot-clé.`);
-    if (typeof item.enabled !== 'boolean' && item.enabled !== undefined) fail(`Nœud ${i + 1} : activé, oui ou non attendu.`);
-    let id = typeof item.id === 'string' && /^[a-z0-9-]{1,40}$/i.test(item.id) ? item.id : crypto.randomUUID();
-    if (ids.has(id)) id = crypto.randomUUID();
-    ids.add(id);
-    return { id, enabled: item.enabled ?? true, label, keywords, instruction };
-  });
+// Graphe de nœuds : validé par le moteur partagé (types, fils, boucles, salons existants).
+function graphOf(guild, value) {
+  try {
+    return AiGraph.parseGraph(value, {
+      channelOk: (id) => {
+        const channel = guild.channels.cache.get(id);
+        return Boolean(channel) && TEXT_KINDS.includes(channel.type);
+      },
+    });
+  } catch (err) {
+    fail(`Graphe : ${err.message}`);
+  }
 }
 
 function sanitizeAi(guild, input, current = {}) {
   const patch = pick(
     input,
-    ['enabled', 'model', 'systemPrompt', 'temperature', 'maxReplyTokens', 'channelIds', 'cooldownSeconds', 'abbreviations', 'nodes'],
+    ['enabled', 'model', 'systemPrompt', 'temperature', 'maxReplyTokens', 'channelIds', 'cooldownSeconds', 'abbreviations', 'graph'],
     (key, value) => {
       switch (key) {
         case 'enabled':
@@ -435,8 +428,8 @@ function sanitizeAi(guild, input, current = {}) {
           return integer(value, 'Délai entre deux réponses (secondes)', 0, 600);
         case 'abbreviations':
           return abbreviationsList(value);
-        case 'nodes':
-          return nodesList(value);
+        case 'graph':
+          return graphOf(guild, value);
         default:
           return undefined;
       }

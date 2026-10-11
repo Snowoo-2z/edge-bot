@@ -375,7 +375,7 @@
     { id: 'securite', label: 'Sécurité', icon: '🛡️', status: (m) => m.security.raid.enabled || m.security.nuke.enabled, desc: 'Anti-raid, anti-nuke, verrouillage et liste blanche.' },
     { id: 'roles-reaction', label: 'Rôles réaction', icon: '🎭', status: (m) => (m.reaction_roles.panels || []).length > 0, desc: 'Panneaux : réagir à un message donne un rôle.' },
     { id: 'sauvegardes', label: 'Sauvegardes', icon: '💾', module: 'backups', desc: 'Sauvegarde quotidienne, création et restauration.' },
-    { id: 'ia', label: 'IA (Mistral)', icon: '🤖', module: 'ai', desc: 'Réponses du bot : prompt, abréviations, nœuds par mots-clés.' },
+    { id: 'ia', label: 'IA (Mistral)', icon: '🤖', module: 'ai', desc: 'Réponses du bot : prompt, abréviations, graphe de nœuds.' },
     { id: 'embed', label: 'Créateur d’embed', icon: '🧩', desc: 'Construire un embed, modèles, envoi.' },
   ];
 
@@ -778,7 +778,7 @@
   // -------------------------------------------------------------------------
 
   // -------------------------------------------------------------------------
-  // IA (Mistral) : prompt système, abréviations, nœuds déclenchés par mots-clés
+  // IA (Mistral) : prompt système, abréviations, graphe de nœuds (style Unreal)
   // -------------------------------------------------------------------------
 
   const AI_MODELS = [
@@ -791,18 +791,26 @@
     { value: '0.8', label: 'Créatif (0,8)' },
   ];
   const AI_MAX_ABBR = 100;
-  const AI_MAX_NODES = 50;
+  const GRAPH_COLORS = { event: '#b9832b', logic: '#2f7fb8', action: '#9b59b6' };
+  const SVG_NS = 'http://www.w3.org/2000/svg';
 
-  // Brouillon gardé dans S : ajouter ou supprimer une ligne ne fait pas perdre les autres saisies.
+  // Brouillon gardé dans S : les modifications non enregistrées survivent aux repeints.
   function aiDraft() {
     if (!S.aiDraft || S.aiDraft.gid !== S.gid) {
       const cfg = clone(S.data.modules.ai) ?? {};
       cfg.abbreviations = cfg.abbreviations ?? [];
-      cfg.nodes = cfg.nodes ?? [];
       cfg.channelIds = cfg.channelIds ?? [];
+      cfg.graph = cfg.graph ?? { n: [], w: [] };
       S.aiDraft = { gid: S.gid, cfg };
+      S.aiView = null;
     }
     return S.aiDraft.cfg;
+  }
+
+  // État de la vue (zoom, position, sélection) : jamais enregistré.
+  function aiView() {
+    if (!S.aiView) S.aiView = { panX: 60, panY: 50, zoom: 1, selected: null, menu: false, status: '', drag: null, panMoved: false };
+    return S.aiView;
   }
 
   // « abréviation = signification » ou « abréviation : signification », une par ligne.
@@ -816,9 +824,484 @@
       .filter((x) => x && x.short && x.meaning);
   }
 
+  // Élément DOM simple : attributs, texte, enfants.
+  function ge(tag, attrs, ...children) {
+    const el = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs ?? {})) {
+      if (v === undefined || v === null || v === false) continue;
+      if (k === 'class') el.className = v;
+      else if (k === 'text') el.textContent = v;
+      else if (k === 'style') el.style.cssText = v;
+      else if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
+      else el.setAttribute(k, v === true ? '' : String(v));
+    }
+    for (const c of children.flat()) if (c !== null && c !== undefined) el.append(c);
+    return el;
+  }
+
+  function svgEl(name, attrs = {}) {
+    const el = document.createElementNS(SVG_NS, name);
+    for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, String(v));
+    return el;
+  }
+
+  // Éléments de l'éditeur courant (recréés à chaque affichage de la page).
+  let graphRefs = null;
+
+  const graphNow = () => aiDraft().graph;
+
+  // Applique une modification du graphe ; en cas de refus (boucle, pin invalide…), le message s'affiche.
+  function tryEdit(change, okMessage = '') {
+    const view = aiView();
+    try {
+      aiDraft().graph = change(graphNow());
+      view.status = okMessage;
+    } catch (err) {
+      view.status = err.message;
+    }
+    repaintGraph();
+  }
+
+  function worldPoint(e) {
+    const view = aiView();
+    const r = graphRefs.viewport.getBoundingClientRect();
+    return { x: (e.clientX - r.left - view.panX) / view.zoom, y: (e.clientY - r.top - view.panY) / view.zoom };
+  }
+
+  function centerWorld() {
+    const view = aiView();
+    const r = graphRefs.viewport.getBoundingClientRect();
+    const n = graphNow().n.length;
+    return {
+      x: (r.width / 2 - view.panX) / view.zoom + (n % 5) * 24 - 60,
+      y: (r.height / 2 - view.panY) / view.zoom + (n % 5) * 24 - 40,
+    };
+  }
+
+  function addNodeAt(type, x, y) {
+    const view = aiView();
+    try {
+      const result = EdgeAiGraph.addNode(graphNow(), type, x, y);
+      aiDraft().graph = result.graph;
+      view.selected = result.id;
+      view.status = 'Nœud ajouté.';
+    } catch (err) {
+      view.status = err.message;
+    }
+    repaintGraph();
+  }
+
+  function wirePath(p1, p2) {
+    const d = Math.max(60, Math.abs(p2.x - p1.x) / 2);
+    return `M ${p1.x} ${p1.y} C ${p1.x + d} ${p1.y}, ${p2.x - d} ${p2.y}, ${p2.x} ${p2.y}`;
+  }
+
+  function applyTransform() {
+    const view = aiView();
+    graphRefs.world.style.transform = `translate(${view.panX}px, ${view.panY}px) scale(${view.zoom})`;
+  }
+
+  function paintWires() {
+    const g = graphNow();
+    const byId = new Map(g.n.map((n) => [n.i, n]));
+    graphRefs.svg.replaceChildren();
+    g.w.forEach(([a, p, b, q], index) => {
+      const p1 = EdgeAiGraph.pinPosition(byId.get(a), p, 'out');
+      const p2 = EdgeAiGraph.pinPosition(byId.get(b), q, 'in');
+      if (!p1 || !p2) return;
+      const path = svgEl('path', { class: 'wire', d: wirePath(p1, p2) });
+      // Clic sur un fil : il est supprimé.
+      path.addEventListener('click', (e) => {
+        e.stopPropagation();
+        tryEdit((gg) => EdgeAiGraph.disconnect(gg, index), 'Fil supprimé.');
+      });
+      graphRefs.svg.append(path);
+    });
+  }
+
+  function refreshSummary(n) {
+    const el = graphRefs.nodesLayer.querySelector(`[data-summary="${n.i}"]`);
+    if (el) el.textContent = EdgeAiGraph.summaryOf(n);
+  }
+
+  function nodeEl(n) {
+    const def = EdgeAiGraph.CATALOG[n.t];
+    const view = aiView();
+    const rows = EdgeAiGraph.nodeRows(n);
+    const el = ge(
+      'div',
+      {
+        class: 'gn' + (view.selected === n.i ? ' sel' : ''),
+        'data-node': n.i,
+        style: `left:${n.x}px;top:${n.y}px;width:${EdgeAiGraph.NODE_W}px;height:${EdgeAiGraph.nodeHeight(n)}px`,
+      },
+      ge('div', { class: 'gn-head', style: `background:${GRAPH_COLORS[def.group]}`, text: def.label }),
+    );
+    def.ins.forEach((p, i) => {
+      const y = EdgeAiGraph.HEADER_H + 11 + i * EdgeAiGraph.ROW_H;
+      el.append(
+        ge('div', { class: 'gn-pin', 'data-pin': p, 'data-dir': 'in', 'data-node': n.i, style: `left:0px;top:${y}px` }),
+        ge('span', { class: 'gn-plabel in', style: `left:12px;top:${y}px`, text: def.pinLabels[p] ?? p }),
+      );
+    });
+    def.outs.forEach((p, i) => {
+      const y = EdgeAiGraph.HEADER_H + 11 + i * EdgeAiGraph.ROW_H;
+      el.append(
+        ge('div', {
+          class: 'gn-pin',
+          'data-pin': p,
+          'data-dir': 'out',
+          'data-node': n.i,
+          style: `left:${EdgeAiGraph.NODE_W}px;top:${y}px`,
+        }),
+        ge('span', { class: 'gn-plabel out', style: `right:12px;top:${y}px`, text: def.pinLabels[p] ?? p }),
+      );
+    });
+    el.append(
+      ge('div', {
+        class: 'gn-body',
+        'data-summary': n.i,
+        style: `top:${EdgeAiGraph.HEADER_H + rows * EdgeAiGraph.ROW_H + 2}px`,
+        text: EdgeAiGraph.summaryOf(n),
+      }),
+    );
+    return el;
+  }
+
+  function paintStatus() {
+    const g = graphNow();
+    const view = aiView();
+    const unwired = EdgeAiGraph.unwiredActions(g).length;
+    const warn = !view.status && unwired > 0;
+    graphRefs.status.className = 'hint graph-status' + (warn ? ' warn' : '');
+    graphRefs.status.textContent =
+      view.status ||
+      (unwired
+        ? `⚠ ${unwired} consigne(s) non reliée(s) : elles ne s’appliquent jamais.`
+        : `${g.n.length} nœud(s), ${g.w.length} fil(s). Glisse une sortie vers une entrée.`);
+  }
+
+  function paintInspector() {
+    const view = aiView();
+    const n = graphNow().n.find((x) => x.i === view.selected);
+    const children = [ge('h3', { text: 'Détails' })];
+    if (!n) {
+      children.push(ge('p', { class: 'hint', text: 'Sélectionne un nœud pour régler ses données.' }));
+    } else {
+      children.push(ge('p', { class: 'graph-node-title', text: EdgeAiGraph.CATALOG[n.t].label }));
+      if (n.t === 'kw') {
+        children.push(
+          fieldText('Mots-clés (séparés par des virgules)', (n.d?.keywords ?? []).join(', '), {
+            max: 1000,
+            hint: 'Mot entier, sans accents ni majuscules : « bug » ne matche pas « bugs ».',
+            onInput: (v) => {
+              n.d = { ...(n.d ?? {}), keywords: v.split(',').map((s) => s.trim()).filter(Boolean) };
+              refreshSummary(n);
+            },
+          }),
+        );
+      }
+      if (n.t === 'channel') {
+        children.push(
+          fieldChecks(
+            'Salons',
+            channelsOf(TEXT_KINDS).map((c) => ({ id: c.id, label: channelLabel(c) })),
+            n.d?.channelIds ?? [],
+            (v) => {
+              n.d = { ...(n.d ?? {}), channelIds: v };
+              repaintGraph();
+            },
+            'Le nœud est vrai pour un message posté dans l’un de ces salons.',
+          ),
+        );
+      }
+      if (n.t === 'add') {
+        children.push(
+          fieldText('Consigne ajoutée au prompt', n.d?.text ?? '', {
+            max: 500,
+            multiline: true,
+            hint: 'Ajoutée au prompt seulement pour les messages où l’entrée « si vrai » est vraie.',
+            onInput: (v) => {
+              n.d = { ...(n.d ?? {}), text: v };
+              refreshSummary(n);
+            },
+          }),
+        );
+      }
+      if (['and', 'or', 'not', 'mention'].includes(n.t)) {
+        children.push(ge('p', { class: 'hint', text: 'Ce nœud n’a pas de réglage : seul son branchement compte.' }));
+      }
+      children.push(
+        button(
+          'Supprimer ce nœud',
+          async () => {
+            const id = n.i;
+            view.selected = null;
+            tryEdit((g) => EdgeAiGraph.removeNode(g, id), 'Nœud supprimé.');
+          },
+          { cls: 'danger small' },
+        ),
+      );
+    }
+    children.push(
+      ge('p', {
+        class: 'hint graph-help',
+        text:
+          'Glisse depuis une sortie (à droite) vers une entrée (à gauche). Clic droit sur le fond : ajouter un nœud. ' +
+          'Molette : zoom. Glisser le fond : déplacer la vue. Suppr : supprimer le nœud sélectionné. Clic sur un fil : le supprimer.',
+      }),
+    );
+    graphRefs.inspector.replaceChildren(...children);
+  }
+
+  // Repeint tout le graphe (nœuds, fils, état, détails) à partir du brouillon.
+  function repaintGraph() {
+    if (!graphRefs) return;
+    applyTransform();
+    paintWires();
+    graphRefs.nodesLayer.replaceChildren(...graphNow().n.map(nodeEl));
+    paintStatus();
+    paintInspector();
+  }
+
+  function closeMenu() {
+    if (!graphRefs) return;
+    graphRefs.menuLayer.replaceChildren();
+    aiView().menu = false;
+  }
+
+  function openMenu(sx, sy, world) {
+    closeMenu();
+    const menu = ge('div', { class: 'graph-menu', style: `left:${sx}px;top:${sy}px` });
+    for (const group of EdgeAiGraph.GROUPS) {
+      menu.append(ge('div', { class: 'graph-menu-title', text: group.label }));
+      for (const [type, def] of Object.entries(EdgeAiGraph.CATALOG).filter(([, d]) => d.group === group.id)) {
+        menu.append(
+          ge('button', {
+            type: 'button',
+            class: 'graph-menu-item',
+            text: def.label,
+            onclick: () => {
+              closeMenu();
+              addNodeAt(type, world.x, world.y);
+            },
+          }),
+        );
+      }
+    }
+    graphRefs.menuLayer.replaceChildren(menu);
+    aiView().menu = true;
+  }
+
+  // Un fil se termine sur une broche de sens opposé.
+  function finishWire(from, to) {
+    const view = aiView();
+    if (from.dir === to.dir) {
+      view.status = 'Relie une sortie à une entrée.';
+      return;
+    }
+    const out = from.dir === 'out' ? from : to;
+    const inp = from.dir === 'in' ? from : to;
+    tryEdit((g) => EdgeAiGraph.connect(g, out.node, out.pin, inp.node, inp.pin), 'Fil créé.');
+  }
+
+  function onGraphPointerDown(e) {
+    const view = aiView();
+    if (e.target.closest('.graph-menu')) return;
+    if (view.menu) closeMenu();
+    if (e.target.closest('path.wire')) return;
+    graphRefs.viewport.focus();
+    const pinEl = e.target.closest('.gn-pin');
+    const nodeEl = e.target.closest('.gn');
+    graphRefs.viewport.setPointerCapture?.(e.pointerId);
+
+    if (e.button === 0 && pinEl) {
+      e.preventDefault();
+      const node = pinEl.dataset.node;
+      const pin = pinEl.dataset.pin;
+      const dir = pinEl.dataset.dir;
+      let from = { node, pin, dir };
+      // Depuis une entrée déjà reliée : on détache le fil et on repart de sa sortie.
+      if (dir === 'in') {
+        const idx = graphNow().w.findIndex(([, , b, q]) => b === node && q === pin);
+        if (idx >= 0) {
+          const [a, p] = graphNow().w[idx];
+          aiDraft().graph = EdgeAiGraph.disconnect(graphNow(), idx);
+          from = { node: a, pin: p, dir: 'out' };
+        }
+      }
+      view.drag = { kind: 'wire', from };
+      const temp = svgEl('path', { class: 'temp' });
+      graphRefs.svg.append(temp);
+      view.drag.temp = temp;
+    } else if (e.button === 0 && nodeEl) {
+      e.preventDefault();
+      const id = nodeEl.dataset.node;
+      const n = graphNow().n.find((x) => x.i === id);
+      view.selected = id;
+      view.status = '';
+      view.drag = { kind: 'node', id, startWorld: worldPoint(e), startNode: { x: n.x, y: n.y }, moved: false };
+      graphRefs.nodesLayer.querySelectorAll('.gn.sel').forEach((el) => el.classList.remove('sel'));
+      nodeEl.classList.add('sel');
+    } else if (e.button === 0 || e.button === 2) {
+      // Fond du canevas : déplacement de la vue.
+      view.drag = { kind: 'pan', start: { x: e.clientX, y: e.clientY }, pan0: { x: view.panX, y: view.panY }, moved: false };
+      view.panMoved = false;
+    }
+  }
+
+  function onGraphPointerMove(e) {
+    const view = aiView();
+    const d = view.drag;
+    if (!d) return;
+    if (d.kind === 'pan') {
+      const dx = e.clientX - d.start.x;
+      const dy = e.clientY - d.start.y;
+      if (Math.abs(dx) + Math.abs(dy) > 4) {
+        d.moved = true;
+        view.panMoved = true;
+      }
+      view.panX = d.pan0.x + dx;
+      view.panY = d.pan0.y + dy;
+      applyTransform();
+    } else if (d.kind === 'node') {
+      const n = graphNow().n.find((x) => x.i === d.id);
+      if (!n) return;
+      const w = worldPoint(e);
+      const nx = Math.max(-5000, Math.min(5000, Math.round(d.startNode.x + (w.x - d.startWorld.x))));
+      const ny = Math.max(-5000, Math.min(5000, Math.round(d.startNode.y + (w.y - d.startWorld.y))));
+      if (nx !== n.x || ny !== n.y) d.moved = true;
+      n.x = nx;
+      n.y = ny;
+      const el = graphRefs.nodesLayer.querySelector(`[data-node="${d.id}"]`);
+      if (el) {
+        el.style.left = `${nx}px`;
+        el.style.top = `${ny}px`;
+      }
+      paintWires();
+    } else if (d.kind === 'wire') {
+      const from = graphNow().n.find((x) => x.i === d.from.node);
+      const fromPos = from && EdgeAiGraph.pinPosition(from, d.from.pin, 'out');
+      if (!fromPos) return;
+      const w = worldPoint(e);
+      d.temp.setAttribute('d', wirePath(fromPos, w));
+    }
+  }
+
+  function onGraphPointerUp(e) {
+    const view = aiView();
+    const d = view.drag;
+    view.drag = null;
+    if (!d) return;
+    if (d.kind === 'pan') {
+      if (!d.moved) view.selected = null;
+      repaintGraph();
+    } else if (d.kind === 'node') {
+      repaintGraph();
+    } else if (d.kind === 'wire') {
+      d.temp.remove();
+      const target = document.elementFromPoint(e.clientX, e.clientY)?.closest?.('.gn-pin');
+      if (target) {
+        finishWire(d.from, { node: target.dataset.node, pin: target.dataset.pin, dir: target.dataset.dir });
+        repaintGraph();
+      } else {
+        view.status = '';
+        repaintGraph();
+      }
+    }
+  }
+
+  function onGraphWheel(e) {
+    e.preventDefault();
+    const view = aiView();
+    const r = graphRefs.viewport.getBoundingClientRect();
+    const mx = e.clientX - r.left;
+    const my = e.clientY - r.top;
+    const zoom = Math.max(0.4, Math.min(1.8, view.zoom * (e.deltaY < 0 ? 1.1 : 0.9)));
+    const wx = (mx - view.panX) / view.zoom;
+    const wy = (my - view.panY) / view.zoom;
+    view.panX = mx - wx * zoom;
+    view.panY = my - wy * zoom;
+    view.zoom = zoom;
+    applyTransform();
+  }
+
+  function onGraphContextMenu(e) {
+    e.preventDefault();
+    const view = aiView();
+    if (view.panMoved) {
+      view.panMoved = false;
+      return;
+    }
+    const r = graphRefs.viewport.getBoundingClientRect();
+    openMenu(e.clientX - r.left, e.clientY - r.top, worldPoint(e));
+  }
+
+  function onGraphKeyDown(e) {
+    const view = aiView();
+    if ((e.key === 'Delete' || e.key === 'Backspace') && view.selected) {
+      e.preventDefault();
+      const id = view.selected;
+      view.selected = null;
+      tryEdit((g) => EdgeAiGraph.removeNode(g, id), 'Nœud supprimé.');
+    }
+  }
+
+  // Éditeur complet : barre d'outils, canevas (nœuds et fils), panneau de détails.
+  function buildGraphEditor() {
+    const viewport = ge('div', { class: 'graph-viewport', tabindex: '0' });
+    const world = ge('div', { class: 'graph-world' });
+    const svg = svgEl('svg', { class: 'graph-wires', width: 1, height: 1 });
+    const nodesLayer = ge('div', { class: 'graph-nodes' });
+    const menuLayer = ge('div');
+    world.append(svg, nodesLayer);
+    viewport.append(world, menuLayer);
+    const status = ge('p', { class: 'hint graph-status' });
+    const inspector = ge('div', { class: 'graph-inspector' });
+    graphRefs = { viewport, world, svg, nodesLayer, menuLayer, status, inspector };
+
+    viewport.addEventListener('pointerdown', onGraphPointerDown);
+    viewport.addEventListener('pointermove', onGraphPointerMove);
+    viewport.addEventListener('pointerup', onGraphPointerUp);
+    viewport.addEventListener('pointercancel', onGraphPointerUp);
+    viewport.addEventListener('wheel', onGraphWheel, { passive: false });
+    viewport.addEventListener('contextmenu', onGraphContextMenu);
+    viewport.addEventListener('keydown', onGraphKeyDown);
+
+    const view = aiView();
+    const toolbar = ge(
+      'div',
+      { class: 'graph-toolbar' },
+      ...Object.entries(EdgeAiGraph.CATALOG).map(([type, def]) =>
+        button(`+ ${def.label}`, async () => {
+          const c = centerWorld();
+          addNodeAt(type, c.x, c.y);
+        }, { cls: 'small' }),
+      ),
+      button('Recentrer', async () => {
+        view.panX = 60;
+        view.panY = 50;
+        view.zoom = 1;
+        applyTransform();
+      }, { cls: 'small' }),
+      button('−', async () => {
+        view.zoom = Math.max(0.4, view.zoom / 1.2);
+        applyTransform();
+      }, { cls: 'small' }),
+      button('+', async () => {
+        view.zoom = Math.min(1.8, view.zoom * 1.2);
+        applyTransform();
+      }, { cls: 'small' }),
+    );
+
+    repaintGraph();
+    return ge('div', { class: 'graph-wrap' }, ge('div', null, toolbar, viewport, status), inspector);
+  }
+
   function viewAi() {
     const d = aiDraft();
     const test = S.aiTest ?? null;
+    const textChannels = channelsOf(TEXT_KINDS);
 
     const save = async () => {
       const payload = {
@@ -830,11 +1313,12 @@
         channelIds: d.channelIds,
         cooldownSeconds: d.cooldownSeconds,
         abbreviations: d.abbreviations,
-        nodes: d.nodes,
+        graph: d.graph,
       };
       const res = await api('PUT', gp('/modules/ai'), payload);
       S.data.modules.ai = res.config;
       S.aiDraft = null;
+      S.aiView = null;
       toast('Module IA enregistré.');
       rerender();
     };
@@ -877,67 +1361,6 @@
       rerender();
     };
 
-    const nodeCards = d.nodes.map((n, i) =>
-      h(
-        'div',
-        null,
-        h(
-          'div',
-          { class: 'node' },
-          h(
-            'div',
-            { class: 'page-head' },
-            h('strong', { text: `Nœud ${i + 1} · ${n.label || (n.keywords ?? [])[0] || 'sans nom'}` }),
-            h(
-              'div',
-              { class: 'actions' },
-              button(
-                '↑',
-                async () => {
-                  if (i === 0) return;
-                  [d.nodes[i - 1], d.nodes[i]] = [d.nodes[i], d.nodes[i - 1]];
-                  rerender();
-                },
-                { cls: 'small', title: 'Monter' },
-              ),
-              button(
-                '↓',
-                async () => {
-                  if (i >= d.nodes.length - 1) return;
-                  [d.nodes[i + 1], d.nodes[i]] = [d.nodes[i], d.nodes[i + 1]];
-                  rerender();
-                },
-                { cls: 'small', title: 'Descendre' },
-              ),
-              button(
-                'Supprimer',
-                async () => {
-                  d.nodes.splice(i, 1);
-                  rerender();
-                },
-                { cls: 'danger small' },
-              ),
-            ),
-          ),
-          fieldSwitch('Nœud actif', null, n.enabled !== false, (v) => (n.enabled = v)),
-          fieldText('Nom du nœud (facultatif)', n.label ?? '', { max: 60, onInput: (v) => (n.label = v) }),
-          fieldText('Déclencheur : mots-clés (séparés par des virgules)', (n.keywords ?? []).join(', '), {
-            max: 1000,
-            hint: 'Mot entier : « bug » ne déclenche pas « bugs ». Accents et majuscules sont ignorés.',
-            onInput: (v) => (n.keywords = v.split(',').map((s) => s.trim()).filter(Boolean)),
-          }),
-          fieldText('Action : consigne ajoutée au prompt', n.instruction ?? '', {
-            max: 500,
-            multiline: true,
-            required: true,
-            hint: 'Ajoutée au prompt système uniquement pour les messages qui déclenchent ce nœud.',
-            onInput: (v) => (n.instruction = v),
-          }),
-        ),
-        i < d.nodes.length - 1 ? h('div', { class: 'node-arrow', text: '↓' }) : null,
-      ),
-    );
-
     let resultBlock = null;
     if (test?.kind === 'preview') {
       resultBlock = h(
@@ -946,9 +1369,9 @@
         h('h3', { text: 'Prompt système final (version enregistrée)' }),
         h('p', {
           class: 'hint',
-          text: test.matched.length
-            ? `Nœuds déclenchés : ${test.matched.map((m) => m.label).join(', ')}`
-            : 'Aucun nœud déclenché par ce message.',
+          text: test.active.length
+            ? `Consignes actives : ${test.active.map((a) => a.text).join(' | ')}`
+            : 'Aucune consigne active pour ce message.',
         }),
         h('pre', { class: 'ai-pre', text: test.system }),
       );
@@ -961,12 +1384,18 @@
       );
     }
 
+    const testBody = () => ({
+      message: S.aiTestInput ?? '',
+      channelId: S.aiTestChannel || undefined,
+      mentioned: Boolean(S.aiTestMention),
+    });
+
     return h(
       'section',
       null,
       pageHead(
         '🤖 IA (Mistral)',
-        'Le bot répond avec Ministral 14B. Prompt, abréviations et nœuds se règlent ici ; enregistre avant de tester.',
+        'Le bot répond avec Ministral 14B. Prompt, abréviations et graphe se règlent ici ; enregistre avant de tester.',
       ),
       h(
         'div',
@@ -997,7 +1426,7 @@
         }),
         fieldChecks(
           'Salons de réponse libre',
-          channelsOf(TEXT_KINDS).map((c) => ({ id: c.id, label: channelLabel(c) })),
+          textChannels.map((c) => ({ id: c.id, label: channelLabel(c) })),
           d.channelIds,
           (v) => (d.channelIds = v),
           'Sans salon choisi, le bot ne répond que lorsqu’on le mentionne.',
@@ -1046,25 +1475,13 @@
       h(
         'div',
         { class: 'card' },
-        h('h2', { text: `Nœuds (${d.nodes.length} / ${AI_MAX_NODES})` }),
+        h('h2', { text: 'Graphe de réponse' }),
         h('p', {
           class: 'hint',
-          text: 'Un nœud = un déclencheur (mots-clés) → une action (consigne ajoutée au prompt). Ils s’appliquent dans l’ordre.',
+          text:
+            'Les événements (mot-clé, salon, mention) et la logique (ET, OU, NON) décident quelles consignes sont ajoutées au prompt pour chaque message.',
         }),
-        d.nodes.length ? h('div', null, nodeCards) : h('p', { class: 'muted', text: 'Aucun nœud pour le moment.' }),
-        h(
-          'div',
-          { class: 'actions' },
-          button(
-            'Ajouter un nœud',
-            async () => {
-              if (d.nodes.length >= AI_MAX_NODES) throw new Error(`${AI_MAX_NODES} nœuds maximum.`);
-              d.nodes.push({ enabled: true, label: '', keywords: [], instruction: '' });
-              rerender();
-            },
-            { cls: 'primary' },
-          ),
-        ),
+        buildGraphEditor(),
       ),
       h(
         'div',
@@ -1074,16 +1491,24 @@
           max: 500,
           onInput: (v) => (S.aiTestInput = v),
         }),
+        fieldSelect(
+          'Salon du test',
+          S.aiTestChannel ?? '',
+          [{ value: '', label: '— aucun —' }, ...textChannels.map((c) => ({ value: c.id, label: channelLabel(c) }))],
+          (v) => (S.aiTestChannel = v),
+          'Pour tester les nœuds « Salon ».',
+        ),
+        fieldSwitch('Le bot est mentionné', 'Pour tester le nœud « Bot mentionné ».', Boolean(S.aiTestMention), (v) => (S.aiTestMention = v)),
         h(
           'div',
           { class: 'actions' },
           button('Voir le prompt final', async () => {
-            const res = await api('POST', gp('/ai/preview'), { message: S.aiTestInput ?? '' });
+            const res = await api('POST', gp('/ai/preview'), testBody());
             S.aiTest = { kind: 'preview', ...res };
             rerender();
           }),
           button('Tester avec Mistral (consomme des tokens)', async () => {
-            const res = await api('POST', gp('/ai/test'), { message: S.aiTestInput ?? '' });
+            const res = await api('POST', gp('/ai/test'), testBody());
             S.aiTest = { kind: 'reply', text: res.reply };
             rerender();
           }),

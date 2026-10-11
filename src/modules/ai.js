@@ -1,14 +1,15 @@
 // Module « IA » : le bot répond avec Mistral (Ministral 14B par défaut).
-//  - Prompt système modifiable, glossaire d'abréviations, et « nœuds » : un nœud = un déclencheur
-//    (mots-clés présents dans le message) + une consigne ajoutée au prompt pour ce message seulement.
+//  - Prompt système modifiable, glossaire d'abréviations.
+//  - Graphe de nœuds (façon Unreal) : des événements (mot-clé, salon, mention) et de la logique (ET, OU, NON)
+//    pilotent des actions « ajouter une consigne ». Seules les consignes dont l'entrée est vraie s'appliquent.
 //  - Le bot répond si on le mentionne, ou dans les salons choisis. Cooldown par membre.
 // Le réglage complet se fait sur le tableau de bord ; /config ne fait que l'activer/désactiver.
-const crypto = require('node:crypto');
 const { ButtonStyle } = require('discord.js');
 const { getModuleConfig, updateModuleConfig } = require('../store');
-const { embed, button, row, toggleButton, moduleSelectRow, ephemeralPayload } = require('../ui');
+const { embed, button, row, moduleSelectRow, ephemeralPayload } = require('../ui');
 const { MODULE_LIST } = require('./registry');
 const aiClient = require('../ai-client');
+const AiGraph = require('../dashboard/public/ai-graph');
 
 const ID = 'ai';
 const MODELS = ['ministral-14b-2512', 'ministral-8b-2512'];
@@ -25,20 +26,15 @@ const DEFAULTS = {
   channelIds: [], // salons où le bot répond à tous les messages (sinon : seulement sur mention)
   cooldownSeconds: 10,
   abbreviations: [], // { short, meaning }
-  nodes: [], // { id, enabled, label, keywords: [], instruction }
+  graph: AiGraph.emptyGraph(), // { n: [...nœuds], w: [...fils] }
 };
 
-// Limites : le prompt complet (prompt + glossaire + toutes les consignes) reste sous MAX_PROMPT_CHARS.
+// Limites : le prompt complet (prompt + glossaire + consignes) reste sous MAX_PROMPT_CHARS.
 const LIMITS = {
   promptChars: 2000,
   abbrCount: 100,
   abbrShort: 30,
   abbrMeaning: 200,
-  nodeCount: 50,
-  nodeLabel: 60,
-  keywordsPerNode: 20,
-  keywordLen: 50,
-  instruction: 500,
   maxPromptChars: 12000,
   userChars: 1000,
   reply: 1900,
@@ -53,30 +49,9 @@ function cfgOf(guildId) {
   return getModuleConfig(guildId, ID, DEFAULTS);
 }
 
-// Minuscules et sans accents, pour comparer « Ticket » et « ticket », « crème » et « creme ».
-const normalize = (s) =>
-  String(s ?? '')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase();
-
-// Mot-clé présent comme mot entier (pas à l'intérieur d'un autre mot).
-function containsKeyword(normalizedText, keyword) {
-  const k = normalize(keyword).trim();
-  if (!k) return false;
-  const escaped = k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`(^|[^\\p{L}\\p{N}])${escaped}($|[^\\p{L}\\p{N}])`, 'u').test(normalizedText);
-}
-
-// Nœuds activés dont au moins un mot-clé est présent dans le message, dans l'ordre de la liste.
-function matchedNodes(cfg, userText) {
-  const text = normalize(userText);
-  return (cfg.nodes ?? []).filter((n) => n.enabled && (n.keywords ?? []).some((k) => containsKeyword(text, k)));
-}
-
-// Prompt système final : base + glossaire + consignes des nœuds déclenchés.
-// Le message de l'utilisateur n'entre jamais dans le prompt système : il part dans un message « user ».
-function composeSystemPrompt(cfg, userText = '') {
+// Prompt système final : base + glossaire + consignes actives (selon le graphe et le message).
+// Le message du membre n'entre jamais dans le prompt système : il part dans un message « user ».
+function composeSystemPrompt(cfg, ctx = {}) {
   const parts = [String(cfg.systemPrompt ?? '').trim() || DEFAULT_PROMPT];
   const abbr = cfg.abbreviations ?? [];
   if (abbr.length) {
@@ -85,21 +60,17 @@ function composeSystemPrompt(cfg, userText = '') {
         abbr.map((a) => `- ${a.short} = ${a.meaning}`).join('\n'),
     );
   }
-  const matched = matchedNodes(cfg, userText);
-  if (matched.length) {
-    parts.push('Consignes pour ce message :\n' + matched.map((n) => `- ${n.instruction}`).join('\n'));
+  const { active } = AiGraph.evaluate(cfg.graph ?? AiGraph.emptyGraph(), ctx);
+  if (active.length) {
+    parts.push('Consignes pour ce message :\n' + active.map((a) => `- ${a.text}`).join('\n'));
   }
-  return { system: parts.join('\n\n'), matched };
+  return { system: parts.join('\n\n'), active };
 }
 
-// Taille du prompt complet si toutes les consignes étaient déclenchées (pour la limite de sauvegarde).
+// Taille du prompt complet si toutes les consignes étaient actives (pour la limite de sauvegarde).
 function promptBudget(cfg) {
-  const pieces = [
-    cfg.systemPrompt ?? '',
-    ...(cfg.abbreviations ?? []).map((a) => `${a.short} = ${a.meaning}`),
-    ...(cfg.nodes ?? []).map((n) => n.instruction ?? ''),
-  ];
-  return pieces.reduce((sum, t) => sum + String(t).length + 2, 0);
+  const abbr = (cfg.abbreviations ?? []).reduce((s, a) => s + `${a.short} = ${a.meaning}`.length + 2, 0);
+  return String(cfg.systemPrompt ?? '').length + abbr + AiGraph.instructionChars(cfg.graph ?? AiGraph.emptyGraph());
 }
 
 function cleanUserText(text) {
@@ -126,9 +97,9 @@ function takeSlot(guildId, userId, cooldownSeconds, now = Date.now()) {
   return true;
 }
 
-// Appel réel à Mistral pour un message (utilisé par le bot et par le test du tableau de bord).
-async function answer(cfg, userText) {
-  const { system } = composeSystemPrompt(cfg, userText);
+// Appel réel à Mistral (bot et test du tableau de bord). ctx = { channelId, mentioned }.
+async function answer(cfg, userText, ctx = {}) {
+  const { system } = composeSystemPrompt(cfg, { text: userText, ...ctx });
   return aiClient.chat({
     model: cfg.model,
     system,
@@ -152,7 +123,7 @@ async function handleMessage(client, message) {
 
   await message.channel.sendTyping().catch(() => {});
   try {
-    const reply = await answer(cfg, userText);
+    const reply = await answer(cfg, userText, { channelId: message.channelId, mentioned });
     await message.reply({ content: reply.slice(0, LIMITS.reply), allowedMentions: { parse: [] } });
   } catch (err) {
     // Pas de message d'erreur dans le salon (évite le spam) : la cause est journalisée.
@@ -167,7 +138,7 @@ function registerEvents(client) {
 }
 
 // ---------------------------------------------------------------------------
-// /config : activation rapide. Le détail (prompt, abréviations, nœuds) est sur le tableau de bord.
+// /config : activation rapide. Le détail (prompt, abréviations, graphe) est sur le tableau de bord.
 // ---------------------------------------------------------------------------
 
 function render(_view, guild) {
@@ -182,7 +153,7 @@ function render(_view, guild) {
         { name: 'Salons de réponse libre', value: channels, inline: false },
         {
           name: 'Réglages',
-          value: 'Prompt système, abréviations et nœuds se modifient sur le tableau de bord.',
+          value: 'Prompt système, abréviations et graphe de nœuds se modifient sur le tableau de bord.',
           inline: false,
         },
       ),
@@ -190,7 +161,12 @@ function render(_view, guild) {
     components: [
       moduleSelectRow(MODULE_LIST, ID),
       row(
-        button(`cfg:${ID}:toggle:enabled`, cfg.enabled ? 'IA : ON' : 'IA : OFF', cfg.enabled ? ButtonStyle.Success : ButtonStyle.Secondary, '🤖'),
+        button(
+          `cfg:${ID}:toggle:enabled`,
+          cfg.enabled ? 'IA : ON' : 'IA : OFF',
+          cfg.enabled ? ButtonStyle.Success : ButtonStyle.Secondary,
+          '🤖',
+        ),
       ),
     ],
   };
@@ -218,15 +194,11 @@ module.exports = {
   MODELS,
   DEFAULT_PROMPT,
   LIMITS,
-  normalize,
-  containsKeyword,
-  matchedNodes,
   composeSystemPrompt,
   cleanUserText,
   promptBudget,
   takeSlot,
   answer,
-  newNodeId: () => crypto.randomUUID().slice(0, 8),
   render,
   handleComponent,
   handleModal,

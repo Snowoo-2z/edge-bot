@@ -12,6 +12,7 @@ const PUBLIC_DIR = path.join(__dirname, 'public');
 const FILES = {
   '/dashboard': { file: 'index.html', type: 'text/html; charset=utf-8' },
   '/dashboard/app.js': { file: 'app.js', type: 'text/javascript; charset=utf-8' },
+  '/dashboard/ai-graph.js': { file: 'ai-graph.js', type: 'text/javascript; charset=utf-8' },
   '/dashboard/style.css': { file: 'style.css', type: 'text/css; charset=utf-8' },
 };
 

@@ -249,9 +249,21 @@ est en fin de vie) ou Ministral 8B. Tout se règle sur le tableau de bord, page 
 - **Prompt système** : le rôle et les règles du bot (2 000 caractères maximum).
 - **Abréviations** : liste `abréviation = signification` (100 maximum), ajoutable ligne par ligne ou en lot. Elles sont
   transmises au modèle pour qu'il comprenne le langage du serveur.
-- **Nœuds** : un nœud = un **déclencheur** (mots-clés, mots entiers, sans tenir compte des accents ni de la casse) et une
-  **action** (consigne ajoutée au prompt pour ce message seulement). Ordre d'application : celui de la liste. 50 nœuds maximum.
-  Le prompt complet (prompt + abréviations + toutes les consignes) ne peut pas dépasser 12 000 caractères.
+- **Graphe de réponse** : éditeur façon Unreal Engine. Clic droit sur le fond pour ajouter un nœud, glisser un nœud pour
+  le déplacer, glisser depuis une **sortie** (à droite) vers une **entrée** (à gauche) pour relier deux broches, cliquer
+  sur un fil pour le supprimer, `Suppr` pour supprimer le nœud sélectionné, molette pour zoomer, glisser le fond pour
+  déplacer la vue. Un panneau de détails règle chaque nœud.
+  - **Événements** (vrais ou faux pour chaque message) : *Mot-clé* (mots entiers, sans accents ni majuscules, 20 par nœud,
+    50 caractères chacun), *Salon* (10 salons textuels au plus), *Bot mentionné*.
+  - **Logique** : *ET*, *OU*, *NON*. Une entrée non branchée vaut faux. Une entrée ne reçoit qu'un seul fil ; les boucles
+    sont refusées.
+  - **Actions** : *Ajouter une consigne* (500 caractères). Elle n'est ajoutée au prompt que si son entrée « si vrai »
+    est vraie. Une consigne non branchée n'est **jamais** appliquée (l'éditeur l'indique).
+  - Ordre d'application : de haut en bas, puis de gauche à droite. 60 nœuds et 150 fils au maximum.
+  Le prompt complet (prompt + abréviations + toutes les consignes possibles) ne peut pas dépasser 12 000 caractères.
+- **Stockage compact** : le graphe est enregistré sous la forme `{ n: [{ i, t, x, y, d }], w: [[nodeOut, pinOut, nodeIn, pinIn]] }`
+  (`i` identifiant, `t` type, `x`/`y` position, `d` données, omis si vide). Le moteur est partagé par le navigateur et le
+  serveur : `src/dashboard/public/ai-graph.js`.
 - **Tester** : « Voir le prompt final » montre le prompt exact sans appel réseau ; « Tester avec Mistral » fait un appel réel
   (consomme des tokens). Enregistre d'abord les modifications : les tests utilisent la version enregistrée.
 - **Confidentialité** : le texte du membre part dans le message « user » ; il n'entre jamais dans le prompt système.
@@ -261,7 +273,7 @@ est en fin de vie) ou Ministral 8B. Tout se règle sur le tableau de bord, page 
 ## Tests
 
 `npm test` lance les tests automatisés (`tests/`, `node:test`) : module IA, validation, routes du tableau de bord,
-client Mistral (stubbé), compression des sauvegardes. Aucun appel à Discord, Supabase ou Mistral n'est fait.
+client Mistral (stubbé), moteur de graphe, compression des sauvegardes. Aucun appel à Discord, Supabase ou Mistral n'est fait.
 
 ## Tableau de bord web (propriétaire uniquement)
 
