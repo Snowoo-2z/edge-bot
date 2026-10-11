@@ -188,6 +188,54 @@ dans les logs), Envoyer des messages et Intégrer des liens (journal), Voir les 
 Intents à activer dans le portail : **Server Members** et **Message Content** (déjà requis) ; l'intent
 « Guild Moderation » est non privilégié et ne nécessite rien d'autre.
 
+## Rôles par réaction
+
+`/config` → **Rôles par réaction**. Un panneau est un message du bot (embed violet) avec une réaction par rôle.
+
+- Réagir à la réaction d'un rôle donne le rôle ; **retirer sa réaction retire le rôle**.
+- Limites : 10 panneaux par serveur, 20 rôles par panneau.
+- Un rôle au-dessus de celui du bot ne peut pas être attribué (le bot l'indique dans la configuration).
+- Si un message de panneau est supprimé à la main, « Publier » le recrée.
+- Permissions : Voir le salon, Envoyer des messages, Ajouter des réactions, Gérer les rôles.
+- Intent : **Guild Message Reactions** (non privilégié).
+
+## Sécurité (anti-raid, anti-nuke)
+
+`/config` → **Sécurité** (la page Sécurité du tableau de bord est en lecture seule).
+
+- **Anti-raid** : si trop de comptes arrivent dans une fenêtre de temps (par défaut 10 arrivées en 10 s), le
+  niveau de vérification du serveur passe à « élevé ». Le déverrouillage est **manuel** (« Lever le verrouillage »
+  dans `/config` ou dans le tableau de bord). Un verrouillage n'est jamais restauré depuis une sauvegarde.
+- **Anti-nuke** : si un membre non autorisé supprime ou crée trop de salons, supprime trop de rôles, ou bannit /
+  expulse trop de membres dans la fenêtre (seuils réglables), le bot **retire ses rôles à risque, puis le bannit**.
+  Les rôles non modifiables par le bot sont laissés en place.
+- **Exemptés** : le propriétaire, le bot, et la liste blanche (membres et rôles de confiance). Les administrateurs
+  ne sont pas exemptés automatiquement.
+- **Alertes** : envoyées dans le salon d'alerte choisi, ou en MP au propriétaire s'il n'y en a pas. Les actions sont
+  aussi journalisées (catégorie Modération).
+- Permissions : Bannir des membres, Gérer les rôles, Gérer les salons, Gérer le serveur (verrouillage), Voir le journal d'audit.
+- Intents : **Server Members** (privilégié, déjà requis) et **Guild Moderation**.
+
+## Sauvegardes
+
+Module **Sauvegardes** dans `/config` (activation de la sauvegarde quotidienne) ; **création et restauration se font
+uniquement depuis le tableau de bord**.
+
+- Contenu : rôles, salons (types texte, annonces, vocal, catégories) et permissions, configurations de tous les modules,
+  messages publiés par le bot (30 au plus par salon).
+- Une sauvegarde automatique est faite chaque jour et par serveur. Les **7 plus récentes** sont conservées.
+- **Restauration non destructive** : rien n'est supprimé. Les rôles et salons absents sont recréés ; un rôle ou salon
+  existant de même nom (et type) est réutilisé ; un message identique déjà présent n'est pas republié. Les configurations
+  et les panneaux de rôles sont remis à jour avec les nouveaux identifiants.
+- Restauration protégée : double confirmation (boîte de confirmation puis saisie du nom exact du serveur). Une
+  **sauvegarde de sécurité** est créée juste avant ; si elle échoue, la restauration est annulée.
+- Données : table Supabase `edge_backups` (contenu en JSON). Voir `supabase/schema.sql`, section 8.
+
+## Commande /server
+
+`/server` affiche les informations du serveur : nombre de membres, date de création, propriétaire, salons, rôles,
+emojis, boosts, niveau de vérification et identifiant. Réponse visible par tous.
+
 ## Tableau de bord web (propriétaire uniquement)
 
 Une interface web permet de gérer le bot depuis un navigateur : mêmes réglages que `/config`, plus les
@@ -203,7 +251,8 @@ aperçus, les listes (classement, suggestions, giveaways) et les envois (panneau
 - **Pages** : Accueil, Bienvenue, Niveaux (aperçus et classement), Suggestions, Giveaways (liste, fin manuelle),
   Liens, Logs (réglages par catégorie et journal consultable), Modération (rôles par commande, MP, avertissements),
   Tickets (réglages, images/GIF, types, textes, publication du panneau), Créateur d'embed (brouillon,
-  modèles, image importée, envoi).
+  modèles, image importée, envoi), Sécurité et Rôles réaction (lecture seule), Sauvegardes (création,
+  restauration avec double confirmation, activation quotidienne).
 - **Compatibilité** : l'interface s'adapte aux téléphones, tablettes, portables et grands écrans. Elle fonctionne
   dans les navigateurs récents (Chrome, Edge, Firefox, Safari). Sur petit écran, la navigation passe en haut de page.
 - **Création d'un giveaway** : toujours avec `/giveaway` dans Discord (le tableau de bord gère la liste et la fin anticipée).
@@ -349,6 +398,11 @@ src/
   modules/logs.js       module Logs (réglages, envoi groupé, écriture Supabase)
   log-events.js         écouteurs Discord alimentant le journal
   modules/moderation.js module Modération (rôles par commande, actions, avertissements)
+  modules/reaction-roles.js module Rôles par réaction (panneaux, ajout et retrait de rôles)
+  modules/security.js   module Sécurité (anti-raid, anti-nuke, liste blanche, alertes)
+  backup.js             sauvegardes : capture, restauration non destructive, quotidienne, rétention 7
+  server-info.js        commande /server
+  audit.js              lecture du journal d'audit (logs et sécurité)
   moderation-commands.js définition des commandes /ban… /slowmode
   duration.js           lecture des durées (« 10m », « 1j 12h »)
 assets/fonts/           polices Inter (carte de bienvenue)

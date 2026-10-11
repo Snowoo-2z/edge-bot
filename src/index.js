@@ -9,6 +9,10 @@ const giveaways = require('./modules/giveaways');
 const logs = require('./modules/logs');
 const moderation = require('./modules/moderation');
 const { registerLogEvents } = require('./log-events');
+const reactionRoles = require('./modules/reaction-roles');
+const security = require('./modules/security');
+const backups = require('./backup');
+const { handleServerCommand } = require('./server-info');
 const { buildModerationCommands } = require('./moderation-commands');
 const { ephemeralPayload } = require('./ui');
 const { startServer } = require('./server');
@@ -49,12 +53,15 @@ function buildClient() {
       GatewayIntentBits.GuildModeration,
       // GuildVoiceStates : suivi du temps passé en vocal (niveaux). Intent non privilégié.
       GatewayIntentBits.GuildVoiceStates,
+      // GuildMessageReactions : panneaux de rôles par réaction (module Rôles par réaction).
+      GatewayIntentBits.GuildMessageReactions,
       // MessageContent : pièces jointes (import image / GIF). Intent privilégié à activer.
       GatewayIntentBits.MessageContent,
     ],
     // Partials : messages et salons non présents en cache (suppressions et modifications
     // d'anciens messages restent journalisées).
-    partials: [Partials.Message, Partials.Channel],
+    // Reaction et User : réactions sur d'anciens messages (panneaux de rôles après redémarrage).
+    partials: [Partials.Message, Partials.Channel, Partials.Reaction, Partials.User],
   });
   registerHandlers(client);
   return client;
@@ -105,6 +112,8 @@ function registerHandlers(client) {
   suggestions.registerEvents(client);
   giveaways.registerEvents(client);
   registerLogEvents(client);
+  reactionRoles.registerEvents(client);
+  security.registerEvents(client);
 }
 
 // Journal des interactions reçues : permet de voir si Discord les transmet au bot.
@@ -131,6 +140,7 @@ async function handleInteraction(interaction) {
       if (interaction.commandName === 'leaderboard') return await leveling.handleLeaderboard(interaction);
       if (interaction.commandName === 'suggestion') return await suggestions.handleCommand(interaction);
       if (interaction.commandName === 'giveaway') return await giveaways.handleCommand(interaction);
+      if (interaction.commandName === 'server') return await handleServerCommand(interaction);
       if (MODERATION_COMMANDS.has(interaction.commandName)) return await moderation.handleCommand(interaction);
       return;
     }
@@ -253,6 +263,8 @@ async function main() {
   );
   leveling.startTimers();
   logs.start();
+  // Sauvegarde quotidienne (vérifiée toutes les 10 min, une fois connecté à Discord).
+  backups.start(() => bot);
   await withTimeout(suggestions.init(), 30_000, 'Lecture des suggestions trop lente (table edge_suggestions).').catch((err) =>
     console.error('[suggestions] chargement impossible (la table edge_suggestions existe-t-elle ? voir supabase/schema.sql) :', err.message),
   );

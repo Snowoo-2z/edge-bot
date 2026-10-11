@@ -2,29 +2,14 @@
 // bloquer le bot ni les autres modules.
 const { AuditLogEvent, Events } = require('discord.js');
 const logs = require('./modules/logs');
+const { auditFor } = require('./audit');
 
 const RECENT_BAN_MS = 15_000;
-const AUDIT_WINDOW_MS = 20_000;
 const recentBans = new Map(); // "guildId:userId" -> timestamp
 
 const mention = (id) => (id ? `<@${id}>` : 'inconnu');
 const channelRef = (id) => (id ? `<#${id}>` : 'inconnu');
 const shortText = (text, fallback = '*contenu indisponible*') => (text && text.trim() ? text : fallback);
-
-// Cherche dans le journal d'audit l'auteur d'une action récente sur une cible.
-// Retourne null si la permission manque ou si rien ne correspond.
-async function auditFor(guild, type, targetId) {
-  try {
-    const audit = await guild.fetchAuditLogs({ type, limit: 6 });
-    return (
-      audit.entries.find(
-        (e) => (e.targetId ?? e.target?.id) === targetId && Date.now() - e.createdTimestamp < AUDIT_WINDOW_MS,
-      ) ?? null
-    );
-  } catch {
-    return null;
-  }
-}
 
 function userOf(user) {
   if (!user) return undefined;

@@ -50,6 +50,24 @@ const MODULE_LIST = [
     description: 'Journal détaillé : messages, membres, vocal, salons, rôles, modération',
   },
   {
+    id: 'reaction_roles',
+    label: 'Rôles par réaction',
+    emoji: '🎭',
+    description: 'Panneaux : réagir à un message donne un rôle, retirer la réaction le retire',
+  },
+  {
+    id: 'security',
+    label: 'Sécurité',
+    emoji: '🛡️',
+    description: 'Anti-raid (verrouillage) et anti-nuke (retrait des rôles puis bannissement)',
+  },
+  {
+    id: 'backups',
+    label: 'Sauvegardes',
+    emoji: '💾',
+    description: 'Sauvegarde quotidienne (création et restauration depuis le tableau de bord)',
+  },
+  {
     id: 'moderation',
     label: 'Modération',
     emoji: '🛡️',

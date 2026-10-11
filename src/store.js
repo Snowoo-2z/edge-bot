@@ -233,8 +233,64 @@ async function deleteWarning(guildId, id) {
   return data?.[0] ?? null;
 }
 
+// ---------------------------------------------------------------------------
+// Sauvegardes du serveur (module Sauvegardes) : une ligne par sauvegarde, contenu en jsonb.
+// ---------------------------------------------------------------------------
+const BACKUPS_TABLE = 'edge_backups';
+const BACKUP_LIST_SELECT = 'id, kind, guild_name, created_at, summary';
+
+async function insertBackup(row) {
+  const { data, error } = await supabase.from(BACKUPS_TABLE).insert(row).select(BACKUP_LIST_SELECT).single();
+  if (error) throw new Error(`Écriture Supabase échouée (${BACKUPS_TABLE}) : ${error.message}`);
+  return data;
+}
+
+// Liste des sauvegardes d'un serveur (sans le contenu), la plus récente d'abord.
+async function loadBackups(guildId) {
+  const { data, error } = await supabase
+    .from(BACKUPS_TABLE)
+    .select(BACKUP_LIST_SELECT)
+    .eq('guild_id', guildId)
+    .order('created_at', { ascending: false });
+  if (error) throw new Error(`Lecture Supabase échouée (${BACKUPS_TABLE}) : ${error.message}`);
+  return data ?? [];
+}
+
+// Contenu complet d'une sauvegarde (vérifié par serveur).
+async function loadBackup(guildId, id) {
+  const { data, error } = await supabase
+    .from(BACKUPS_TABLE)
+    .select(BACKUP_LIST_SELECT + ', data')
+    .eq('guild_id', guildId)
+    .eq('id', id)
+    .maybeSingle();
+  if (error) throw new Error(`Lecture Supabase échouée (${BACKUPS_TABLE}) : ${error.message}`);
+  return data ?? null;
+}
+
+async function deleteBackups(guildId, ids) {
+  if (!ids.length) return;
+  const { error } = await supabase.from(BACKUPS_TABLE).delete().eq('guild_id', guildId).in('id', ids);
+  if (error) throw new Error(`Suppression Supabase échouée (${BACKUPS_TABLE}) : ${error.message}`);
+}
+
+// Toutes les configurations de modules d'un serveur (depuis le cache) : { moduleId: config }.
+function listGuildConfigs(guildId) {
+  const prefix = `${guildId}:`;
+  const out = {};
+  for (const [key, value] of cache) {
+    if (key.startsWith(prefix)) out[key.slice(prefix.length)] = structuredClone(value);
+  }
+  return out;
+}
+
 module.exports = {
   init,
+  insertBackup,
+  loadBackups,
+  loadBackup,
+  deleteBackups,
+  listGuildConfigs,
   insertLogs,
   loadLogs,
   pruneLogs,

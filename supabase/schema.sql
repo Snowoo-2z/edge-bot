@@ -115,3 +115,23 @@ create index if not exists edge_warnings_guild_user_idx on public.edge_warnings 
 
 -- Même règle que ci-dessus : seule la clé service_role (le bot) y accède.
 alter table public.edge_warnings enable row level security;
+
+-- ---------------------------------------------------------------------------
+-- 8. Sauvegardes du serveur (module Sauvegardes, tableau de bord uniquement).
+--    « data » contient rôles, salons, configurations des modules et messages du bot.
+--    Les 7 sauvegardes les plus récentes de chaque serveur sont conservées par le bot.
+-- ---------------------------------------------------------------------------
+create table if not exists public.edge_backups (
+  id          uuid        primary key default gen_random_uuid(),
+  guild_id    text        not null,
+  kind        text        not null check (kind in ('manual', 'daily', 'pre_restore')),
+  guild_name  text        not null,
+  summary     jsonb       not null default '{}'::jsonb,
+  data        jsonb       not null,
+  created_at  timestamptz not null default now()
+);
+
+create index if not exists edge_backups_guild_created_idx on public.edge_backups (guild_id, created_at desc);
+
+-- Même règle que ci-dessus : seule la clé service_role (le bot) y accède.
+alter table public.edge_backups enable row level security;

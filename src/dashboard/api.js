@@ -10,6 +10,9 @@ const links = require('../modules/links');
 const logsModule = require('../modules/logs');
 const moderation = require('../modules/moderation');
 const ticket = require('../modules/ticket');
+const security = require('../modules/security');
+const reactionRoles = require('../modules/reaction-roles');
+const backup = require('../backup');
 const embedModule = require('../modules/embed');
 const leveling = require('../leveling');
 const { renderWelcomeCard, THEMES, THEME_LIST, DEFAULT_THEME } = require('../welcome-image');
@@ -33,9 +36,27 @@ const MODULES = {
   ticket: { module: ticket, sanitize: validate.sanitizeTicket },
   logs: { module: logsModule, sanitize: validate.sanitizeLogs },
   moderation: { module: moderation, sanitize: validate.sanitizeModeration },
+  backups: { module: backup, sanitize: validate.sanitizeBackups },
 };
 
-const ALL_MODULE_IDS = [...Object.keys(MODULES), embedModule.ID];
+// Modules affichés en lecture seule (leurs réglages se modifient dans /config).
+const READ_ONLY_MODULES = { security, reaction_roles: reactionRoles };
+
+const ALL_MODULE_IDS = [...Object.keys(MODULES), embedModule.ID, ...Object.keys(READ_ONLY_MODULES)];
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Erreurs métier des sauvegardes (nom de confirmation, tâche déjà en cours…) : réponse 400 lisible.
+async function guarded(fn) {
+  try {
+    return await fn();
+  } catch (err) {
+    if (err instanceof backup.BackupError) throw new HttpError(400, err.message);
+    throw err;
+  }
+}
+
+const backupRow = (r) => ({ id: r.id, kind: r.kind, guildName: r.guild_name, createdAt: r.created_at, summary: r.summary ?? {} });
 
 // Routeur minimal : motif avec paramètres (:nom) -> gestionnaire.
 const routes = [];
@@ -74,7 +95,7 @@ function createApi({ getClient }) {
   }
 
   function configOf(guild, moduleId) {
-    const def = moduleId === embedModule.ID ? embedModule : MODULES[moduleId].module;
+    const def = moduleId === embedModule.ID ? embedModule : (MODULES[moduleId]?.module ?? READ_ONLY_MODULES[moduleId]);
     return store.getModuleConfig(guild.id, moduleId, def.DEFAULTS);
   }
 
@@ -459,6 +480,40 @@ function createApi({ getClient }) {
       throw new HttpError(404, 'Aperçu inconnu.');
     }
     sendBuffer(res, 200, png, 'image/png');
+  });
+
+  // -------------------------------------------------------------------------
+  // Sauvegardes : création et restauration uniquement depuis ce tableau de bord.
+  // La restauration exige le nom exact du serveur ; une sauvegarde de sécurité est faite avant.
+  // -------------------------------------------------------------------------
+
+  route('GET', '/api/guilds/:gid/backups', async ({ res, params }) => {
+    const { guild } = resolveGuild(params);
+    const rows = await store.loadBackups(guild.id);
+    sendJson(res, 200, { rows: rows.map(backupRow), running: backup.runningJobFor(guild.id), retention: backup.RETENTION });
+  });
+
+  route('POST', '/api/guilds/:gid/backups', async ({ res, params }) => {
+    const { guild } = resolveGuild(params);
+    const job = await guarded(async () => backup.startBackup(guild));
+    console.log(`[dashboard] sauvegarde lancée (serveur ${guild.name}).`);
+    sendJson(res, 202, { job });
+  });
+
+  route('POST', '/api/guilds/:gid/backups/:id/restore', async ({ req, res, params }) => {
+    const { guild } = resolveGuild(params);
+    if (!UUID.test(params.id)) throw new HttpError(400, 'Identifiant de sauvegarde invalide.');
+    const body = await readJson(req);
+    const job = await guarded(() => backup.startRestore(guild, params.id, body?.confirmName));
+    console.log(`[dashboard] restauration lancée (serveur ${guild.name}, sauvegarde ${params.id}).`);
+    sendJson(res, 202, { job });
+  });
+
+  route('GET', '/api/guilds/:gid/jobs/:jobId', async ({ res, params }) => {
+    const { guild } = resolveGuild(params);
+    const job = backup.getJob(params.jobId);
+    if (!job || job.guildId !== guild.id) throw new HttpError(404, 'Tâche introuvable.');
+    sendJson(res, 200, { job });
   });
 
   return {

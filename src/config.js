@@ -10,6 +10,9 @@ const links = require('./modules/links');
 const giveaways = require('./modules/giveaways');
 const logs = require('./modules/logs');
 const moderation = require('./modules/moderation');
+const reactionRoles = require('./modules/reaction-roles');
+const security = require('./modules/security');
+const backups = require('./backup');
 
 // Modules réellement implémentés (id -> module).
 const MODULES = {
@@ -22,6 +25,9 @@ const MODULES = {
   [giveaways.ID]: giveaways,
   [logs.ID]: logs,
   [moderation.ID]: moderation,
+  [reactionRoles.ID]: reactionRoles,
+  [security.ID]: security,
+  [backups.ID]: backups,
 };
 
 // Panneau d'accueil de /config : choix du module.

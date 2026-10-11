@@ -21,6 +21,9 @@
     ticketEdit: null, // éditeur de type de ticket ouvert : { index, data }
     ticketTypes: null, // copie locale de la liste des types
     pubChannel: '',
+    backupJob: null, // id de la tâche de sauvegarde / restauration en cours
+    backupNote: null, // dernier résultat affiché : { ok, text, details }
+    pollingJob: null,
   };
 
   // -------------------------------------------------------------------------
@@ -369,6 +372,9 @@
     { id: 'tickets', label: 'Tickets', icon: '🎫', module: 'ticket', desc: 'Panneau, types, images et textes.' },
     { id: 'logs', label: 'Logs', icon: '📜', module: 'logs', desc: 'Journal détaillé des événements du serveur.' },
     { id: 'moderation', label: 'Modération', icon: '🛡️', module: 'moderation', desc: 'Commandes de sanction et rôles autorisés.' },
+    { id: 'securite', label: 'Sécurité', icon: '🛡️', status: (m) => m.security.raid.enabled || m.security.nuke.enabled, desc: 'Anti-raid et anti-nuke (lecture seule).' },
+    { id: 'roles-reaction', label: 'Rôles réaction', icon: '🎭', status: (m) => (m.reaction_roles.panels || []).length > 0, desc: 'Panneaux de rôles par réaction (lecture seule).' },
+    { id: 'sauvegardes', label: 'Sauvegardes', icon: '💾', module: 'backups', desc: 'Sauvegarde quotidienne, création et restauration.' },
     { id: 'embed', label: 'Créateur d’embed', icon: '🧩', desc: 'Construire un embed, modèles, envoi.' },
   ];
 
@@ -392,6 +398,9 @@
       embed: viewEmbed,
       logs: viewLogs,
       moderation: viewModeration,
+      securite: viewSecurity,
+      'roles-reaction': viewReactionRoles,
+      sauvegardes: viewBackups,
     };
 
     const select = h(
@@ -445,7 +454,7 @@
   function viewHome() {
     const m = S.data.modules;
     const tiles = PAGES.filter((p) => p.id !== 'accueil').map((p) => {
-      const on = p.module ? Boolean(m[p.module].enabled) : null;
+      const on = p.module ? Boolean(m[p.module].enabled) : p.status ? Boolean(p.status(m)) : null;
       return h(
         'a',
         { class: 'tile', href: `#/${p.id}` },
@@ -1579,6 +1588,284 @@
     );
   }
 
+  // -------------------------------------------------------------------------
+  // Sécurité (lecture seule : les réglages se modifient dans /config)
+  // -------------------------------------------------------------------------
+
+  const NUKE_LABEL = {
+    channelDelete: 'Salons supprimés',
+    roleDelete: 'Rôles supprimés',
+    channelCreate: 'Salons créés',
+    ban: 'Bannissements',
+    kick: 'Expulsions',
+  };
+
+  function keyValueTable(rows) {
+    return h(
+      'table',
+      null,
+      h('tbody', null, rows.map(([k, v]) => h('tr', null, h('th', { text: k, scope: 'row' }), h('td', null, v)))),
+    );
+  }
+
+  function viewSecurity() {
+    const cfg = S.data.modules.security;
+    const channelName = (id) => (S.data.meta.channels || []).find((c) => c.id === id)?.name;
+    const lock = cfg.lockdown?.active
+      ? h('span', { class: 'pill warn', text: `Verrouillé depuis ${fmtDate(cfg.lockdown.since)}` })
+      : h('span', { class: 'pill on', text: 'Serveur ouvert' });
+    return h(
+      'section',
+      null,
+      pageHead('Sécurité', 'Lecture seule. Pour modifier ces réglages ou lever un verrouillage : /config → Sécurité.'),
+      h(
+        'div',
+        { class: 'grid' },
+        h(
+          'div',
+          { class: 'card' },
+          h('h2', { text: 'Anti-raid' }),
+          h('p', null, h('span', { class: cfg.raid.enabled ? 'pill on' : 'pill', text: cfg.raid.enabled ? 'Activé' : 'Désactivé' })),
+          keyValueTable([
+            ['Seuil', `${cfg.raid.joinThreshold} arrivées`],
+            ['Fenêtre', `${cfg.raid.windowSeconds} s`],
+          ]),
+          h('p', { class: 'hint', text: 'Au-delà du seuil, le niveau de vérification du serveur passe à « élevé ». Levée manuelle uniquement.' }),
+        ),
+        h(
+          'div',
+          { class: 'card' },
+          h('h2', { text: 'Verrouillage' }),
+          h('p', null, lock),
+          h('p', { class: 'hint', text: 'Un verrouillage n’est jamais restauré depuis une sauvegarde.' }),
+        ),
+        h(
+          'div',
+          { class: 'card' },
+          h('h2', { text: 'Anti-nuke' }),
+          h('p', null, h('span', { class: cfg.nuke.enabled ? 'pill on' : 'pill', text: cfg.nuke.enabled ? 'Activé' : 'Désactivé' })),
+          keyValueTable([['Fenêtre', `${cfg.nuke.windowSeconds} s`], ...Object.entries(cfg.nuke.limits).map(([k, v]) => [NUKE_LABEL[k] ?? k, String(v)])]),
+          h('p', { class: 'hint', text: 'Au-delà des seuils, l’auteur perd ses rôles à risque puis il est banni. Propriétaire, bot et liste blanche sont exemptés.' }),
+        ),
+        h(
+          'div',
+          { class: 'card' },
+          h('h2', { text: 'Alertes et liste blanche' }),
+          keyValueTable([
+            ['Salon d’alerte', cfg.alertChannelId ? `#${channelName(cfg.alertChannelId) ?? 'salon supprimé'}` : 'Aucun (MP au propriétaire)'],
+            ['Membres de confiance', cfg.whitelistUserIds.length ? cfg.whitelistUserIds.join(', ') : 'Aucun'],
+            ['Rôles de confiance', cfg.whitelistRoleIds.length ? cfg.whitelistRoleIds.map((id) => roleById(id)?.name ?? 'rôle supprimé').join(', ') : 'Aucun'],
+          ]),
+        ),
+      ),
+    );
+  }
+
+  // -------------------------------------------------------------------------
+  // Rôles par réaction (lecture seule : les panneaux se créent dans /config)
+  // -------------------------------------------------------------------------
+
+  function viewReactionRoles() {
+    const cfg = S.data.modules.reaction_roles;
+    const channelName = (id) => (S.data.meta.channels || []).find((c) => c.id === id)?.name;
+    const panels = cfg.panels || [];
+    return h(
+      'section',
+      null,
+      pageHead('Rôles par réaction', 'Lecture seule. Réagir à un message donne le rôle, retirer la réaction le retire. Modification : /config → Rôles par réaction.'),
+      panels.length
+        ? panels.map((p) =>
+            h(
+              'div',
+              { class: 'card' },
+              h(
+                'div',
+                { class: 'page-head' },
+                h('h2', { text: p.title }),
+                h('span', { class: p.messageId ? 'pill on' : 'pill', text: p.messageId ? 'Publié' : 'Non publié' }),
+              ),
+              keyValueTable([
+                ['Salon', p.channelId ? `#${channelName(p.channelId) ?? 'salon supprimé'}` : 'Non défini'],
+                ['Rôles', String((p.pairs || []).length)],
+              ]),
+              (p.pairs || []).length
+                ? h(
+                    'table',
+                    null,
+                    h('thead', null, h('tr', null, h('th', { text: 'Emoji' }), h('th', { text: 'Rôle' }))),
+                    h(
+                      'tbody',
+                      null,
+                      p.pairs.map((pair) => h('tr', null, h('td', { text: pair.display }), h('td', { text: roleById(pair.roleId)?.name ?? 'rôle supprimé' }))),
+                    ),
+                  )
+                : h('p', { class: 'muted', text: 'Aucun rôle dans ce panneau.' }),
+            ),
+          )
+        : h('div', { class: 'card' }, h('p', { class: 'muted', text: 'Aucun panneau pour le moment.' })),
+    );
+  }
+
+  // -------------------------------------------------------------------------
+  // Sauvegardes : création, restauration (double confirmation), suivi des tâches
+  // -------------------------------------------------------------------------
+
+  const KIND_LABEL = { manual: 'Manuelle', daily: 'Quotidienne', pre_restore: 'Avant restauration' };
+
+  function backupSummary(s = {}) {
+    return `${s.roles ?? 0} rôle(s) · ${s.channels ?? 0} salon(s) · ${s.messages ?? 0} message(s) · ${s.modules ?? 0} module(s)`;
+  }
+
+  // Suivi d'une tâche de fond (sauvegarde ou restauration) jusqu'à sa fin.
+  function watchJob(gid, jobId, label) {
+    if (S.pollingJob === jobId) return;
+    S.pollingJob = jobId;
+    S.backupJob = jobId;
+    S.backupNote = { ok: true, text: `${label} en cours…`, details: [] };
+    const tick = async () => {
+      if (S.gid !== gid) {
+        S.pollingJob = null;
+        return;
+      }
+      try {
+        const { job } = await api('GET', `/api/guilds/${gid}/jobs/${jobId}`);
+        if (job.status === 'running') {
+          setTimeout(tick, 2000);
+          return;
+        }
+        S.pollingJob = null;
+        S.backupJob = null;
+        if (job.status === 'done') {
+          const r = job.result ?? {};
+          const details = [];
+          if (r.summary) details.push(`Contenu : ${backupSummary(r.summary)}.`);
+          if (r.rolesCreated !== undefined) details.push(`Créés : ${r.rolesCreated} rôle(s), ${r.channelsCreated} salon(s). Messages republiés : ${r.messagesRestored}. Configurations : ${r.configsRestored}.`);
+          if (r.safetyBackupId) details.push('Une sauvegarde de sécurité a été faite juste avant la restauration.');
+          const errors = [...(r.errors ?? []), ...(r.skipped ?? [])];
+          if (errors.length) details.push(`${errors.length} point(s) non restauré(s) ou ignoré(s) :`, ...errors.slice(0, 20));
+          S.backupNote = { ok: true, text: `${label} terminée.`, details };
+          toast(`${label} terminée.`);
+          await loadGuild();
+        } else {
+          S.backupNote = { ok: false, text: job.error || `${label} échouée.`, details: [] };
+          toast(job.error || `${label} échouée.`, false);
+        }
+      } catch (err) {
+        S.pollingJob = null;
+        S.backupJob = null;
+        S.backupNote = { ok: false, text: err.message, details: [] };
+      }
+      if (currentPageId() === 'sauvegardes') rerender();
+    };
+    setTimeout(tick, 1500);
+  }
+
+  async function restoreBackupRow(row) {
+    const ok = confirm(
+      `Restaurer la sauvegarde du ${fmtDate(row.createdAt)} ?\n\n` +
+        'Rien ne sera supprimé : les rôles et salons absents seront recréés, les messages du bot republiés et les configurations remises. ' +
+        'Une sauvegarde de sécurité est faite avant.',
+    );
+    if (!ok) return;
+    const typed = prompt(`Deuxième confirmation : tape exactement le nom du serveur, « ${S.data.guild.name} ».`);
+    if (typed === null) return;
+    const { job } = await api('POST', gp(`/backups/${row.id}/restore`), { confirmName: typed });
+    watchJob(S.gid, job.id, 'Restauration');
+    rerender();
+  }
+
+  function viewBackups() {
+    const cfg = S.data.modules.backups;
+    const box = h('div', { class: 'table-wrap' }, h('p', { class: 'muted', text: 'Chargement…' }));
+    loadBackupList(box);
+
+    const note = S.backupNote
+      ? h(
+          'div',
+          { class: S.backupNote.ok ? 'card' : 'card warn-card' },
+          h('p', { class: S.backupNote.ok ? 'ok' : 'error', text: S.backupNote.text }),
+          S.backupNote.details?.length ? h('ul', { class: 'small' }, S.backupNote.details.map((d) => h('li', { text: d }))) : null,
+        )
+      : null;
+
+    return h(
+      'section',
+      null,
+      pageHead('Sauvegardes', 'Création et restauration uniquement depuis ce tableau de bord. Les 7 sauvegardes les plus récentes sont conservées.'),
+      note,
+      h(
+        'div',
+        { class: 'card' },
+        fieldSwitch(
+          'Sauvegarde quotidienne',
+          'Une sauvegarde par jour et par serveur. Contenu : rôles, salons et permissions, configurations des modules, messages du bot (30 au plus par salon).',
+          cfg.enabled,
+          (v) => saveModule('backups', { enabled: v }, 'Réglage enregistré.'),
+        ),
+      ),
+      h(
+        'div',
+        { class: 'card' },
+        h('h2', { text: 'Créer une sauvegarde' }),
+        h('p', { class: 'hint', text: 'Peut prendre quelques dizaines de secondes sur un gros serveur.' }),
+        h(
+          'div',
+          { class: 'actions' },
+          button(
+            'Créer une sauvegarde maintenant',
+            async () => {
+              if (S.backupJob) throw new Error('Une tâche est déjà en cours.');
+              const { job } = await api('POST', gp('/backups'));
+              watchJob(S.gid, job.id, 'Sauvegarde');
+              rerender();
+            },
+            { cls: 'primary' },
+          ),
+        ),
+      ),
+      h('div', { class: 'card' }, h('h2', { text: 'Sauvegardes existantes' }), box),
+    );
+  }
+
+  async function loadBackupList(box) {
+    try {
+      const { rows, running } = await api('GET', gp('/backups'));
+      if (running && S.pollingJob !== running.id) watchJob(S.gid, running.id, running.type === 'restore' ? 'Restauration' : 'Sauvegarde');
+      if (!rows.length) {
+        box.replaceChildren(h('p', { class: 'muted', text: 'Aucune sauvegarde pour le moment.' }));
+        return;
+      }
+      const busy = Boolean(S.backupJob);
+      box.replaceChildren(
+        h(
+          'table',
+          null,
+          h('thead', null, h('tr', null, ...['Date', 'Type', 'Contenu', ''].map((t) => h('th', { text: t })))),
+          h(
+            'tbody',
+            null,
+            rows.map((r) =>
+              h(
+                'tr',
+                null,
+                h('td', { text: fmtDate(r.createdAt) }),
+                h('td', { text: KIND_LABEL[r.kind] ?? r.kind }),
+                h('td', { text: backupSummary(r.summary) }),
+                h(
+                  'td',
+                  null,
+                  button('Restaurer', () => restoreBackupRow(r), { cls: 'danger', title: 'Restaure rôles, salons, configurations et messages (rien n’est supprimé)' }),
+                ),
+              ),
+            ),
+          ),
+        ),
+        h('p', { class: 'hint', text: busy ? 'Une tâche est en cours, patiente avant de lancer une autre action.' : `${rows.length} sauvegarde(s) affichée(s) · 7 conservées au maximum.` }),
+      );
+    } catch (err) {
+      box.replaceChildren(h('p', { class: 'error', text: err.message }));
+    }
+  }
   // -------------------------------------------------------------------------
   // Démarrage
   // -------------------------------------------------------------------------

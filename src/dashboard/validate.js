@@ -301,8 +301,13 @@ function sanitizeModeration(guild, input) {
   });
 }
 
+function sanitizeBackups(guild, input) {
+  return pick(input, ['enabled'], (key, value) => bool(value, 'Sauvegarde quotidienne'));
+}
+
 module.exports = {
   ValidationError,
+  sanitizeBackups,
   isSnowflake,
   text,
   channelId,
