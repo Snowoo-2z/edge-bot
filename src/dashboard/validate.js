@@ -14,6 +14,7 @@ const TEXT_KINDS = [ChannelType.GuildText, ChannelType.GuildAnnouncement];
 const FORUM_KINDS = [...TEXT_KINDS, ChannelType.GuildForum];
 const CATEGORY_KINDS = [ChannelType.GuildCategory];
 const MAX_LIST = 25;
+const { PermissionFlagsBits } = require('discord.js');
 
 class ValidationError extends Error {
   constructor(message) {
@@ -400,16 +401,48 @@ function graphOf(guild, value) {
         const channel = guild.channels.cache.get(id);
         return Boolean(channel) && TEXT_KINDS.includes(channel.type);
       },
+      // Rôles : doivent exister. Un rôle que l'IA peut attribuer ne doit être ni géré par une intégration
+      // ni administrateur (le bot refuse de toute façon, mais on le signale dès l'enregistrement).
+      roleOk: (id, type) => {
+        const role = guild.roles.cache.get(id);
+        if (!role || id === guild.id) return false;
+        if (type === 'grant' && (role.managed || role.permissions?.has?.(PermissionFlagsBits.Administrator))) return false;
+        return true;
+      },
     });
   } catch (err) {
     fail(`Graphe : ${err.message}`);
   }
 }
 
+// Notes de mémoire d'une personne (tableau de bord) : texte court, une ligne, nombre borné.
+function aiNotes(value, max = ai.LIMITS.memoryMaxNotes) {
+  if (!Array.isArray(value)) fail('Notes : liste attendue.');
+  if (value.length > max) fail(`Notes : ${max} maximum par personne.`);
+  return value
+    .map((note) => {
+      if (typeof note !== 'string') fail('Note : texte attendu.');
+      return ai.sanitizeNote(note);
+    })
+    .filter(Boolean);
+}
+
 function sanitizeAi(guild, input, current = {}) {
   const patch = pick(
     input,
-    ['enabled', 'model', 'systemPrompt', 'temperature', 'maxReplyTokens', 'channelIds', 'cooldownSeconds', 'abbreviations', 'graph'],
+    [
+      'enabled',
+      'model',
+      'systemPrompt',
+      'temperature',
+      'maxReplyTokens',
+      'channelIds',
+      'cooldownSeconds',
+      'abbreviations',
+      'graph',
+      'memoryEnabled',
+      'memoryMaxNotes',
+    ],
     (key, value) => {
       switch (key) {
         case 'enabled':
@@ -430,6 +463,10 @@ function sanitizeAi(guild, input, current = {}) {
           return abbreviationsList(value);
         case 'graph':
           return graphOf(guild, value);
+        case 'memoryEnabled':
+          return bool(value, 'Mémoire des membres');
+        case 'memoryMaxNotes':
+          return integer(value, 'Notes par personne', 5, ai.LIMITS.memoryMaxNotes);
         default:
           return undefined;
       }
@@ -444,6 +481,7 @@ function sanitizeAi(guild, input, current = {}) {
 
 module.exports = {
   sanitizeAi,
+  aiNotes,
   ValidationError,
   sanitizeBackups,
   sanitizeSecurity,

@@ -67,7 +67,9 @@ describe('graphe : édition (fonctions pures)', () => {
     const and = { i: 'x', t: 'and', x: 100, y: 50 };
     assert.equal(G.nodeHeight(and), G.HEADER_H + 2 * G.ROW_H + G.BODY_H);
     const aPin = G.pinPosition(and, 'a', 'in');
-    assert.deepEqual(aPin, { x: 100, y: 50 + G.HEADER_H + 11 });
+    assert.deepEqual(aPin, { x: 100, y: 50 + G.pinOffset(0) });
+    assert.equal(G.pinOffset(0), G.HEADER_H + G.ROW_H / 2);
+    assert.equal(G.pinOffset(2) - G.pinOffset(1), G.ROW_H);
     const out = G.pinPosition(and, 'out', 'out');
     assert.equal(out.x, 100 + G.NODE_W);
     assert.equal(G.pinPosition(and, 'out', 'in'), null, 'broche inconnue');
@@ -164,5 +166,155 @@ describe('graphe : évaluation', () => {
       w: [['m', 'out', 'b', 'when'], ['m', 'out', 'c', 'when'], ['m', 'out', 'd', 'when']],
     });
     assert.deepEqual(G.evaluate(g, { mentioned: true }).active.map((a) => a.text), ['haut', 'bas-gauche', 'bas']);
+  });
+});
+
+// Helpers : construction directe d'un graphe (ids courts, données explicites).
+const N = (i, t, d, x = 0, y = 0) => ({ i, t, x, y, ...(d ? { d } : {}) });
+const W = (a, p, b, q) => [a, p, b, q];
+const R1 = '123456789012345678';
+const R2 = '223456789012345678';
+const R3 = '323456789012345678';
+
+describe('logique ET / OU à plusieurs entrées', () => {
+  it('ET et OU : 2 à 6 entrées (broches a à f), 2 par défaut', () => {
+    assert.deepEqual(G.insOf({ t: 'and', d: { n: 6 } }), ['a', 'b', 'c', 'd', 'e', 'f']);
+    assert.deepEqual(G.insOf({ t: 'or' }), ['a', 'b']);
+    assert.deepEqual(G.insOf({ t: 'or', d: { n: 1 } }), ['a', 'b'], 'minimum 2');
+    assert.deepEqual(G.insOf({ t: 'or', d: { n: 99 } }), ['a', 'b'], 'entrée hors limite : 2');
+  });
+
+  it('setInputCount : bornes 2 à 6, retire les fils des entrées supprimées', () => {
+    let g = G.parseGraph({ n: [N('k', 'kw', { keywords: ['prix'] }), N('o', 'or', null, 300, 0)], w: [] });
+    g = G.setInputCount(g, 'o', 6);
+    g = G.connect(g, 'k', 'out', 'o', 'f');
+    assert.equal(g.w.length, 1);
+    g = G.setInputCount(g, 'o', 3);
+    assert.equal(g.n.find((n) => n.i === 'o').d.n, 3);
+    assert.deepEqual(g.w, [], 'le fil sur f disparaît avec l’entrée');
+    const countOf = (graph) => G.insOf(graph.n.find((n) => n.i === 'o')).length;
+    assert.equal(countOf(G.setInputCount(g, 'o', 99)), 6, 'plafonné à 6');
+    assert.equal(countOf(G.setInputCount(g, 'o', 1)), 2, 'plancher à 2');
+    assert.throws(() => G.setInputCount(g, 'k', 3), /pas d’entrées réglables/);
+  });
+
+  it('évaluation ET : toutes les entrées branchées et vraies', () => {
+    const g = G.parseGraph({
+      n: [
+        N('k1', 'kw', { keywords: ['prix'] }),
+        N('k2', 'kw', { keywords: ['urgent'] }),
+        N('and', 'and', { n: 2 }, 300, 0),
+        N('act', 'add', { text: 'Réponds avec le prix' }, 600, 0),
+      ],
+      w: [W('k1', 'out', 'and', 'a'), W('k2', 'out', 'and', 'b'), W('and', 'out', 'act', 'when')],
+    });
+    assert.deepEqual(G.evaluate(g, { text: 'prix' }).active, []);
+    assert.deepEqual(G.evaluate(g, { text: 'le prix urgent' }).active, [{ id: 'act', text: 'Réponds avec le prix' }]);
+  });
+
+  it('évaluation OU à 3 entrées : une seule vraie suffit, une entrée non branchée compte comme faux', () => {
+    const g = G.parseGraph({
+      n: [
+        N('k1', 'kw', { keywords: ['prix'] }),
+        N('k2', 'kw', { keywords: ['bug'] }),
+        N('k3', 'kw', { keywords: ['aide'] }),
+        N('or', 'or', { n: 3 }, 300, 0),
+        N('act', 'add', { text: 'Z' }, 600, 0),
+      ],
+      w: [W('k1', 'out', 'or', 'a'), W('k2', 'out', 'or', 'b'), W('or', 'out', 'act', 'when')],
+    });
+    assert.equal(G.evaluate(g, { text: 'bug' }).active.length, 1);
+    assert.equal(G.evaluate(g, { text: 'rien' }).active.length, 0);
+    const withC = G.connect(g, 'k3', 'out', 'or', 'c');
+    assert.equal(G.evaluate(withC, { text: 'aide' }).active.length, 1);
+  });
+
+  it('ET à 3 entrées : la troisième entrée compte', () => {
+    const g = G.parseGraph({
+      n: [
+        N('k1', 'kw', { keywords: ['a1'] }),
+        N('k2', 'kw', { keywords: ['b1'] }),
+        N('k3', 'kw', { keywords: ['c1'] }),
+        N('and', 'and', { n: 3 }, 300, 0),
+        N('act', 'add', { text: 'T' }, 600, 0),
+      ],
+      w: [W('k1', 'out', 'and', 'a'), W('k2', 'out', 'and', 'b'), W('k3', 'out', 'and', 'c'), W('and', 'out', 'act', 'when')],
+    });
+    assert.equal(G.evaluate(g, { text: 'a1 b1' }).active.length, 0);
+    assert.equal(G.evaluate(g, { text: 'a1 b1 c1' }).active.length, 1);
+  });
+});
+
+describe('événements et action liés aux rôles', () => {
+  it('« le membre a un rôle » et « le message mentionne un rôle »', () => {
+    const g = G.parseGraph({
+      n: [
+        N('r', 'role', { roleIds: [R1, R2] }),
+        N('m', 'mentionRole', { roleIds: [R3] }, 0, 100),
+        N('or', 'or', { n: 2 }, 300, 0),
+        N('act', 'add', { text: 'Y' }, 600, 0),
+      ],
+      w: [W('r', 'out', 'or', 'a'), W('m', 'out', 'or', 'b'), W('or', 'out', 'act', 'when')],
+    });
+    assert.equal(G.evaluate(g, { memberRoleIds: [R2] }).active.length, 1, 'le membre a R2');
+    assert.equal(G.evaluate(g, { mentionedRoleIds: [R3] }).active.length, 1, 'le message ping R3');
+    assert.equal(G.evaluate(g, { memberRoleIds: [R3], mentionedRoleIds: [R1] }).active.length, 0);
+  });
+
+  it('action « donner un rôle » : active si son entrée est vraie, avec ses rôles', () => {
+    const g = G.parseGraph({
+      n: [N('k', 'kw', { keywords: ['perm'] }), N('gr', 'grant', { roleIds: [R1, R2] }, 300, 0)],
+      w: [W('k', 'out', 'gr', 'when')],
+    });
+    assert.deepEqual(G.evaluate(g, { text: 'donne moi la perm' }).grants, [{ id: 'gr', roleIds: [R1, R2] }]);
+    assert.deepEqual(G.evaluate(g, { text: 'bonjour' }).grants, []);
+    const loose = G.parseGraph({ n: [N('gr', 'grant', { roleIds: [R1] })], w: [] });
+    assert.deepEqual(G.evaluate(loose, { text: 'perm' }).grants, [], 'non branchée : jamais appliquée');
+    assert.deepEqual(G.unwiredActions(loose).map((n) => n.i), ['gr']);
+  });
+
+  it('limites : 25 rôles pour les événements, 10 pour « donner un rôle »', () => {
+    const ids = Array.from({ length: 26 }, (_, k) => `1000000000000000${String(k).padStart(3, '0')}`);
+    assert.doesNotThrow(() => G.parseGraph({ n: [N('r', 'role', { roleIds: ids.slice(0, 25) })], w: [] }));
+    assert.throws(() => G.parseGraph({ n: [N('r', 'role', { roleIds: ids.slice(0, 26) })], w: [] }), /maximum/);
+    assert.doesNotThrow(() => G.parseGraph({ n: [N('gr', 'grant', { roleIds: ids.slice(0, 10) })], w: [] }));
+    assert.throws(() => G.parseGraph({ n: [N('gr', 'grant', { roleIds: ids.slice(0, 11) })], w: [] }), /maximum/);
+  });
+
+  it('validation des rôles par le serveur (roleOk)', () => {
+    const g = { n: [N('r', 'role', { roleIds: [R1] }), N('gr', 'grant', { roleIds: [R2] }, 0, 100)], w: [] };
+    assert.throws(() => G.parseGraph(g, { roleOk: (id) => id !== R1 }), /introuvable/);
+    assert.throws(() => G.parseGraph(g, { roleOk: (id, type) => !(type === 'grant' && id === R2) }), /non attribuable/);
+    assert.doesNotThrow(() => G.parseGraph(g, { roleOk: () => true }));
+  });
+});
+
+describe('édition : suppression multiple et collage de fragment', () => {
+  it('removeNodes : retire les nœuds et leurs fils', () => {
+    const g = G.parseGraph({
+      n: [N('k1', 'kw', { keywords: ['a'] }), N('k2', 'kw', { keywords: ['b'] }), N('act', 'add', { text: 'T' }, 300, 0)],
+      w: [W('k1', 'out', 'act', 'when')],
+    });
+    const cleaned = G.removeNodes(g, ['k1', 'act']);
+    assert.deepEqual(cleaned.n.map((n) => n.i), ['k2']);
+    assert.deepEqual(cleaned.w, []);
+  });
+
+  it('pasteFragment : nouveaux identifiants, décalage, fils internes recréés seulement', () => {
+    const base = G.parseGraph({ n: [N('zz', 'kw', { keywords: ['y'] }, 0, 0)], w: [] });
+    const fragment = {
+      n: [N('a', 'kw', { keywords: ['x'] }, 10, 10), N('b', 'add', { text: 'T' }, 200, 10)],
+      w: [W('a', 'out', 'b', 'when'), W('a', 'out', 'hors', 'when')],
+    };
+    const next = G.pasteFragment(base, fragment, { x: 40, y: 40 }).graph;
+    assert.equal(next.n.length, 3);
+    const pasted = next.n.filter((n) => n.i !== 'zz');
+    const ids = pasted.map((n) => n.i);
+    assert.ok(!ids.includes('a') && !ids.includes('b'), 'nouveaux identifiants');
+    assert.ok(ids.every((id) => /^[a-z0-9]{1,24}$/.test(id)));
+    const kw = pasted.find((n) => n.t === 'kw');
+    assert.deepEqual([kw.x, kw.y], [50, 50]);
+    assert.equal(next.w.length, 1, 'le fil vers un nœud hors fragment est ignoré');
+    assert.deepEqual(next.w[0], [kw.i, 'out', pasted.find((n) => n.t === 'add').i, 'when']);
   });
 });

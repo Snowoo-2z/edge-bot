@@ -209,7 +209,7 @@ th { color: var(--muted); font-weight: 600; font-size: .82rem; }
 .graph-wrap { display: grid; gap: .75rem; grid-template-columns: minmax(0, 1fr) 260px; align-items: start; }
 .graph-toolbar { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: .5rem; }
 .graph-viewport {
-  position: relative; height: 460px; overflow: hidden; border-radius: 10px; cursor: grab;
+  position: relative; height: 600px; overflow: hidden; border-radius: 10px; cursor: default;
   border: 1px solid var(--line);
   background-color: #110e17;
   background-image: radial-gradient(circle, #3a3150 1px, transparent 1.2px);
@@ -217,7 +217,9 @@ th { color: var(--muted); font-weight: 600; font-size: .82rem; }
   touch-action: none; user-select: none; outline: none;
 }
 .graph-viewport:focus-visible { border-color: var(--purple); }
-.graph-viewport:active { cursor: grabbing; }
+.graph-viewport.panning, .graph-viewport.panning * { cursor: grab !important; }
+.graph-viewport:active { cursor: default; }
+.graph-marquee { position: absolute; z-index: 3; pointer-events: none; border: 1px dashed var(--purple); background: rgba(155, 89, 182, .14); border-radius: 4px; }
 .graph-world { position: absolute; left: 0; top: 0; width: 0; height: 0; transform-origin: 0 0; }
 .graph-wires { position: absolute; left: 0; top: 0; width: 1px; height: 1px; overflow: visible; pointer-events: none; }
 .graph-wires .wire { fill: none; stroke: #d7cbe6; stroke-width: 2.5; pointer-events: stroke; cursor: pointer; }
@@ -229,13 +231,15 @@ th { color: var(--muted); font-weight: 600; font-size: .82rem; }
   box-shadow: 0 4px 14px rgba(0, 0, 0, .35); cursor: move; color: var(--text);
 }
 .gn.sel { border-color: #fff; box-shadow: 0 0 0 2px var(--purple), 0 4px 14px rgba(0, 0, 0, .4); }
-.gn-head { height: 28px; line-height: 28px; padding: 0 12px; border-radius: 7px 7px 0 0; font-weight: 700; font-size: .85rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gn-head { height: 32px; line-height: 32px; padding: 0 12px; border-radius: 7px 7px 0 0; font-weight: 700; font-size: .85rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .gn-pin {
-  position: absolute; width: 12px; height: 12px; margin: -6px 0 0 -6px; border-radius: 50%;
+  position: absolute; width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 50%;
   background: #cfc4de; border: 2px solid #241d31; box-sizing: content-box; cursor: crosshair; z-index: 2;
 }
+/* Zone de prise élargie autour de la broche (le fil se branche facilement). */
+.gn-pin::after { content: ""; position: absolute; inset: -9px; border-radius: 50%; }
 .gn-pin:hover { background: #fff; box-shadow: 0 0 0 3px rgba(155, 89, 182, .5); }
-.gn-plabel { position: absolute; transform: translateY(-50%); font-size: .75rem; color: var(--muted); white-space: nowrap; pointer-events: none; }
+.gn-plabel { position: absolute; transform: translateY(-50%); font-size: .8rem; color: var(--muted); white-space: nowrap; pointer-events: none; }
 .gn-plabel.out { transform: translate(0, -50%); text-align: right; }
 .gn-body { position: absolute; left: 12px; right: 12px; font-size: .75rem; color: var(--muted); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .graph-status { margin: .4rem 0 0; min-height: 1.2em; }
@@ -247,7 +251,8 @@ th { color: var(--muted); font-weight: 600; font-size: .82rem; }
 }
 .graph-menu-title { font-size: .72rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); padding: .4rem .5rem .2rem; }
 .graph-menu-item { display: block; width: 100%; text-align: left; font: inherit; background: none; border: 0; color: var(--text); padding: .4rem .6rem; border-radius: 6px; cursor: pointer; }
-.graph-menu-item:hover { background: var(--panel-2); }
+.graph-menu-item:hover, .graph-menu-item.active { background: var(--panel-2); }
+.graph-menu-search { width: 100%; box-sizing: border-box; margin: .2rem 0 .35rem; }
 .graph-inspector { border: 1px solid var(--line); border-radius: 10px; padding: .75rem; background: var(--bg); }
 .graph-inspector h3 { margin: 0 0 .4rem; font-size: 1rem; }
 .graph-node-title { font-weight: 700; color: var(--purple); margin: 0 0 .5rem; }

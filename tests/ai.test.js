@@ -3,6 +3,7 @@
 const { describe, it, before, after, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
+const { PermissionFlagsBits } = require('discord.js');
 
 process.env.DASHBOARD_PASSWORD = 'mot-de-passe-test-123';
 
@@ -22,9 +23,29 @@ store.updateModuleConfig = (guildId, moduleId, cfg) => {
   return cfg;
 };
 
+// Mémoire des membres : remplacée par une table en mémoire. Chaque écriture est notée pour les tests.
+const aiMemory = new Map(); // `${guildId}:${userId}` -> notes
+const memoryWrites = [];
+const memoryKey = (g, u) => `${g}:${u}`;
+store.loadAiMemory = async (g, u) => structuredClone(aiMemory.get(memoryKey(g, u)) ?? []);
+store.saveAiMemory = async (g, u, notes) => {
+  memoryWrites.push({ g, u, notes: structuredClone(notes) });
+  if (notes.length) aiMemory.set(memoryKey(g, u), structuredClone(notes));
+  else aiMemory.delete(memoryKey(g, u));
+};
+store.deleteAiMemory = async (g, u) => {
+  memoryWrites.push({ g, u, notes: [] });
+  aiMemory.delete(memoryKey(g, u));
+};
+store.listAiMemories = async (g) =>
+  [...aiMemory]
+    .filter(([k]) => k.startsWith(`${g}:`))
+    .map(([k, notes]) => ({ user_id: k.split(':')[1], notes, updated_at: '2026-10-11T08:00:00Z' }));
+
 const ai = require('../src/modules/ai');
 const aiClient = require('../src/ai-client');
-const { sanitizeAi, ValidationError } = require('../src/dashboard/validate');
+const validate = require('../src/dashboard/validate');
+const { sanitizeAi, ValidationError } = validate;
 const { createDashboard } = require('../src/dashboard');
 const auth = require('../src/dashboard/auth');
 
@@ -179,6 +200,18 @@ describe('ai : quotas', () => {
     assert.equal(ai.takeSlot(g, 'autre', 0, t0 + 61000), true, 'la minute suivante repart');
   });
 });
+
+// Réponses successives de Mistral : chaque appel consomme la réponse suivante (la dernière se répète).
+const sequence = (...fns) => {
+  let k = 0;
+  return async (url, init) => fns[Math.min(k++, fns.length - 1)](url, init);
+};
+const toolCall = (name, args, id = 'call_1') => ({ id, type: 'function', function: { name, arguments: JSON.stringify(args) } });
+const toolReply = (calls) => async () =>
+  new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: '', tool_calls: calls } }] }), {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  });
 
 // ---------------------------------------------------------------------------
 describe('ai-client : appel Mistral', () => {
@@ -389,6 +422,60 @@ describe('routes du tableau de bord (module IA)', () => {
     assert.equal((await call('POST', `${AI}/test`, { message: '   ' })).status, 400);
     assert.equal((await call('POST', `${AI}/test`, { message: 'x'.repeat(501) })).status, 400);
   });
+
+  it('mémoire : liste, modification (notes nettoyées) et effacement par membre', async () => {
+    const UID = '850000000000000021';
+    const put = await call('PUT', `${AI}/memories/${UID}`, { notes: ['Aime le café', '@everyone spam', '  '] });
+    assert.equal(put.status, 200, JSON.stringify(put.data));
+    assert.equal(put.data.count, 2, 'note vide retirée, @everyone neutralisé');
+    assert.deepEqual(aiMemory.get(memoryKey(GID, UID)), ['Aime le café', 'spam']);
+    const list = await call('GET', `${AI}/memories`);
+    assert.equal(list.status, 200);
+    assert.equal(list.data.rows[0].userId, UID);
+    assert.deepEqual(list.data.rows[0].notes, ['Aime le café', 'spam']);
+    assert.equal(list.data.maxNotes, 50);
+    assert.equal((await call('DELETE', `${AI}/memories/${UID}`)).status, 200);
+    assert.equal(aiMemory.has(memoryKey(GID, UID)), false);
+  });
+
+  it('mémoire : refus si trop de notes (limite de la configuration), identifiant invalide ou notes mal formées', async () => {
+    const UID = '850000000000000022';
+    assert.equal((await call('PUT', `${AI}/memories/${UID}`, { notes: 'texte' })).status, 400);
+    assert.equal((await call('PUT', `${AI}/memories/${UID}`, { notes: Array.from({ length: 21 }, (_, k) => `n${k}`) })).status, 400, 'défaut 20');
+    assert.equal((await call('PUT', `${AI}/memories/pas-un-id`, { notes: [] })).status, 400);
+    assert.equal((await call('DELETE', `${AI}/memories/pas-un-id`)).status, 400);
+  });
+
+  it('réglages mémoire : bornes 5 à 50, activation acceptée', async () => {
+    assert.equal((await call('PUT', `/api/guilds/${GID}/modules/ai`, { memoryMaxNotes: 60 })).status, 400);
+    assert.equal((await call('PUT', `/api/guilds/${GID}/modules/ai`, { memoryMaxNotes: 4 })).status, 400);
+    const ok = await call('PUT', `/api/guilds/${GID}/modules/ai`, { memoryEnabled: true, memoryMaxNotes: 30 });
+    assert.equal(ok.status, 200, JSON.stringify(ok.data));
+    assert.equal(ok.data.config.memoryEnabled, true);
+    assert.equal(ok.data.config.memoryMaxNotes, 30);
+  });
+
+  it('test simulé : l’outil demandé est listé mais rien n’est enregistré', async () => {
+    process.env.MISTRAL_API_KEY = 'cle-de-test';
+    memoryWrites.length = 0;
+    mistral = sequence(
+      toolReply([toolCall('remember', { note: 'Préfère le thé' })]),
+      okReply('Noté, je m’en souviendrai.'),
+    );
+    const r = await call('POST', `${AI}/test`, { message: 'retiens que je préfère le thé' });
+    assert.equal(r.status, 200, JSON.stringify(r.data));
+    assert.deepEqual(r.data.actions, [{ name: 'remember' }]);
+    assert.equal(r.data.reply, 'Noté, je m’en souviendrai.');
+    assert.equal(memoryWrites.length, 0, 'aucune écriture pendant un test');
+  });
+
+  it('aperçu : les outils proposés sont listés (mémoire active)', async () => {
+    mistral = () => assert.fail('l’aperçu ne doit pas appeler Mistral');
+    const r = await call('POST', `${AI}/preview`, { message: 'bonjour' });
+    assert.equal(r.status, 200);
+    assert.ok(r.data.tools.includes('remember') && r.data.tools.includes('forget'));
+    assert.match(r.data.system, /Serveur : Serveur Test/);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -460,5 +547,270 @@ describe('ai : réponses aux messages Discord', () => {
     mistral = async () => new Response('{}', { status: 429, headers: { 'content-type': 'application/json' } });
     await ai.handleMessage(client, makeMessage({ content: 'salut', userId: '850000000000000016' }));
     assert.equal(sent.length, 0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe('ai : contexte, outils et consignes « rôle »', () => {
+  const cfg = (extra = {}) => ({ ...structuredClone(ai.DEFAULTS), systemPrompt: 'Base.', model: 'ministral-14b-2512', ...extra });
+  const ROLE_OK = '860000000000000001';
+  const ROLE_ADMIN = '860000000000000002';
+  const ROLE_MANAGED = '860000000000000003';
+  const ROLE_HIGH = '860000000000000004';
+  const ROLE_OUT = '860000000000000005';
+
+  it('note : mentions et @everyone retirés, une seule ligne, 200 caractères maximum', () => {
+    assert.equal(ai.sanitizeNote('<@123456789012345678> @everyone   aime\nle thé'), 'aime le thé');
+    assert.equal(ai.sanitizeNote('<@&123456789012345678> @here x').includes('<@'), false);
+    assert.equal(ai.sanitizeNote('a'.repeat(500)).length, 200);
+  });
+
+  it('contexte : date et heure de Paris, serveur, salon, personne qui écrit', () => {
+    const { system } = ai.composeSystemPrompt(cfg(), {
+      now: new Date('2026-10-11T12:00:00Z'), // 14:00 à Paris (heure d’été)
+      serverName: 'Serveur Test',
+      channelName: 'général',
+      authorName: 'Léa',
+    });
+    assert.match(system, /11 octobre 2026/);
+    assert.match(system, /14:00/);
+    assert.match(system, /Serveur : Serveur Test/);
+    assert.match(system, /Salon : #général/);
+    assert.match(system, /Personne qui écrit : Léa/);
+  });
+
+  it('mémoire : section présente seulement si des notes existent ; outils mémoire seulement si activée', () => {
+    const none = ai.composeSystemPrompt(cfg(), { memories: [] }).system;
+    assert.doesNotMatch(none, /Ce que tu sais sur cette personne/);
+    const withNotes = ai.composeSystemPrompt(cfg(), { memories: ['Aime le thé'] }).system;
+    assert.match(withNotes, /Ce que tu sais sur cette personne[\s\S]*- Aime le thé/);
+    assert.deepEqual(ai.toolsFor(cfg(), []).map((t) => t.function.name), []);
+    assert.deepEqual(
+      ai.toolsFor(cfg({ memoryEnabled: true }), []).map((t) => t.function.name),
+      ['remember', 'forget'],
+    );
+  });
+
+  it('« donner un rôle » : outil give_role limité aux rôles actifs ; noms dans le prompt', () => {
+    const graph = {
+      n: [
+        { i: 'k', t: 'kw', x: 0, y: 0, d: { keywords: ['perm'] } },
+        { i: 'g', t: 'grant', x: 300, y: 0, d: { roleIds: [ROLE_OK] } },
+      ],
+      w: [['k', 'out', 'g', 'when']],
+    };
+    const c = cfg({ graph });
+    const { system, grants } = ai.composeSystemPrompt(c, { text: 'donne-moi la perm', roleNames: { [ROLE_OK]: 'Modo' } });
+    assert.match(system, /give_role/);
+    assert.match(system, /Modo/);
+    const tool = ai.toolsFor(c, grants).find((t) => t.function.name === 'give_role');
+    assert.deepEqual(tool.function.parameters.properties.role_id.enum, [ROLE_OK]);
+    assert.deepEqual(ai.grantRoleIds(grants), [ROLE_OK]);
+    // Sans la phrase déclencheuse : aucun outil de rôle.
+    const quiet = ai.composeSystemPrompt(c, { text: 'bonjour', roleNames: {} });
+    assert.equal(ai.toolsFor(c, quiet.grants).length, 0);
+  });
+
+  it('boucle d’outils : appel d’outil, résultat renvoyé au modèle, puis texte', async () => {
+    const bodies = [];
+    mistral = sequence(
+      async (url, init) => {
+        bodies.push(JSON.parse(init.body));
+        return toolReply([toolCall('remember', { note: 'Aime le thé' })])();
+      },
+      async (url, init) => {
+        bodies.push(JSON.parse(init.body));
+        return okReply('C’est noté !')();
+      },
+    );
+    const seen = [];
+    const { text, actions } = await ai.converse({
+      cfg: cfg({ memoryEnabled: true }),
+      system: 'S',
+      userText: 'retiens que j’aime le thé',
+      tools: ai.toolsFor(cfg({ memoryEnabled: true }), []),
+      execute: async (name, args) => {
+        seen.push([name, args.note]);
+        return 'Note enregistrée.';
+      },
+    });
+    assert.equal(text, 'C’est noté !');
+    assert.deepEqual(actions, [{ name: 'remember', result: 'Note enregistrée.' }]);
+    assert.deepEqual(seen, [['remember', 'Aime le thé']]);
+    const second = bodies[1].messages;
+    assert.equal(second.at(-1).role, 'tool');
+    assert.equal(second.at(-1).tool_call_id, 'call_1');
+    assert.equal(second.at(-1).content, 'Note enregistrée.');
+    assert.ok(bodies[0].tool_choice === 'auto' && Array.isArray(bodies[0].tools));
+  });
+
+  it('boucle d’outils : 2 tours maximum, ensuite erreur (pas de boucle infinie)', async () => {
+    let calls = 0;
+    let executed = 0;
+    mistral = async () => {
+      calls += 1;
+      return toolReply([toolCall('forget', {}, `c${calls}`)])();
+    };
+    await assert.rejects(
+      ai.converse({ cfg: cfg(), system: 'S', userText: 'x', tools: [], execute: async () => (executed += 1, 'ok') }),
+      (err) => err.code === 'loop',
+    );
+    assert.equal(ai.LIMITS.toolRounds, 2);
+    assert.equal(executed, 2, 'deux tours exécutés');
+    assert.equal(calls, 3, 'trois appels : deux tours d’outils, puis le refus');
+  });
+
+  it('outil inconnu : le modèle reçoit « Outil inconnu » et la conversation continue', async () => {
+    mistral = sequence(toolReply([toolCall('supprimer_serveur', {})]), okReply('D’accord.'));
+    const { text, actions } = await ai.converse({
+      cfg: cfg(),
+      system: 'S',
+      userText: 'x',
+      tools: [],
+      execute: (name, args) => ai.executeTool({ dryRun: false, cfg: cfg() }, name, args),
+    });
+    assert.equal(text, 'D’accord.');
+    assert.equal(actions[0].result, 'Outil inconnu.');
+  });
+
+  it('give_role : refus si le rôle n’est pas autorisé pour ce message', async () => {
+    const guild = fakeGuild();
+    const env = { guild, member: null, userId: '850000000000000030', cfg: cfg(), allowedRoleIds: [ROLE_OK], dryRun: false };
+    assert.match(await ai.executeTool(env, 'give_role', { role_id: ROLE_ADMIN }), /pas autorisé/);
+    assert.match(await ai.executeTool(env, 'give_role', { role_id: ROLE_OUT }), /pas autorisé/);
+  });
+
+  it('give_role : contrôles (administrateur, géré, au-dessus du bot, @everyone, doublon, permission du bot)', async () => {
+    const guild = fakeGuild();
+    const role = (id, extra = {}) => ({ id, name: `r${id.slice(-1)}`, position: 1, managed: false, permissions: { has: () => false }, ...extra });
+    guild.roles.cache.set(ROLE_OK, role(ROLE_OK));
+    guild.roles.cache.set(ROLE_ADMIN, role(ROLE_ADMIN, { permissions: { has: (f) => f === PermissionFlagsBits.Administrator } }));
+    guild.roles.cache.set(ROLE_MANAGED, role(ROLE_MANAGED, { managed: true }));
+    guild.roles.cache.set(ROLE_HIGH, role(ROLE_HIGH, { position: 9 }));
+    guild.roles.cache.set(GID, role(GID, { position: 0 }));
+    const added = [];
+    const member = { id: '850000000000000031', roles: { cache: new Map() } };
+    member.roles.add = async (r) => {
+      added.push(r.id);
+      member.roles.cache.set(r.id, r);
+    };
+    guild.members = { me: { permissions: { has: () => true }, roles: { highest: { position: 5 } } } };
+    const env = { guild, member, userId: member.id, cfg: cfg(), allowedRoleIds: [ROLE_OK, ROLE_ADMIN, ROLE_MANAGED, ROLE_HIGH, GID], dryRun: false };
+
+    assert.match(await ai.executeTool(env, 'give_role', { role_id: ROLE_ADMIN }), /administrateur/);
+    assert.match(await ai.executeTool(env, 'give_role', { role_id: ROLE_MANAGED }), /ne peut pas/);
+    assert.match(await ai.executeTool(env, 'give_role', { role_id: ROLE_HIGH }), /au-dessus du rôle du bot/);
+    assert.match(await ai.executeTool(env, 'give_role', { role_id: GID }), /ne peut pas/);
+    assert.match(await ai.executeTool(env, 'give_role', { role_id: ROLE_OK }), /attribué/);
+    assert.match(await ai.executeTool(env, 'give_role', { role_id: ROLE_OK }), /déjà ce rôle/);
+    assert.deepEqual(added, [ROLE_OK], 'un seul ajout, aucun rôle refusé');
+
+    guild.members = { me: { permissions: { has: () => false }, roles: { highest: { position: 5 } } } };
+    const other = { ...env, member: { roles: { cache: new Map(), add: async () => assert.fail('pas d’ajout sans permission') } } };
+    assert.match(await ai.executeTool(other, 'give_role', { role_id: ROLE_OK }), /Gérer les rôles/);
+  });
+
+  it('mémoire : notes ajoutées, doublons refusés, plafond respecté, oubli', async () => {
+    const guild = fakeGuild();
+    const UID = '850000000000000040';
+    const env = { guild, member: null, userId: UID, cfg: cfg({ memoryEnabled: true, memoryMaxNotes: 5 }), allowedRoleIds: [], dryRun: false };
+    aiMemory.delete(memoryKey(GID, UID));
+    assert.equal(await ai.executeTool(env, 'remember', { note: 'Aime le thé' }), 'Note enregistrée.');
+    assert.equal(await ai.executeTool(env, 'remember', { note: 'aime le THÉ' }), 'Déjà noté.');
+    for (let k = 0; k < 4; k++) await ai.executeTool(env, 'remember', { note: `Note ${k}` });
+    assert.match(await ai.executeTool(env, 'remember', { note: 'de trop' }), /Mémoire pleine \(5 notes\)/);
+    assert.equal(aiMemory.get(memoryKey(GID, UID)).length, 5);
+    assert.match(await ai.executeTool(env, 'forget', {}), /effacée/);
+    assert.equal(aiMemory.has(memoryKey(GID, UID)), false);
+    const off = { ...env, cfg: cfg({ memoryEnabled: false }) };
+    assert.match(await ai.executeTool(off, 'remember', { note: 'x' }), /désactivée/);
+  });
+
+  it('validation : rôle administrateur refusé pour « donner un rôle », mémoire bornée', () => {
+    const guild = fakeGuild();
+    guild.roles.cache.set(ROLE_ADMIN, { id: ROLE_ADMIN, name: 'Admin', position: 3, managed: false, permissions: { has: (f) => f === PermissionFlagsBits.Administrator } });
+    const graph = (type) => ({ n: [{ i: 'g', t: type, x: 0, y: 0, d: { roleIds: [ROLE_ADMIN] } }], w: [] });
+    assert.throws(() => sanitizeAi(guild, { graph: graph('grant') }), ValidationError);
+    assert.doesNotThrow(() => sanitizeAi(guild, { graph: graph('role') }), 'un rôle admin peut servir d’événement');
+    assert.throws(() => sanitizeAi(guild, { memoryMaxNotes: 51 }), ValidationError);
+    assert.equal(sanitizeAi(guild, { memoryMaxNotes: 50, memoryEnabled: true }).memoryMaxNotes, 50);
+    assert.throws(() => validate.aiNotes('x'), ValidationError);
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe('ai : historique court et mémoire dans les réponses Discord', () => {
+  const G2 = '831000000000000002';
+  const CHAN = '841000000000000002';
+  const client = { user: { id: BOT } };
+  const sent = [];
+  const bodies = [];
+  const message = (content, userId, guildId = G2) => ({
+    content,
+    channelId: CHAN,
+    guild: { id: guildId, name: 'Serveur Test' },
+    author: { id: userId, bot: false, username: 'lea' },
+    mentions: { users: { has: () => false }, roles: new Map() },
+    channel: { sendTyping: async () => {}, name: 'général' },
+    reply: async (payload) => {
+      sent.push(payload.content);
+      return payload;
+    },
+  });
+  const enable = (extra = {}) =>
+    store.updateModuleConfig(G2, ai.ID, { ...structuredClone(ai.DEFAULTS), enabled: true, channelIds: [CHAN], cooldownSeconds: 0, ...extra });
+
+  beforeEach(() => {
+    sent.length = 0;
+    bodies.length = 0;
+    process.env.MISTRAL_API_KEY = 'cle-de-test';
+    mistral = async (url, init) => {
+      bodies.push(JSON.parse(init.body));
+      return okReply(`Réponse ${bodies.length}`)();
+    };
+  });
+
+  it('deuxième message : l’échange précédent est joint (même membre, même salon)', async () => {
+    enable();
+    await ai.handleMessage(client, message('premier message', '851000000000000001'));
+    await ai.handleMessage(client, message('deuxième message', '851000000000000001'));
+    const msgs = bodies[1].messages;
+    assert.deepEqual(msgs.slice(1).map((m) => m.role), ['user', 'assistant', 'user']);
+    assert.equal(msgs[1].content, 'premier message');
+    assert.equal(msgs.at(-1).content, 'deuxième message');
+  });
+
+  it('historique séparé par membre : un autre membre ne voit pas la conversation', async () => {
+    enable();
+    await ai.handleMessage(client, message('bonjour de Léa', '851000000000000002'));
+    await ai.handleMessage(client, message('bonjour de Tom', '851000000000000003'));
+    assert.equal(bodies[1].messages.length, 2, 'système + message seulement');
+  });
+
+  it('le contexte (serveur, salon, auteur, date) est dans le prompt envoyé', async () => {
+    enable();
+    await ai.handleMessage(client, message('salut', '851000000000000004'));
+    assert.match(bodies[0].messages[0].content, /Serveur : Serveur Test/);
+    assert.match(bodies[0].messages[0].content, /Salon : #général/);
+    assert.match(bodies[0].messages[0].content, /Personne qui écrit : lea/);
+  });
+
+  it('mémoire activée : les notes de la personne sont dans le prompt, pas celles des autres', async () => {
+    enable({ memoryEnabled: true });
+    aiMemory.set(memoryKey(G2, '851000000000000005'), ['Est végétarien']);
+    await ai.handleMessage(client, message('quoi manger ?', '851000000000000005'));
+    await ai.handleMessage(client, message('quoi manger ?', '851000000000000006'));
+    assert.match(bodies[0].messages[0].content, /Est végétarien/);
+    assert.doesNotMatch(bodies[1].messages[0].content, /Est végétarien/);
+    assert.equal(bodies[0].tools.map((t) => t.function.name).join(','), 'remember,forget');
+  });
+
+  it('historique : plafond de 6 messages gardés', async () => {
+    enable();
+    const user = '851000000000000007';
+    for (let k = 1; k <= 5; k++) await ai.handleMessage(client, message(`m${k}`, user));
+    const last = bodies.at(-1).messages.slice(1);
+    assert.equal(last.length, ai.LIMITS.history + 1, 'historique (6) + message courant');
+    assert.equal(last.at(-1).content, 'm5');
   });
 });

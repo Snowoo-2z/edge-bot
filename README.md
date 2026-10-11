@@ -249,18 +249,41 @@ est en fin de vie) ou Ministral 8B. Tout se règle sur le tableau de bord, page 
 - **Prompt système** : le rôle et les règles du bot (2 000 caractères maximum).
 - **Abréviations** : liste `abréviation = signification` (100 maximum), ajoutable ligne par ligne ou en lot. Elles sont
   transmises au modèle pour qu'il comprenne le langage du serveur.
-- **Graphe de réponse** : éditeur façon Unreal Engine. Clic droit sur le fond pour ajouter un nœud, glisser un nœud pour
-  le déplacer, glisser depuis une **sortie** (à droite) vers une **entrée** (à gauche) pour relier deux broches, cliquer
-  sur un fil pour le supprimer, `Suppr` pour supprimer le nœud sélectionné, molette pour zoomer, glisser le fond pour
-  déplacer la vue. Un panneau de détails règle chaque nœud.
+- **Contexte** : chaque réponse reçoit la date et l'heure (heure de Paris), le nom du serveur, celui du salon et le nom de
+  la personne qui écrit. Rien à régler.
+- **Graphe de réponse** : éditeur façon Unreal Engine.
+  - **Déplacer la vue** : clic droit, clic milieu, ou Espace maintenu + glisser ; molette pour zoomer ; `F` pour cadrer.
+  - **Sélectionner** : clic sur un nœud ; `Maj` + clic pour ajouter ; glisser sur le fond vide dessine un rectangle ;
+    `Ctrl+A` tout sélectionner. Glisser un nœud sélectionné déplace tout le groupe.
+  - **Ajouter** : clic droit sur le fond, puis taper dans la recherche (« prix » trouve le nœud qui contient « prix » et le
+    centre ; `Entrée` prend le premier résultat ; `Échap` ferme).
+  - **Copier / coller** : `Ctrl+C`, `Ctrl+V` (collé à la souris), `Ctrl+D` (dupliqué, les fils entre les copies sont recréés).
+  - **Annuler / rétablir** : `Ctrl+Z`, `Ctrl+Y` ou `Ctrl+Maj+Z`. Les déplacements d'un groupe et les frappes dans un même
+    champ forment un seul pas.
+  - Les broches sont grandes et la zone de prise déborde autour : on peut relier un fil sans viser exactement.
   - **Événements** (vrais ou faux pour chaque message) : *Mot-clé* (mots entiers, sans accents ni majuscules, 20 par nœud,
-    50 caractères chacun), *Salon* (10 salons textuels au plus), *Bot mentionné*.
-  - **Logique** : *ET*, *OU*, *NON*. Une entrée non branchée vaut faux. Une entrée ne reçoit qu'un seul fil ; les boucles
-    sont refusées.
-  - **Actions** : *Ajouter une consigne* (500 caractères). Elle n'est ajoutée au prompt que si son entrée « si vrai »
-    est vraie. Une consigne non branchée n'est **jamais** appliquée (l'éditeur l'indique).
+    50 caractères chacun), *Salon* (10 salons textuels au plus), *Bot mentionné*, *Le membre a un rôle* (au moins un des
+    rôles choisis, 25 maximum), *Le message mentionne un rôle* (ping d'un des rôles choisis).
+  - **Logique** : *ET* et *OU* acceptent de 2 à 6 entrées (réglage dans le panneau de détails ; les fils des entrées retirées
+    sont supprimés), *NON*. Une entrée non branchée vaut faux. Une entrée ne reçoit qu'un seul fil ; les boucles sont refusées.
+  - **Actions** : *Ajouter une consigne* (500 caractères) : ajoutée au prompt seulement si son entrée « si vrai » est vraie.
+    *L'IA peut donner un rôle* : si son entrée est vraie, l'IA peut attribuer ces rôles (10 maximum) quand la personne le
+    demande. Une consigne ou une action non branchée n'est **jamais** appliquée (l'éditeur l'indique).
   - Ordre d'application : de haut en bas, puis de gauche à droite. 60 nœuds et 150 fils au maximum.
   Le prompt complet (prompt + abréviations + toutes les consignes possibles) ne peut pas dépasser 12 000 caractères.
+- **Donner un rôle** : l'outil `give_role` n'existe que si un nœud *L'IA peut donner un rôle* est actif pour le message. L'IA ne
+  peut donner que les rôles de ce nœud, et seulement à la personne qui écrit, sans doublon. Refusés : `@everyone`, les rôles
+  gérés par une intégration, les rôles **administrateur**, les rôles au-dessus de celui du bot, et tout rôle si le bot n'a
+  pas « Gérer les rôles ». Le nom du rôle est confirmé par le bot ; l'IA ne doit pas promettre un rôle sans confirmation.
+- **Mémoire des membres** (désactivée par défaut) : si elle est activée, la personne peut demander de retenir une information
+  (« retiens que je préfère le thé ») ou d'oublier (« oublie ce que tu sais de moi »). Chaque personne a sa propre mémoire,
+  de 5 à 50 notes (20 par défaut) de 200 caractères au maximum, mentions et `@everyone` neutralisés. Les notes sont
+  stockées dans Supabase (table `edge_ai_memories`, section 10 de `supabase/schema.sql`) et se modifient ou s'effacent
+  sur le tableau de bord, section « Mémoire des membres ».
+- **Historique court** : les 3 derniers échanges (6 messages) d'un membre dans un salon sont gardés **en mémoire vive
+  seulement**, pendant 30 minutes ; ils ne sont jamais écrits sur le disque ni dans Supabase. Un redémarrage les efface.
+- **Outils** : au plus 2 tours d'outils par message ; ensuite le modèle doit répondre par du texte. « Tester avec Mistral » **simule** les outils :
+  il affiche les actions demandées, sans rien enregistrer ni attribuer.
 - **Stockage compact** : le graphe est enregistré sous la forme `{ n: [{ i, t, x, y, d }], w: [[nodeOut, pinOut, nodeIn, pinIn]] }`
   (`i` identifiant, `t` type, `x`/`y` position, `d` données, omis si vide). Le moteur est partagé par le navigateur et le
   serveur : `src/dashboard/public/ai-graph.js`.
@@ -270,9 +293,10 @@ est en fin de vie) ou Ministral 8B. Tout se règle sur le tableau de bord, page 
   de la page indique « Enregistrement… », « ✓ Enregistré à HH:MM » ou « ⚠ Non enregistré (raison) ». Les modifications restent
   affichées en cas d'erreur et sont renvoyées à la modification suivante. Le navigateur demande confirmation si on ferme la page
   avant l'envoi. Une abréviation à moitié saisie n'est pas envoyée tant qu'elle est incomplète.
-- **Plein écran** : bouton « Plein écran » dans la barre de l'éditeur ; `Échap` pour quitter.
+- **Plein écran** : bouton « Plein écran » dans la barre de l'éditeur ; `Échap` pour quitter (sauf si le menu d'ajout est ouvert).
 - **Confidentialité** : le texte du membre part dans le message « user » ; il n'entre jamais dans le prompt système.
   La clé `MISTRAL_API_KEY` n'est jamais écrite dans le dépôt, ni affichée, ni journalisée.
+- **Base de données** : la mémoire des membres demande la section 10 de `supabase/schema.sql` (table `edge_ai_memories`), à exécuter une fois.
 - `/config` → **IA (Mistral)** : activation rapide uniquement.
 
 ## Tests

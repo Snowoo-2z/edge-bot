@@ -284,7 +284,54 @@ function listGuildConfigs(guildId) {
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// Mémoire du module IA : quelques notes par membre (table edge_ai_memories).
+// Stockée uniquement dans Supabase ; visible et modifiable sur le tableau de bord.
+// ---------------------------------------------------------------------------
+const AI_MEMORY_TABLE = 'edge_ai_memories';
+
+// Notes d'un membre (tableau de chaînes). Vide si aucune.
+async function loadAiMemory(guildId, userId) {
+  const { data, error } = await supabase
+    .from(AI_MEMORY_TABLE)
+    .select('notes')
+    .eq('guild_id', guildId)
+    .eq('user_id', userId)
+    .maybeSingle();
+  if (error) throw new Error(`Lecture Supabase échouée (${AI_MEMORY_TABLE}) : ${error.message}`);
+  return Array.isArray(data?.notes) ? data.notes : [];
+}
+
+// Remplace les notes d'un membre. Une liste vide efface la ligne.
+async function saveAiMemory(guildId, userId, notes) {
+  if (!notes.length) return deleteAiMemory(guildId, userId);
+  const row = { guild_id: guildId, user_id: userId, notes, updated_at: new Date().toISOString() };
+  const { error } = await supabase.from(AI_MEMORY_TABLE).upsert(row, { onConflict: 'guild_id,user_id' });
+  if (error) throw new Error(`Écriture Supabase échouée (${AI_MEMORY_TABLE}) : ${error.message}`);
+}
+
+async function deleteAiMemory(guildId, userId) {
+  const { error } = await supabase.from(AI_MEMORY_TABLE).delete().eq('guild_id', guildId).eq('user_id', userId);
+  if (error) throw new Error(`Suppression Supabase échouée (${AI_MEMORY_TABLE}) : ${error.message}`);
+}
+
+// Toutes les mémoires d'un serveur : [{ user_id, notes, updated_at }], les plus récentes d'abord.
+async function listAiMemories(guildId) {
+  const { data, error } = await supabase
+    .from(AI_MEMORY_TABLE)
+    .select('user_id, notes, updated_at')
+    .eq('guild_id', guildId)
+    .order('updated_at', { ascending: false })
+    .limit(500);
+  if (error) throw new Error(`Lecture Supabase échouée (${AI_MEMORY_TABLE}) : ${error.message}`);
+  return data ?? [];
+}
+
 module.exports = {
+  loadAiMemory,
+  saveAiMemory,
+  deleteAiMemory,
+  listAiMemories,
   init,
   insertBackup,
   loadBackups,

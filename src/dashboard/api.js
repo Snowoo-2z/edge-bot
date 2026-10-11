@@ -175,23 +175,42 @@ function createApi({ getClient }) {
     });
   });
 
-  // Contexte d'un message de test : texte, salon (optionnel) et mention du bot (simulée).
-  const aiContext = (body) => ({
-    text: ai.cleanUserText(body?.message),
-    channelId: validate.isSnowflake(body?.channelId) ? body.channelId : undefined,
-    mentioned: body?.mentioned === true,
-  });
+  // Contexte d'un message de test : texte, salon (optionnel), mention du bot (simulée), rôles et noms.
+  const aiContext = (guild, body) => {
+    const channelId = validate.isSnowflake(body?.channelId) ? body.channelId : undefined;
+    const roleNames = Object.fromEntries([...guild.roles.cache.values()].map((r) => [r.id, r.name]));
+    return {
+      text: ai.cleanUserText(body?.message),
+      channelId,
+      mentioned: body?.mentioned === true,
+      serverName: guild.name,
+      channelName: channelId ? guild.channels.cache.get(channelId)?.name : undefined,
+      authorName: 'Test (tableau de bord)',
+      roleNames,
+      memberRoleIds: [],
+      mentionedRoleIds: [],
+      now: new Date(),
+    };
+  };
 
   // Aperçu du prompt final pour un message donné : aucun appel à Mistral.
+  // Les outils qui seraient proposés au modèle sont listés (noms seulement).
   route('POST', '/api/guilds/:gid/ai/preview', async ({ req, res, params }) => {
     const { guild } = resolveGuild(params);
     const body = await readJson(req);
     const cfg = configOf(guild, ai.ID);
-    const { system, active } = ai.composeSystemPrompt(cfg, aiContext(body));
-    sendJson(res, 200, { system, active: active.map((a) => ({ id: a.id, text: a.text })) });
+    const ctx = aiContext(guild, body);
+    const { system, active, grants } = ai.composeSystemPrompt(cfg, ctx);
+    const tools = ai.toolsFor(cfg, grants).map((t) => t.function.name);
+    sendJson(res, 200, {
+      system,
+      active: active.map((a) => ({ id: a.id, text: a.text })),
+      tools,
+    });
   });
 
   // Test réel : un appel à Mistral avec le prompt courant (consomme des tokens).
+  // Les outils sont simulés : rien n'est enregistré ni attribué ; les actions demandées sont renvoyées.
   route('POST', '/api/guilds/:gid/ai/test', async ({ req, res, params }) => {
     const { guild } = resolveGuild(params);
     const body = await readJson(req);
@@ -199,16 +218,52 @@ function createApi({ getClient }) {
     if (raw.length > ai.LIMITS.testMessageChars) {
       throw new HttpError(400, `Message de test : ${ai.LIMITS.testMessageChars} caractères maximum.`);
     }
-    const ctx = aiContext(body);
+    const ctx = aiContext(guild, body);
     if (!ctx.text) throw new HttpError(400, 'Message de test vide.');
     const cfg = configOf(guild, ai.ID);
     try {
-      const reply = await ai.answer(cfg, ctx.text, { channelId: ctx.channelId, mentioned: ctx.mentioned });
-      sendJson(res, 200, { reply: reply.slice(0, ai.LIMITS.reply) });
+      const { text, actions } = await ai.answerDetailed(cfg, ctx.text, ctx);
+      sendJson(res, 200, {
+        reply: text.slice(0, ai.LIMITS.reply),
+        actions: actions.map((a) => ({ name: a.name })),
+      });
     } catch (err) {
       if (err instanceof aiClient.AiError) throw new HttpError(err.code === 'no_key' ? 503 : 502, err.message);
       throw err;
     }
+  });
+
+  // Mémoire des membres (IA) : liste du serveur, modification et effacement par personne.
+  // Réservé au tableau de bord (propriétaire) : les membres ne voient pas ces notes.
+  route('GET', '/api/guilds/:gid/ai/memories', async ({ res, params }) => {
+    const { guild } = resolveGuild(params);
+    const rows = await store.listAiMemories(guild.id);
+    sendJson(res, 200, {
+      rows: rows.map((r) => ({
+        userId: r.user_id,
+        userName: nameOf(guild, r.user_id),
+        notes: Array.isArray(r.notes) ? r.notes : [],
+        updatedAt: r.updated_at,
+      })),
+      maxNotes: ai.LIMITS.memoryMaxNotes,
+    });
+  });
+
+  route('PUT', '/api/guilds/:gid/ai/memories/:uid', async ({ req, res, params }) => {
+    const { guild } = resolveGuild(params);
+    if (!validate.isSnowflake(params.uid)) throw new HttpError(400, 'Identifiant de membre invalide.');
+    const body = await readJson(req);
+    const cfg = configOf(guild, ai.ID);
+    const notes = validate.aiNotes(body?.notes, Math.min(cfg.memoryMaxNotes, ai.LIMITS.memoryMaxNotes));
+    await store.saveAiMemory(guild.id, params.uid, notes);
+    sendJson(res, 200, { ok: true, count: notes.length });
+  });
+
+  route('DELETE', '/api/guilds/:gid/ai/memories/:uid', async ({ res, params }) => {
+    const { guild } = resolveGuild(params);
+    if (!validate.isSnowflake(params.uid)) throw new HttpError(400, 'Identifiant de membre invalide.');
+    await store.deleteAiMemory(guild.id, params.uid);
+    sendJson(res, 200, { ok: true });
   });
 
   route('PUT', '/api/guilds/:gid/modules/:module', async ({ req, res, params }) => {

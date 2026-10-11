@@ -18,13 +18,20 @@ function isConfigured() {
   return apiKey().length > 0;
 }
 
-async function chat({ model, system, user, temperature = 0.5, maxTokens = 400 }) {
+// messages : [{ role, content, ... }] (conversation complète). tools : outils proposés au modèle (facultatif).
+// Renvoie { text, toolCalls } : le texte (peut être vide si le modèle appelle un outil) et les appels demandés.
+async function chat({ model, messages, tools, temperature = 0.5, maxTokens = 400 }) {
   const key = apiKey();
   if (!key) {
     throw new AiError('Clé MISTRAL_API_KEY absente : ajoute-la aux variables d’environnement de l’hébergeur.', 'no_key');
   }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  const body = { model, messages, temperature, max_tokens: maxTokens };
+  if (tools?.length) {
+    body.tools = tools;
+    body.tool_choice = 'auto';
+  }
   let res;
   try {
     res = await fetch(ENDPOINT, {
@@ -34,15 +41,7 @@ async function chat({ model, system, user, temperature = 0.5, maxTokens = 400 })
         'Content-Type': 'application/json',
         Accept: 'application/json',
       },
-      body: JSON.stringify({
-        model,
-        messages: [
-          { role: 'system', content: system },
-          { role: 'user', content: user },
-        ],
-        temperature,
-        max_tokens: maxTokens,
-      }),
+      body: JSON.stringify(body),
       signal: controller.signal,
     });
   } catch (err) {
@@ -60,9 +59,11 @@ async function chat({ model, system, user, temperature = 0.5, maxTokens = 400 })
   if (!res.ok) throw new AiError(`Mistral a répondu ${res.status}.`, 'http');
 
   const data = await res.json().catch(() => null);
-  const text = data?.choices?.[0]?.message?.content;
-  if (typeof text !== 'string' || !text.trim()) throw new AiError('Réponse vide de Mistral.', 'empty');
-  return text.trim();
+  const message = data?.choices?.[0]?.message ?? {};
+  const text = typeof message.content === 'string' ? message.content.trim() : '';
+  const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
+  if (!text && !toolCalls.length) throw new AiError('Réponse vide de Mistral.', 'empty');
+  return { text, toolCalls, message };
 }
 
 module.exports = { chat, isConfigured, AiError };

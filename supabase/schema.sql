@@ -143,3 +143,19 @@ alter table public.edge_backups enable row level security;
 -- ---------------------------------------------------------------------------
 alter table public.edge_backups add column if not exists data_z text;
 alter table public.edge_backups alter column data drop not null;
+
+-- ---------------------------------------------------------------------------
+-- 10. Mémoire des membres (module IA, à la demande de la personne).
+--    Une ligne par membre et par serveur : « notes » est une liste de textes courts (200 caractères).
+--    Lue et modifiée seulement par le bot et le tableau de bord (clé service_role).
+-- ---------------------------------------------------------------------------
+create table if not exists public.edge_ai_memories (
+  guild_id    text        not null,
+  user_id     text        not null,
+  notes       jsonb       not null default '[]'::jsonb,
+  updated_at  timestamptz not null default now(),
+  primary key (guild_id, user_id)
+);
+
+-- Même règle que ci-dessus : seule la clé service_role (le bot) y accède.
+alter table public.edge_ai_memories enable row level security;

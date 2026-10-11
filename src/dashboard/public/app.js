@@ -809,7 +809,22 @@
 
   // État de la vue (zoom, position, sélection) : jamais enregistré.
   function aiView() {
-    if (!S.aiView) S.aiView = { panX: 60, panY: 50, zoom: 1, selected: null, menu: false, status: '', drag: null, panMoved: false };
+    if (!S.aiView) {
+      S.aiView = {
+        panX: 60,
+        panY: 50,
+        zoom: 1,
+        sel: new Set(), // identifiants des nœuds sélectionnés
+        hist: { past: [], future: [], lastKey: null, lastAt: 0 }, // Annuler / Rétablir (en mémoire, par page)
+        space: false, // Espace maintenu : glisser = déplacer la vue
+        overCanvas: false,
+        lastWorld: null,
+        menu: false,
+        status: '',
+        drag: null,
+        panMoved: false,
+      };
+    }
     return S.aiView;
   }
 
@@ -826,6 +841,8 @@
     maxReplyTokens: cfg.maxReplyTokens,
     channelIds: cfg.channelIds,
     cooldownSeconds: cfg.cooldownSeconds,
+    memoryEnabled: cfg.memoryEnabled,
+    memoryMaxNotes: cfg.memoryMaxNotes,
     // Une abréviation à moitié saisie n'est pas envoyée : elle reste affichée et sera enregistrée une fois complète.
     abbreviations: (cfg.abbreviations ?? []).filter((a) => String(a.short ?? '').trim() && String(a.meaning ?? '').trim()),
     graph: cfg.graph,
@@ -944,7 +961,7 @@
     if (!document.fullscreenElement && S.aiView?.fs) setGraphFullscreen(false);
   });
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && S.aiView?.fs) setGraphFullscreen(false);
+    if (e.key === 'Escape' && S.aiView?.fs && !S.aiView?.menu) setGraphFullscreen(false);
   });
 
   // « abréviation = signification » ou « abréviation : signification », une par ligne.
@@ -981,20 +998,192 @@
 
   // Éléments de l'éditeur courant (recréés à chaque affichage de la page).
   let graphRefs = null;
+  // Fragment copié (Ctrl+C) : gardé pendant toute la session de la page.
+  let graphClip = null;
 
   const graphNow = () => aiDraft().graph;
+  const HIST_LIMIT = 200;
+  const HIST_COALESCE_MS = 1200;
+  const roleNameOf = (id) => roleById(id)?.name ?? id;
 
-  // Applique une modification du graphe ; en cas de refus (boucle, pin invalide…), le message s'affiche.
-  function tryEdit(change, okMessage = '') {
+  // ---- Historique : Annuler / Rétablir --------------------------------------
+  // Un instantané (copie) de l'état d'avant la modification est gardé. Les frappes dans un même champ
+  // (clé « key ») et les déplacements forment un seul pas tant qu'ils se suivent à moins de 1,2 s.
+  function pushHistory(snapshot, key = null) {
+    const hist = aiView().hist;
+    const now = Date.now();
+    if (key && hist.lastKey === key && now - hist.lastAt < HIST_COALESCE_MS) {
+      hist.lastAt = now;
+      return;
+    }
+    hist.past.push(snapshot);
+    if (hist.past.length > HIST_LIMIT) hist.past.shift();
+    hist.future = [];
+    hist.lastKey = key;
+    hist.lastAt = now;
+  }
+
+  // Retire de la sélection les nœuds qui n'existent plus (après suppression, annulation…).
+  function pruneSelection() {
     const view = aiView();
+    const ids = new Set(graphNow().n.map((n) => n.i));
+    view.sel = new Set([...view.sel].filter((id) => ids.has(id)));
+  }
+
+  // Modification du graphe par une fonction pure : annulable, sauvegardée, repeinte.
+  // En cas de refus (boucle, limite, pin invalide…), le graphe ne change pas et le message s'affiche.
+  function commit(change, { ok = '', key = null } = {}) {
+    const view = aiView();
+    const before = clone(graphNow());
+    let next;
     try {
-      aiDraft().graph = change(graphNow());
-      view.status = okMessage;
-      markAiDirty();
+      next = change(graphNow());
     } catch (err) {
       view.status = err.message;
+      repaintGraph();
+      return false;
     }
+    pushHistory(before, key);
+    aiDraft().graph = next;
+    view.status = ok;
+    pruneSelection();
+    markAiDirty();
     repaintGraph();
+    return true;
+  }
+
+  // Modification in place (champ de l'inspecteur, déplacement) : l'instantané est pris avant.
+  function editNodeData(n, key, mutate) {
+    pushHistory(clone(graphNow()), key);
+    mutate();
+    refreshSummary(n);
+    markAiDirty();
+  }
+
+  function travel(from, to) {
+    const view = aiView();
+    const stack = view.hist[from];
+    if (!stack.length) {
+      view.status = from === 'past' ? 'Rien à annuler.' : 'Rien à rétablir.';
+      repaintGraph();
+      return;
+    }
+    view.hist[to].push(clone(graphNow()));
+    aiDraft().graph = stack.pop();
+    view.hist.lastKey = null;
+    view.hist.lastAt = 0;
+    view.status = from === 'past' ? 'Annulé.' : 'Rétabli.';
+    pruneSelection();
+    markAiDirty();
+    repaintGraph();
+  }
+  const undo = () => travel('past', 'future');
+  const redo = () => travel('future', 'past');
+
+  // ---- Sélection, presse-papiers ---------------------------------------------
+  const selectedNodes = () => graphNow().n.filter((n) => aiView().sel.has(n.i));
+
+  function selectedFragment() {
+    const nodes = selectedNodes().map((n) => clone(n));
+    const keep = new Set(nodes.map((n) => n.i));
+    const wires = graphNow()
+      .w.filter(([a, , b]) => keep.has(a) && keep.has(b))
+      .map((w) => [...w]);
+    return { n: nodes, w: wires };
+  }
+
+  function copySelection() {
+    const view = aiView();
+    if (!view.sel.size) {
+      view.status = 'Sélectionne des nœuds à copier.';
+      repaintGraph();
+      return false;
+    }
+    graphClip = selectedFragment();
+    view.status = `${graphClip.n.length} nœud(s) copié(s).`;
+    repaintGraph();
+    return true;
+  }
+
+  // Colle un fragment : les nouveaux nœuds (et leurs fils internes) deviennent la sélection.
+  function pasteFragment(fragment, offset, ok) {
+    const view = aiView();
+    let ids = [];
+    const done = commit(
+      (g) => {
+        const r = EdgeAiGraph.pasteFragment(g, fragment, offset);
+        ids = r.ids;
+        return r.graph;
+      },
+      { ok },
+    );
+    if (done && ids.length) {
+      view.sel = new Set(ids);
+      repaintGraph();
+    }
+  }
+
+  function pasteClip() {
+    const view = aiView();
+    if (!graphClip?.n.length) {
+      view.status = 'Rien à coller : copie d’abord (Ctrl+C).';
+      repaintGraph();
+      return;
+    }
+    const minX = Math.min(...graphClip.n.map((n) => n.x));
+    const minY = Math.min(...graphClip.n.map((n) => n.y));
+    // Collé à l'endroit de la souris si elle est sur le canevas, sinon décalé de 40 px.
+    const at = view.overCanvas && view.lastWorld ? view.lastWorld : { x: minX + 40, y: minY + 40 };
+    pasteFragment(graphClip, { x: Math.round(at.x - minX), y: Math.round(at.y - minY) }, 'Collé.');
+  }
+
+  function duplicateSelection() {
+    const view = aiView();
+    if (!view.sel.size) {
+      view.status = 'Sélectionne des nœuds à dupliquer.';
+      repaintGraph();
+      return;
+    }
+    pasteFragment(selectedFragment(), { x: 40, y: 40 }, 'Dupliqué.');
+  }
+
+  function deleteSelection() {
+    const view = aiView();
+    const ids = [...view.sel];
+    if (!ids.length) return;
+    view.sel = new Set();
+    commit((g) => EdgeAiGraph.removeNodes(g, ids), { ok: ids.length > 1 ? `${ids.length} nœuds supprimés.` : 'Nœud supprimé.' });
+  }
+
+  // Cadre les nœuds (ou tout le graphe) dans la zone visible.
+  function frameNodes(list) {
+    const view = aiView();
+    const r = graphRefs.viewport.getBoundingClientRect();
+    if (!list.length) {
+      view.panX = 60;
+      view.panY = 50;
+      view.zoom = 1;
+      applyTransform();
+      return;
+    }
+    const minX = Math.min(...list.map((n) => n.x));
+    const minY = Math.min(...list.map((n) => n.y));
+    const maxX = Math.max(...list.map((n) => n.x + EdgeAiGraph.NODE_W));
+    const maxY = Math.max(...list.map((n) => n.y + EdgeAiGraph.nodeHeight(n)));
+    const zoom = r.width && r.height ? Math.min(r.width / (maxX - minX + 80), r.height / (maxY - minY + 80)) : 1;
+    view.zoom = Math.max(0.4, Math.min(1.5, zoom));
+    view.panX = r.width / 2 - ((minX + maxX) / 2) * view.zoom;
+    view.panY = r.height / 2 - ((minY + maxY) / 2) * view.zoom;
+    applyTransform();
+  }
+
+  // Centre un nœud dans la zone visible, sans changer le zoom.
+  function centerOn(n) {
+    const view = aiView();
+    const r = graphRefs.viewport.getBoundingClientRect();
+    view.panX = r.width / 2 - (n.x + EdgeAiGraph.NODE_W / 2) * view.zoom;
+    view.panY = r.height / 2 - (n.y + EdgeAiGraph.nodeHeight(n) / 2) * view.zoom;
+    applyTransform();
   }
 
   function worldPoint(e) {
@@ -1015,16 +1204,19 @@
 
   function addNodeAt(type, x, y) {
     const view = aiView();
-    try {
-      const result = EdgeAiGraph.addNode(graphNow(), type, x, y);
-      aiDraft().graph = result.graph;
-      view.selected = result.id;
-      view.status = 'Nœud ajouté.';
-      markAiDirty();
-    } catch (err) {
-      view.status = err.message;
+    let id = null;
+    const done = commit(
+      (g) => {
+        const result = EdgeAiGraph.addNode(g, type, x, y);
+        id = result.id;
+        return result.graph;
+      },
+      { ok: 'Nœud ajouté.' },
+    );
+    if (done && id) {
+      view.sel = new Set([id]);
+      repaintGraph();
     }
-    repaintGraph();
   }
 
   function wirePath(p1, p2) {
@@ -1049,7 +1241,7 @@
       // Clic sur un fil : il est supprimé.
       path.addEventListener('click', (e) => {
         e.stopPropagation();
-        tryEdit((gg) => EdgeAiGraph.disconnect(gg, index), 'Fil supprimé.');
+        commit((gg) => EdgeAiGraph.disconnect(gg, index), { ok: 'Fil supprimé.' });
       });
       graphRefs.svg.append(path);
     });
@@ -1057,31 +1249,33 @@
 
   function refreshSummary(n) {
     const el = graphRefs.nodesLayer.querySelector(`[data-summary="${n.i}"]`);
-    if (el) el.textContent = EdgeAiGraph.summaryOf(n);
+    if (el) el.textContent = EdgeAiGraph.summaryOf(n, roleNameOf);
   }
 
   function nodeEl(n) {
     const def = EdgeAiGraph.CATALOG[n.t];
     const view = aiView();
+    const ins = EdgeAiGraph.insOf(n);
+    const outs = EdgeAiGraph.outsOf(n);
     const rows = EdgeAiGraph.nodeRows(n);
     const el = ge(
       'div',
       {
-        class: 'gn' + (view.selected === n.i ? ' sel' : ''),
+        class: 'gn' + (view.sel.has(n.i) ? ' sel' : ''),
         'data-node': n.i,
         style: `left:${n.x}px;top:${n.y}px;width:${EdgeAiGraph.NODE_W}px;height:${EdgeAiGraph.nodeHeight(n)}px`,
       },
       ge('div', { class: 'gn-head', style: `background:${GRAPH_COLORS[def.group]}`, text: def.label }),
     );
-    def.ins.forEach((p, i) => {
-      const y = EdgeAiGraph.HEADER_H + 11 + i * EdgeAiGraph.ROW_H;
+    ins.forEach((p, i) => {
+      const y = EdgeAiGraph.pinOffset(i);
       el.append(
         ge('div', { class: 'gn-pin', 'data-pin': p, 'data-dir': 'in', 'data-node': n.i, style: `left:0px;top:${y}px` }),
-        ge('span', { class: 'gn-plabel in', style: `left:12px;top:${y}px`, text: def.pinLabels[p] ?? p }),
+        ge('span', { class: 'gn-plabel in', style: `left:16px;top:${y}px`, text: EdgeAiGraph.pinLabel(n, p) }),
       );
     });
-    def.outs.forEach((p, i) => {
-      const y = EdgeAiGraph.HEADER_H + 11 + i * EdgeAiGraph.ROW_H;
+    outs.forEach((p, i) => {
+      const y = EdgeAiGraph.pinOffset(i);
       el.append(
         ge('div', {
           class: 'gn-pin',
@@ -1090,7 +1284,7 @@
           'data-node': n.i,
           style: `left:${EdgeAiGraph.NODE_W}px;top:${y}px`,
         }),
-        ge('span', { class: 'gn-plabel out', style: `right:12px;top:${y}px`, text: def.pinLabels[p] ?? p }),
+        ge('span', { class: 'gn-plabel out', style: `right:16px;top:${y}px`, text: EdgeAiGraph.pinLabel(n, p) }),
       );
     });
     el.append(
@@ -1098,7 +1292,7 @@
         class: 'gn-body',
         'data-summary': n.i,
         style: `top:${EdgeAiGraph.HEADER_H + rows * EdgeAiGraph.ROW_H + 2}px`,
-        text: EdgeAiGraph.summaryOf(n),
+        text: EdgeAiGraph.summaryOf(n, roleNameOf),
       }),
     );
     return el;
@@ -1109,19 +1303,54 @@
     const view = aiView();
     const unwired = EdgeAiGraph.unwiredActions(g).length;
     const warn = !view.status && unwired > 0;
+    const picked = view.sel.size > 1 ? ` · ${view.sel.size} nœuds sélectionnés` : '';
     graphRefs.status.className = 'hint graph-status' + (warn ? ' warn' : '');
     graphRefs.status.textContent =
       view.status ||
       (unwired
-        ? `⚠ ${unwired} consigne(s) non reliée(s) : elles ne s’appliquent jamais.`
-        : `${g.n.length} nœud(s), ${g.w.length} fil(s). Glisse une sortie vers une entrée.`);
+        ? `⚠ ${unwired} consigne(s) ou action(s) non reliée(s) : elles ne s’appliquent jamais.`
+        : `${g.n.length} nœud(s), ${g.w.length} fil(s)${picked}. Glisse une sortie vers une entrée.`);
+  }
+
+  // Champ « rôles » (un ou plusieurs rôles, limite selon le nœud).
+  function roleField(n, max, hint) {
+    return fieldChecks(
+      `Rôles${max === 10 ? ' (10 maximum)' : ''}`,
+      roleItems(),
+      n.d?.roleIds ?? [],
+      (v) => {
+        const view = aiView();
+        if (v.length > max) {
+          view.status = `${max} rôles maximum pour ce nœud.`;
+          repaintGraph();
+          return;
+        }
+        editNodeData(n, null, () => (n.d = { ...(n.d ?? {}), roleIds: v }));
+        view.status = '';
+        repaintGraph();
+      },
+      hint,
+    );
   }
 
   function paintInspector() {
     const view = aiView();
-    const n = graphNow().n.find((x) => x.i === view.selected);
+    const ids = [...view.sel];
+    const n = ids.length === 1 ? graphNow().n.find((x) => x.i === ids[0]) : null;
     const children = [ge('h3', { text: 'Détails' })];
-    if (!n) {
+    if (ids.length > 1) {
+      children.push(
+        ge('p', { class: 'graph-node-title', text: `${ids.length} nœuds sélectionnés` }),
+        ge('p', { class: 'hint', text: 'Glisse l’un des nœuds sélectionnés pour déplacer le groupe.' }),
+        h(
+          'div',
+          { class: 'actions' },
+          button('Copier', async () => copySelection(), { cls: 'small' }),
+          button('Dupliquer', async () => duplicateSelection(), { cls: 'small' }),
+          button('Supprimer', async () => deleteSelection(), { cls: 'danger small' }),
+        ),
+      );
+    } else if (!n) {
       children.push(ge('p', { class: 'hint', text: 'Sélectionne un nœud pour régler ses données.' }));
     } else {
       children.push(ge('p', { class: 'graph-node-title', text: EdgeAiGraph.CATALOG[n.t].label }));
@@ -1130,10 +1359,8 @@
           fieldText('Mots-clés (séparés par des virgules)', (n.d?.keywords ?? []).join(', '), {
             max: 1000,
             hint: 'Mot entier, sans accents ni majuscules : « bug » ne matche pas « bugs ».',
-            onInput: (v) => {
-              n.d = { ...(n.d ?? {}), keywords: v.split(',').map((s) => s.trim()).filter(Boolean) };
-              refreshSummary(n);
-            },
+            onInput: (v) =>
+              editNodeData(n, `kw:${n.i}`, () => (n.d = { ...(n.d ?? {}), keywords: v.split(',').map((s) => s.trim()).filter(Boolean) })),
           }),
         );
       }
@@ -1144,10 +1371,35 @@
             channelsOf(TEXT_KINDS).map((c) => ({ id: c.id, label: channelLabel(c) })),
             n.d?.channelIds ?? [],
             (v) => {
-              n.d = { ...(n.d ?? {}), channelIds: v };
+              editNodeData(n, null, () => (n.d = { ...(n.d ?? {}), channelIds: v }));
               repaintGraph();
             },
             'Le nœud est vrai pour un message posté dans l’un de ces salons.',
+          ),
+        );
+      }
+      if (n.t === 'role') children.push(roleField(n, EdgeAiGraph.LIMITS.roles, 'Vrai si le membre qui écrit a au moins un de ces rôles.'));
+      if (n.t === 'mentionRole') {
+        children.push(roleField(n, EdgeAiGraph.LIMITS.roles, 'Vrai si le message mentionne (ping) au moins un de ces rôles.'));
+      }
+      if (n.t === 'grant') {
+        children.push(
+          roleField(
+            n,
+            EdgeAiGraph.LIMITS.grantRoles,
+            'Si l’entrée « si vrai » est vraie, l’IA peut donner ces rôles quand la personne le demande. ' +
+              'Refusé : rôle administrateur ou géré par une intégration.',
+          ),
+        );
+      }
+      if (n.t === 'and' || n.t === 'or') {
+        children.push(
+          fieldSelect(
+            'Nombre d’entrées',
+            String(EdgeAiGraph.insOf(n).length),
+            [2, 3, 4, 5, 6].map((k) => ({ value: String(k), label: `${k} entrées` })),
+            (v) => commit((g) => EdgeAiGraph.setInputCount(g, n.i, Number(v)), { ok: 'Entrées mises à jour.' }),
+            'Les fils branchés sur les entrées retirées sont supprimés.',
           ),
         );
       }
@@ -1157,24 +1409,17 @@
             max: 500,
             multiline: true,
             hint: 'Ajoutée au prompt seulement pour les messages où l’entrée « si vrai » est vraie.',
-            onInput: (v) => {
-              n.d = { ...(n.d ?? {}), text: v };
-              refreshSummary(n);
-            },
+            onInput: (v) => editNodeData(n, `text:${n.i}`, () => (n.d = { ...(n.d ?? {}), text: v })),
           }),
         );
       }
-      if (['and', 'or', 'not', 'mention'].includes(n.t)) {
+      if (['not', 'mention'].includes(n.t)) {
         children.push(ge('p', { class: 'hint', text: 'Ce nœud n’a pas de réglage : seul son branchement compte.' }));
       }
       children.push(
         button(
           'Supprimer ce nœud',
-          async () => {
-            const id = n.i;
-            view.selected = null;
-            tryEdit((g) => EdgeAiGraph.removeNode(g, id), 'Nœud supprimé.');
-          },
+          async () => deleteSelection(),
           { cls: 'danger small' },
         ),
       );
@@ -1184,7 +1429,8 @@
         class: 'hint graph-help',
         text:
           'Glisse depuis une sortie (à droite) vers une entrée (à gauche). Clic droit sur le fond : ajouter un nœud. ' +
-          'Molette : zoom. Glisser le fond : déplacer la vue. Suppr : supprimer le nœud sélectionné. Clic sur un fil : le supprimer.',
+          'Glisser sur le fond : sélection (Maj pour ajouter). Clic droit, clic milieu ou Espace + glisser : déplacer la vue. ' +
+          'Ctrl+Z / Ctrl+Y : annuler / rétablir. Ctrl+C, Ctrl+V, Ctrl+D : copier, coller, dupliquer. Ctrl+A : tout sélectionner. F : cadrer. Suppr : supprimer.',
       }),
     );
     graphRefs.inspector.replaceChildren(...children);
@@ -1200,33 +1446,139 @@
     paintInspector();
   }
 
+  // Rafraîchit seulement la sélection visible (pendant un glisser, sans reconstruire les nœuds).
+  function paintSelection() {
+    const view = aiView();
+    graphRefs.nodesLayer.querySelectorAll('.gn').forEach((el) => el.classList.toggle('sel', view.sel.has(el.dataset.node)));
+    paintStatus();
+    paintInspector();
+  }
+
   function closeMenu() {
     if (!graphRefs) return;
     graphRefs.menuLayer.replaceChildren();
     aiView().menu = false;
   }
 
+  // Texte cherchable d'un nœud : libellé, mots-clés, consigne complète, rôles, salons.
+  function searchTextOf(n) {
+    const d = n.d ?? {};
+    const channels = (d.channelIds ?? []).map((id) => channelNameOf(id)).join(' ');
+    return [EdgeAiGraph.CATALOG[n.t].label, (d.keywords ?? []).join(' '), d.text ?? '', (d.roleIds ?? []).map(roleNameOf).join(' '), channels]
+      .join(' ');
+  }
+
+  // Recherche par mots : chaque mot tapé doit être un mot du texte (« prix » ne trouve pas « prixe » ;
+  // les mots d'au moins 4 lettres acceptent le début d'un mot : « consig » trouve « consigne »).
+  function textMatchesWords(text, words) {
+    const tokens = EdgeAiGraph.foldText(text).split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+    return words.every((w) => tokens.some((t) => t === w || (w.length >= 4 && t.startsWith(w))));
+  }
+
+  // Résultats du menu d'ajout : types de nœuds, puis nœuds existants qui correspondent à la recherche.
+  function menuGroups(query) {
+    const words = EdgeAiGraph.foldText(query).split(/\s+/).filter(Boolean);
+    const matches = (text) => textMatchesWords(text, words);
+    const groups = [];
+    for (const group of EdgeAiGraph.GROUPS) {
+      const types = Object.entries(EdgeAiGraph.CATALOG)
+        .filter(([, def]) => def.group === group.id)
+        .filter(([, def]) => !words.length || matches(`${def.label} ${def.aliases ?? ''} ${group.label}`))
+        .map(([type, def]) => ({ label: def.label, run: (world) => ({ kind: 'add', type, world }) }));
+      if (types.length) groups.push({ title: group.label, items: types });
+    }
+    if (words.length) {
+      const existing = graphNow()
+        .n.filter((n) => matches(searchTextOf(n)))
+        .map((n) => ({
+          label: `${EdgeAiGraph.CATALOG[n.t].label} — ${EdgeAiGraph.summaryOf(n, roleNameOf)}`,
+          run: () => ({ kind: 'focus', id: n.i }),
+        }));
+      if (existing.length) groups.unshift({ title: 'Dans le graphe', items: existing });
+    }
+    return groups;
+  }
+
   function openMenu(sx, sy, world) {
     closeMenu();
-    const menu = ge('div', { class: 'graph-menu', style: `left:${sx}px;top:${sy}px` });
-    for (const group of EdgeAiGraph.GROUPS) {
-      menu.append(ge('div', { class: 'graph-menu-title', text: group.label }));
-      for (const [type, def] of Object.entries(EdgeAiGraph.CATALOG).filter(([, d]) => d.group === group.id)) {
-        menu.append(
-          ge('button', {
-            type: 'button',
-            class: 'graph-menu-item',
-            text: def.label,
-            onclick: () => {
-              closeMenu();
-              addNodeAt(type, world.x, world.y);
-            },
-          }),
-        );
+    const view = aiView();
+    const search = ge('input', {
+      type: 'search',
+      class: 'graph-menu-search',
+      placeholder: 'Rechercher : « prix », « rôle », « ET »…',
+      'aria-label': 'Rechercher un nœud',
+      autocomplete: 'off',
+    });
+    const list = ge('div', { class: 'graph-menu-list' });
+    const menu = ge('div', { class: 'graph-menu', style: `left:${sx}px;top:${sy}px` }, search, list);
+    let active = 0;
+    let items = [];
+
+    const act = (result) => {
+      closeMenu();
+      if (result.kind === 'add') addNodeAt(result.type, world.x, world.y);
+      else {
+        const n = graphNow().n.find((x) => x.i === result.id);
+        if (!n) return;
+        view.sel = new Set([n.i]);
+        centerOn(n);
+        repaintGraph();
       }
-    }
+    };
+
+    const paint = () => {
+      const groups = menuGroups(search.value.trim());
+      items = [];
+      let index = 0;
+      const rendered = groups.map((group) =>
+        ge(
+          'div',
+          null,
+          ge('div', { class: 'graph-menu-title', text: group.title }),
+          group.items.map((item) => {
+            const i = index;
+            index += 1;
+            items.push(item);
+            return ge('button', {
+              type: 'button',
+              class: 'graph-menu-item' + (i === active ? ' active' : ''),
+              text: item.label,
+              onclick: () => act(item.run(world)),
+            });
+          }),
+        ),
+      );
+      active = Math.min(active, Math.max(0, items.length - 1));
+      list.replaceChildren(...(rendered.length ? rendered : [ge('p', { class: 'hint', text: 'Aucun résultat.' })]));
+      list.querySelectorAll('.graph-menu-item').forEach((el, k) => el.classList.toggle('active', k === active));
+    };
+
+    search.addEventListener('input', () => {
+      active = 0;
+      paint();
+    });
+    search.addEventListener('keydown', (e) => {
+      // Rien de ce qui est tapé ici ne doit agir sur le canevas (Suppr, Ctrl+Z, Espace…).
+      e.stopPropagation();
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        closeMenu();
+        graphRefs.viewport.focus();
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        if (items[active]) act(items[active].run(world));
+      } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        if (!items.length) return;
+        active = (active + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+        list.querySelectorAll('.graph-menu-item').forEach((el, k) => el.classList.toggle('active', k === active));
+        list.querySelectorAll('.graph-menu-item')[active]?.scrollIntoView?.({ block: 'nearest' });
+      }
+    });
     graphRefs.menuLayer.replaceChildren(menu);
     aiView().menu = true;
+    paint();
+    search.focus();
   }
 
   // Un fil se termine sur une broche de sens opposé.
@@ -1238,20 +1590,42 @@
     }
     const out = from.dir === 'out' ? from : to;
     const inp = from.dir === 'in' ? from : to;
-    tryEdit((g) => EdgeAiGraph.connect(g, out.node, out.pin, inp.node, inp.pin), 'Fil créé.');
+    commit((g) => EdgeAiGraph.connect(g, out.node, out.pin, inp.node, inp.pin), { ok: 'Fil créé.' });
   }
 
+  // Broche sous le pointeur, avec une tolérance de 14 px (zone de prise élargie).
+  function pinAt(x, y) {
+    const hit = document.elementFromPoint?.(x, y)?.closest?.('.gn-pin');
+    if (hit) return hit;
+    let best = null;
+    let bestD = 14 * 14;
+    graphRefs.nodesLayer.querySelectorAll('.gn-pin').forEach((el) => {
+      const r = el.getBoundingClientRect();
+      const d2 = (r.left + r.width / 2 - x) ** 2 + (r.top + r.height / 2 - y) ** 2;
+      if (d2 < bestD) {
+        bestD = d2;
+        best = el;
+      }
+    });
+    return best;
+  }
+
+  // Clic gauche sur une broche : fil. Clic gauche sur un nœud : sélection et glisser (groupe).
+  // Clic gauche sur le fond : rectangle de sélection. Clic droit, clic milieu ou Espace + glisser : vue.
   function onGraphPointerDown(e) {
     const view = aiView();
+    view.panMoved = false; // un nouveau geste repart de zéro (le menu ne s'ouvre pas après un glisser)
     if (e.target.closest('.graph-menu')) return;
     if (view.menu) closeMenu();
     if (e.target.closest('path.wire')) return;
-    graphRefs.viewport.focus();
+    graphRefs.viewport.focus({ preventScroll: true });
     const pinEl = e.target.closest('.gn-pin');
-    const nodeEl = e.target.closest('.gn');
+    const nodeHit = e.target.closest('.gn');
     graphRefs.viewport.setPointerCapture?.(e.pointerId);
+    view.lastWorld = worldPoint(e);
+    if (e.button === 1) e.preventDefault();
 
-    if (e.button === 0 && pinEl) {
+    if (e.button === 0 && !view.space && pinEl) {
       e.preventDefault();
       const node = pinEl.dataset.node;
       const pin = pinEl.dataset.pin;
@@ -1262,7 +1636,9 @@
         const idx = graphNow().w.findIndex(([, , b, q]) => b === node && q === pin);
         if (idx >= 0) {
           const [a, p] = graphNow().w[idx];
+          pushHistory(clone(graphNow()), null);
           aiDraft().graph = EdgeAiGraph.disconnect(graphNow(), idx);
+          markAiDirty();
           from = { node: a, pin: p, dir: 'out' };
         }
       }
@@ -1270,24 +1646,55 @@
       const temp = svgEl('path', { class: 'temp' });
       graphRefs.svg.append(temp);
       view.drag.temp = temp;
-    } else if (e.button === 0 && nodeEl) {
+    } else if (e.button === 0 && !view.space && nodeHit) {
       e.preventDefault();
-      const id = nodeEl.dataset.node;
-      const n = graphNow().n.find((x) => x.i === id);
-      view.selected = id;
+      const id = nodeHit.dataset.node;
+      const additive = e.shiftKey || e.ctrlKey || e.metaKey;
+      const wasSelected = view.sel.has(id);
+      if (additive && wasSelected) {
+        view.sel.delete(id);
+        paintSelection();
+        return;
+      }
+      if (additive) view.sel.add(id);
+      else if (!wasSelected) view.sel = new Set([id]);
       view.status = '';
-      view.drag = { kind: 'node', id, startWorld: worldPoint(e), startNode: { x: n.x, y: n.y }, moved: false };
-      graphRefs.nodesLayer.querySelectorAll('.gn.sel').forEach((el) => el.classList.remove('sel'));
-      nodeEl.classList.add('sel');
-    } else if (e.button === 0 || e.button === 2) {
-      // Fond du canevas : déplacement de la vue.
+      const starts = new Map(selectedNodes().map((n) => [n.i, { x: n.x, y: n.y }]));
+      view.drag = {
+        kind: 'node',
+        id,
+        startWorld: worldPoint(e),
+        starts,
+        moved: false,
+        // Clic sur un nœud d'une sélection multiple sans glisser : la sélection se réduit à ce nœud.
+        collapse: !additive && wasSelected && view.sel.size > 1,
+        before: clone(graphNow()),
+      };
+      paintSelection();
+    } else if (e.button === 1 || e.button === 2 || (e.button === 0 && view.space)) {
       view.drag = { kind: 'pan', start: { x: e.clientX, y: e.clientY }, pan0: { x: view.panX, y: view.panY }, moved: false };
       view.panMoved = false;
+    } else if (e.button === 0) {
+      // Fond vide : rectangle de sélection (Maj : ajoute à la sélection).
+      const additive = e.shiftKey;
+      view.drag = { kind: 'marquee', start: worldPoint(e), additive, base: additive ? new Set(view.sel) : new Set(), moved: false, rect: null };
+      if (!additive) view.sel = new Set();
+      paintSelection();
     }
+  }
+
+  function intersects(n, rect) {
+    return (
+      n.x < rect.x + rect.w &&
+      n.x + EdgeAiGraph.NODE_W > rect.x &&
+      n.y < rect.y + rect.h &&
+      n.y + EdgeAiGraph.nodeHeight(n) > rect.y
+    );
   }
 
   function onGraphPointerMove(e) {
     const view = aiView();
+    view.lastWorld = worldPoint(e);
     const d = view.drag;
     if (!d) return;
     if (d.kind === 'pan') {
@@ -1301,27 +1708,58 @@
       view.panY = d.pan0.y + dy;
       applyTransform();
     } else if (d.kind === 'node') {
-      const n = graphNow().n.find((x) => x.i === d.id);
-      if (!n) return;
       const w = worldPoint(e);
-      const nx = Math.max(-5000, Math.min(5000, Math.round(d.startNode.x + (w.x - d.startWorld.x))));
-      const ny = Math.max(-5000, Math.min(5000, Math.round(d.startNode.y + (w.y - d.startWorld.y))));
-      if (nx !== n.x || ny !== n.y) d.moved = true;
-      n.x = nx;
-      n.y = ny;
-      const el = graphRefs.nodesLayer.querySelector(`[data-node="${d.id}"]`);
-      if (el) {
-        el.style.left = `${nx}px`;
-        el.style.top = `${ny}px`;
+      const dx = w.x - d.startWorld.x;
+      const dy = w.y - d.startWorld.y;
+      for (const n of graphNow().n) {
+        const s = d.starts.get(n.i);
+        if (!s) continue;
+        const nx = Math.max(-5000, Math.min(5000, Math.round(s.x + dx)));
+        const ny = Math.max(-5000, Math.min(5000, Math.round(s.y + dy)));
+        if (nx !== s.x || ny !== s.y) d.moved = true;
+        n.x = nx;
+        n.y = ny;
+        const el = graphRefs.nodesLayer.querySelector(`[data-node="${n.i}"]`);
+        if (el) {
+          el.style.left = `${nx}px`;
+          el.style.top = `${ny}px`;
+        }
       }
       paintWires();
+    } else if (d.kind === 'marquee') {
+      const w = worldPoint(e);
+      if (Math.abs(w.x - d.start.x) + Math.abs(w.y - d.start.y) > 3) d.moved = true;
+      const rect = {
+        x: Math.min(d.start.x, w.x),
+        y: Math.min(d.start.y, w.y),
+        w: Math.abs(w.x - d.start.x),
+        h: Math.abs(w.y - d.start.y),
+      };
+      d.rect = rect;
+      view.sel = new Set([...d.base, ...graphNow().n.filter((n) => intersects(n, rect)).map((n) => n.i)]);
+      paintMarquee(rect);
+      paintSelection();
     } else if (d.kind === 'wire') {
       const from = graphNow().n.find((x) => x.i === d.from.node);
       const fromPos = from && EdgeAiGraph.pinPosition(from, d.from.pin, 'out');
       if (!fromPos) return;
-      const w = worldPoint(e);
-      d.temp.setAttribute('d', wirePath(fromPos, w));
+      d.temp.setAttribute('d', wirePath(fromPos, view.lastWorld));
     }
+  }
+
+  function paintMarquee(rect) {
+    let box = graphRefs.marquee;
+    if (!rect) {
+      box?.remove();
+      graphRefs.marquee = null;
+      return;
+    }
+    if (!box) {
+      box = ge('div', { class: 'graph-marquee' });
+      graphRefs.marquee = box;
+      graphRefs.world.append(box);
+    }
+    box.style.cssText = `left:${rect.x}px;top:${rect.y}px;width:${rect.w}px;height:${rect.h}px`;
   }
 
   function onGraphPointerUp(e) {
@@ -1330,22 +1768,26 @@
     view.drag = null;
     if (!d) return;
     if (d.kind === 'pan') {
-      if (!d.moved) view.selected = null;
-      repaintGraph();
+      // Rien à faire : la vue a déjà suivi le pointeur.
     } else if (d.kind === 'node') {
-      if (d.moved) markAiDirty();
+      if (d.moved) {
+        pushHistory(d.before, null);
+        markAiDirty();
+      } else if (d.collapse) {
+        view.sel = new Set([d.id]);
+      }
+      repaintGraph();
+    } else if (d.kind === 'marquee') {
+      paintMarquee(null);
       repaintGraph();
     } else if (d.kind === 'wire') {
       d.temp.remove();
-      markAiDirty(); // un fil détaché peut avoir été retiré au pointeur bas
-      const target = document.elementFromPoint(e.clientX, e.clientY)?.closest?.('.gn-pin');
+      // Le fil détaché (entrée déjà reliée) reste retiré si la sortie n'est pas branchée ailleurs.
+      const target = pinAt(e.clientX, e.clientY);
       if (target) {
         finishWire(d.from, { node: target.dataset.node, pin: target.dataset.pin, dir: target.dataset.dir });
-        repaintGraph();
-      } else {
-        view.status = '';
-        repaintGraph();
       }
+      repaintGraph();
     }
   }
 
@@ -1377,11 +1819,61 @@
 
   function onGraphKeyDown(e) {
     const view = aiView();
-    if ((e.key === 'Delete' || e.key === 'Backspace') && view.selected) {
+    // Pas de raccourcis depuis la recherche du menu ni depuis les champs.
+    if (e.target.closest?.('.graph-menu') || e.target.matches?.('input, textarea, select')) return;
+    if (e.key === 'Escape') {
+      if (view.menu) {
+        e.preventDefault();
+        e.stopPropagation();
+        closeMenu();
+      }
+      return;
+    }
+    if (e.key === ' ') {
       e.preventDefault();
-      const id = view.selected;
-      view.selected = null;
-      tryEdit((g) => EdgeAiGraph.removeNode(g, id), 'Nœud supprimé.');
+      view.space = true;
+      graphRefs.viewport.classList.add('panning');
+      return;
+    }
+    const mod = e.ctrlKey || e.metaKey;
+    const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    if (mod) {
+      if (k === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        undo();
+      } else if (k === 'y' || (k === 'z' && e.shiftKey)) {
+        e.preventDefault();
+        redo();
+      } else if (k === 'c' && view.sel.size) {
+        e.preventDefault();
+        copySelection();
+      } else if (k === 'v') {
+        e.preventDefault();
+        pasteClip();
+      } else if (k === 'd') {
+        e.preventDefault();
+        duplicateSelection();
+      } else if (k === 'a') {
+        e.preventDefault();
+        view.sel = new Set(graphNow().n.map((n) => n.i));
+        repaintGraph();
+      }
+      return;
+    }
+    if ((e.key === 'Delete' || e.key === 'Backspace') && view.sel.size) {
+      e.preventDefault();
+      deleteSelection();
+    } else if (k === 'f') {
+      e.preventDefault();
+      frameNodes(view.sel.size ? selectedNodes() : graphNow().n);
+    }
+  }
+
+  function onGraphKeyUp(e) {
+    if (e.key === ' ') {
+      const view = aiView();
+      view.space = false;
+      graphRefs.viewport.classList.remove('panning');
     }
   }
 
@@ -1396,15 +1888,21 @@
     viewport.append(world, menuLayer);
     const status = ge('p', { class: 'hint graph-status' });
     const inspector = ge('div', { class: 'graph-inspector' });
-    graphRefs = { viewport, world, svg, nodesLayer, menuLayer, status, inspector };
+    graphRefs = { viewport, world, svg, nodesLayer, menuLayer, status, inspector, marquee: null };
 
     viewport.addEventListener('pointerdown', onGraphPointerDown);
     viewport.addEventListener('pointermove', onGraphPointerMove);
     viewport.addEventListener('pointerup', onGraphPointerUp);
     viewport.addEventListener('pointercancel', onGraphPointerUp);
+    viewport.addEventListener('pointerenter', () => (aiView().overCanvas = true));
+    viewport.addEventListener('pointerleave', () => (aiView().overCanvas = false));
     viewport.addEventListener('wheel', onGraphWheel, { passive: false });
     viewport.addEventListener('contextmenu', onGraphContextMenu);
-    viewport.addEventListener('keydown', onGraphKeyDown);
+    viewport.addEventListener('auxclick', (e) => e.preventDefault());
+    viewport.addEventListener('blur', () => {
+      aiView().space = false;
+      viewport.classList.remove('panning');
+    });
 
     const view = aiView();
     const fsButton = button('⛶ Plein écran', async () => setGraphFullscreen(!aiView().fs), { cls: 'small' });
@@ -1413,18 +1911,19 @@
       'div',
       { class: 'graph-toolbar' },
       fsButton,
+      button('↶ Annuler', async () => undo(), { cls: 'small', title: 'Ctrl+Z' }),
+      button('↷ Rétablir', async () => redo(), { cls: 'small', title: 'Ctrl+Y ou Ctrl+Maj+Z' }),
       ...Object.entries(EdgeAiGraph.CATALOG).map(([type, def]) =>
-        button(`+ ${def.label}`, async () => {
-          const c = centerWorld();
-          addNodeAt(type, c.x, c.y);
-        }, { cls: 'small' }),
+        button(
+          `+ ${def.label}`,
+          async () => {
+            const c = centerWorld();
+            addNodeAt(type, c.x, c.y);
+          },
+          { cls: 'small' },
+        ),
       ),
-      button('Recentrer', async () => {
-        view.panX = 60;
-        view.panY = 50;
-        view.zoom = 1;
-        applyTransform();
-      }, { cls: 'small' }),
+      button('Cadrer (F)', async () => frameNodes(graphNow().n), { cls: 'small' }),
       button('−', async () => {
         view.zoom = Math.max(0.4, view.zoom / 1.2);
         applyTransform();
@@ -1438,6 +1937,9 @@
     toolbar.append(ge('span', { class: 'hint ai-save', 'data-state': aiState(), text: aiStatusText() }));
     const wrap = ge('div', { class: 'graph-wrap' }, ge('div', null, toolbar, viewport, status), inspector);
     graphRefs.wrap = wrap;
+    // Raccourcis : actifs dans tout l'éditeur (canevas, barre d'outils), sauf dans les champs.
+    wrap.addEventListener('keydown', onGraphKeyDown);
+    wrap.addEventListener('keyup', onGraphKeyUp);
     applyFsState();
     repaintGraph();
     return wrap;
@@ -1506,6 +2008,10 @@
             ? `Consignes actives : ${test.active.map((a) => a.text).join(' | ')}`
             : 'Aucune consigne active pour ce message.',
         }),
+        h('p', {
+          class: 'hint',
+          text: test.tools?.length ? `Outils proposés au modèle : ${test.tools.join(', ')}` : 'Aucun outil proposé pour ce message.',
+        }),
         h('pre', { class: 'ai-pre', text: test.system }),
       );
     } else if (test?.kind === 'reply') {
@@ -1514,6 +2020,9 @@
         { class: 'card' },
         h('h3', { text: 'Réponse de Mistral' }),
         h('p', { class: 'ai-pre', text: test.text }),
+        test.actions?.length
+          ? h('p', { class: 'hint', text: `Actions demandées par le modèle (simulées, rien n’a été enregistré ni attribué) : ${test.actions.map((a) => a.name).join(', ')}` })
+          : null,
       );
     }
 
@@ -1522,6 +2031,8 @@
       channelId: S.aiTestChannel || undefined,
       mentioned: Boolean(S.aiTestMention),
     });
+
+    const memoryBox = h('div', null, h('p', { class: 'muted', text: 'Chargement…' }));
 
     const root = h(
       'section',
@@ -1614,9 +2125,33 @@
         h('p', {
           class: 'hint',
           text:
-            'Les événements (mot-clé, salon, mention) et la logique (ET, OU, NON) décident quelles consignes sont ajoutées au prompt pour chaque message.',
+            'Les événements (mot-clé, salon, mention, rôle, ping de rôle) et la logique (ET, OU à 2 à 6 entrées, NON) décident quelles consignes sont ajoutées au prompt, et quels rôles l’IA peut donner.',
         }),
         buildGraphEditor(),
+      ),
+      h(
+        'div',
+        { class: 'card' },
+        h('h2', { text: 'Mémoire des membres' }),
+        h('p', {
+          class: 'hint',
+          text:
+            'Le bot peut retenir quelques notes sur chaque membre, uniquement quand la personne le demande (« retiens que… », « oublie ce que tu sais de moi »). ' +
+            'Chaque personne a sa propre mémoire. Désactivée par défaut.',
+        }),
+        fieldSwitch('Mémoire activée', 'Active les outils « retenir » et « oublier » pour le bot.', d.memoryEnabled, (v) => (d.memoryEnabled = v)),
+        fieldNumber('Notes gardées par personne (5 à 50)', d.memoryMaxNotes, {
+          min: 5,
+          max: 50,
+          onInput: (v) => (d.memoryMaxNotes = v),
+        }),
+      ),
+      h(
+        'div',
+        { class: 'card', 'data-nosave': true },
+        h('h3', { text: 'Notes enregistrées' }),
+        h('p', { class: 'hint', text: 'Modifie ou efface les notes d’un membre. Une note par ligne, 200 caractères maximum.' }),
+        memoryBox,
       ),
       h(
         'div',
@@ -1644,7 +2179,7 @@
           }),
           button('Tester avec Mistral (consomme des tokens)', async () => {
             const res = await api('POST', gp('/ai/test'), testBody());
-            S.aiTest = { kind: 'reply', text: res.reply };
+            S.aiTest = { kind: 'reply', text: res.reply, actions: res.actions ?? [] };
             rerender();
           }),
         ),
@@ -1659,7 +2194,56 @@
     );
     root.addEventListener('input', onAiEdit);
     root.addEventListener('change', onAiEdit);
+    loadAiMemories(memoryBox);
     return root;
+  }
+
+  // Notes par membre (liste et modification directes, sans passer par la sauvegarde du module).
+  async function loadAiMemories(box) {
+    try {
+      const { rows, maxNotes } = await api('GET', gp('/ai/memories'));
+      if (!rows.length) {
+        box.replaceChildren(h('p', { class: 'muted', text: 'Aucun membre n’a de note pour le moment.' }));
+        return;
+      }
+      box.replaceChildren(
+        ...rows.map((r) => {
+          const area = h('textarea', { rows: Math.min(8, Math.max(2, r.notes.length + 1)), maxlength: 200 * maxNotes, 'aria-label': `Notes de ${r.userName}` });
+          area.value = r.notes.join('\n');
+          return h(
+            'div',
+            { class: 'item', style: 'display:block' },
+            h('div', null, h('strong', { text: r.userName }), h('span', { class: 'hint', text: ` · ${r.notes.length} note(s) sur ${maxNotes} · mise à jour ${fmtDate(r.updatedAt)}` })),
+            area,
+            h(
+              'div',
+              { class: 'actions' },
+              button(
+                'Enregistrer ces notes',
+                async () => {
+                  const notes = area.value.split('\n').map((x) => x.trim()).filter(Boolean);
+                  await api('PUT', gp(`/ai/memories/${r.userId}`), { notes });
+                  toast('Notes enregistrées.');
+                  await loadAiMemories(box);
+                },
+                { cls: 'primary small' },
+              ),
+              button(
+                'Tout effacer',
+                async () => {
+                  await api('DELETE', gp(`/ai/memories/${r.userId}`));
+                  toast('Notes effacées.');
+                  await loadAiMemories(box);
+                },
+                { cls: 'danger small' },
+              ),
+            ),
+          );
+        }),
+      );
+    } catch (err) {
+      box.replaceChildren(h('p', { class: 'error', text: err.message }));
+    }
   }
 
   function viewLinks() {
