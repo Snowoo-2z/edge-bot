@@ -42,9 +42,8 @@ function registerHandlers(client) {
   // Détail de la connexion (gateway, shard, reconnexions). Les heartbeats et le token sont exclus.
   client.on(Events.Debug, (message) => {
     const firstLine = String(message).split('\n')[0].trim();
-    if (/heartbeat|token|destroyed/i.test(firstLine)) return;
-    if (!/gateway|shard|connect|websocket|identify|session|hello|reconnect|handshake|resum/i.test(firstLine)) return;
-    console.log(`[debug] ${firstLine.slice(0, 200)}`);
+    if (/heartbeat|token/i.test(firstLine)) return;
+    console.log(`[debug] ${firstLine.slice(0, 300)}`);
   });
 
   // Cycle de vie de la connexion (coupures et reconnexions).
@@ -56,8 +55,8 @@ function registerHandlers(client) {
   // Erreurs de passerelle. Un intent privilégié non activé dans le portail empêche la connexion
   // sans planter le processus : on le signale explicitement.
   client.on(Events.ShardError, (error) => {
+    console.error('[discord] Erreur de connexion :', error);
     const message = error?.message ?? String(error);
-    console.error('[discord] Erreur de connexion :', message);
     if (/disallowed intents/i.test(message)) {
       console.error(
         '[discord] Intent privilégié refusé. Portail développeur → Bot → Privileged Gateway Intents : ' +
