@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node src/index.js",
     "deploy": "node src/deploy-commands.js",
-    "check": "for f in src/*.js src/modules/*.js; do node --check \"$f\" || exit 1; done"
+    "check": "for f in src/*.js src/modules/*.js src/dashboard/*.js; do node --check \"$f\" || exit 1; done"
   },
   "engines": {
     "node": ">=18.17"

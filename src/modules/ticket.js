@@ -1061,6 +1061,10 @@ module.exports = {
   ID,
   DEFAULTS,
   TEXTS,
+  MAX_TYPES,
+  EMOJI_RE,
+  newTypeId,
+  publishPanel, // utilisé par le tableau de bord web
   render,
   handleComponent,
   handleModal,

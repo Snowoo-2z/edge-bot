@@ -377,6 +377,7 @@ module.exports = {
   handleInteraction,
   registerEvents,
   closeDue,
+  endGiveaway, // utilisé par le tableau de bord web
   giveaways,
   giveawayPayload,
   parseDuration,

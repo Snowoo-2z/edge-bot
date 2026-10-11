@@ -146,6 +146,25 @@ Le message est envoyé en texte seul (sans image). `{user}` est mentionné, `{le
 > `edge_levels`). Sans elle, le bot démarre mais l'XP n'est pas sauvegardé (un message l'indique dans les logs).
 > Intent : `GuildVoiceStates` (non privilégié, rien à activer dans le portail).
 
+## Tableau de bord web (propriétaire uniquement)
+
+Une interface web permet de gérer le bot depuis un navigateur : mêmes réglages que `/config`, plus les
+aperçus, les listes (classement, suggestions, giveaways) et les envois (panneau de tickets, embed).
+
+- **Adresse** : `https://<ton-service>.onrender.com/dashboard`
+- **Accès** : mot de passe unique défini dans la variable `DASHBOARD_PASSWORD` (Render → Environment).
+  Au moins 12 caractères, idéalement une phrase longue et aléatoire. Sans cette variable, le tableau de bord est désactivé.
+- **Sécurité** : session de 12 h dans un cookie `HttpOnly` / `Secure` / `SameSite=Strict` ; 5 mots de passe faux
+  depuis une même IP bloquent cette IP 15 min ; les requêtes qui modifient des données exigent un en-tête
+  personnalisé et la même origine ; aucune clé ni aucun token n'est affiché.
+- **Limite** : les sessions sont en mémoire. Après un redémarrage du service, il faut se reconnecter.
+- **Pages** : Accueil, Bienvenue, Niveaux (aperçus et classement), Suggestions, Giveaways (liste, fin manuelle),
+  Liens, Tickets (réglages, images/GIF, types, textes, publication du panneau), Créateur d'embed (brouillon,
+  modèles, image importée, envoi).
+- **Création d'un giveaway** : toujours avec `/giveaway` dans Discord (le tableau de bord gère la liste et la fin anticipée).
+
+Le code est dans `src/dashboard/` (serveur, validation, API) et `src/dashboard/public/` (interface, sans dépendance).
+
 ## Installation
 
 Prérequis : Node.js 18.17 ou plus récent.
@@ -204,6 +223,7 @@ npm start
    | `GUILD_ID` | non | ID du serveur (commande `/config` immédiate) |
    | `SUPABASE_URL` | oui | URL du projet Supabase |
    | `SUPABASE_SERVICE_ROLE_KEY` | oui | clé service_role Supabase |
+   | `DASHBOARD_PASSWORD` | non | mot de passe du tableau de bord web (12 caractères minimum ; sans cette variable, `/dashboard` est désactivé) |
    | `NODE_VERSION` | non | `22` |
 
 4. **Create Web Service**. Le service écoute sur le port fourni par Render (`PORT`).
@@ -258,6 +278,11 @@ chacun avec un nom, un emoji optionnel et une description optionnelle.
 src/
   index.js              point d'entrée, routage des interactions
   server.js             serveur HTTP (/health) pour Render
+  dashboard/index.js    tableau de bord web : accès (/dashboard), fichiers de l'interface
+  dashboard/auth.js     mot de passe, sessions, blocage après échecs
+  dashboard/api.js      routes JSON du tableau de bord (réglages, listes, envois, aperçus PNG)
+  dashboard/validate.js validation des données (salons, rôles, textes, embed) selon les limites Discord
+  dashboard/public/     interface (HTML, CSS, JavaScript sans dépendance)
   keepalive.js          auto-ping toutes les 10 min (anti-veille)
   config.js             commande /config et routage vers les modules
   deploy-commands.js    enregistrement de la commande auprès de Discord

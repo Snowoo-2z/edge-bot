@@ -8,6 +8,7 @@ const links = require('./modules/links');
 const giveaways = require('./modules/giveaways');
 const { ephemeralPayload } = require('./ui');
 const { startServer } = require('./server');
+const { createDashboard } = require('./dashboard');
 const { startKeepAlive } = require('./keepalive');
 
 const store = require('./store');
@@ -219,10 +220,14 @@ async function connectWithRetry() {
 
 // Serveur HTTP (health check Render) + auto-ping anti-veille.
 // /health ne répond 200 qu'une fois connecté à Discord (voir server.js).
-startServer(() => {
-  const connected = Boolean(bot?.isReady());
-  return { ready: connected, bot: connected ? 'connected' : 'connecting' };
-});
+startServer(
+  () => {
+    const connected = Boolean(bot?.isReady());
+    return { ready: connected, bot: connected ? 'connected' : 'connecting' };
+  },
+  // Tableau de bord web (désactivé tant que DASHBOARD_PASSWORD n'est pas défini).
+  createDashboard({ getClient: () => bot }),
+);
 startKeepAlive();
 
 async function main() {
