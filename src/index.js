@@ -218,7 +218,11 @@ async function connectWithRetry() {
 }
 
 // Serveur HTTP (health check Render) + auto-ping anti-veille.
-startServer(() => ({ bot: bot?.isReady() ? 'connected' : 'connecting' }));
+// /health ne répond 200 qu'une fois connecté à Discord (voir server.js).
+startServer(() => {
+  const connected = Boolean(bot?.isReady());
+  return { ready: connected, bot: connected ? 'connected' : 'connecting' };
+});
 startKeepAlive();
 
 async function main() {

@@ -194,7 +194,7 @@ npm start
    - **Runtime** : Node
    - **Build Command** : `npm ci && npm run deploy`
    - **Start Command** : `npm start`
-   - **Health Check Path** : `/health`
+   - **Health Check Path** : `/health` (répond 200 seulement quand le bot est connecté à Discord ; sinon 503, et Render garde l'ancienne version en marche pendant le déploiement)
 3. **Environment** : ajoute les variables suivantes (Render les chiffre pour les valeurs secrètes) :
 
    | Variable | Obligatoire | Valeur |
