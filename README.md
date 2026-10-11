@@ -142,6 +142,15 @@ npm start
 
 4. **Create Web Service**. Le service écoute sur le port fourni par Render (`PORT`).
 
+### Dépannage
+
+- **« L'application ne répond plus » après `/config`** : le bot n'est pas connecté à Discord.
+  Dans les logs Render, cherche `[discord] Intent privilégié refusé`. Dans le portail développeur
+  (*Bot* → *Privileged Gateway Intents*), active **MESSAGE CONTENT INTENT** et **SERVER MEMBERS INTENT**,
+  puis relance le service (*Manual Deploy* ou *Restart*).
+- **`[discord] Toujours pas connecté 60 s`** : vérifie `DISCORD_TOKEN` (copie-le à nouveau si besoin).
+- **`Démarrage impossible`** : le message indique la variable ou le service en cause (Supabase, etc.).
+
 ### Anti-veille (auto-ping)
 
 Le plan gratuit de Render met le service en veille après environ 15 min sans requête entrante,

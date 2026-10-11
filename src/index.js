@@ -28,9 +28,40 @@ const client = new Client({
   ],
 });
 
+// Alerte si Discord ne confirme pas la connexion (token, intents privilégiés…).
+const readyWatchdog = setTimeout(() => {
+  console.error(
+    '[discord] Toujours pas connecté 60 s après le démarrage. Vérifie le token et les intents privilégiés (portail développeur).',
+  );
+}, 60_000);
+
 client.once(Events.ClientReady, (c) => {
+  clearTimeout(readyWatchdog);
   console.log(`Edge connecté en tant que ${c.user.tag}`);
 });
+
+// Erreurs de passerelle Discord. Un intent privilégié non activé dans le portail
+// empêche la connexion sans planter le processus : on le signale explicitement.
+client.on(Events.ShardError, (error) => {
+  const message = error?.message ?? String(error);
+  console.error('[discord] Erreur de connexion :', message);
+  if (/disallowed intents/i.test(message)) {
+    console.error(
+      '[discord] Intent privilégié refusé. Portail développeur → Bot → Privileged Gateway Intents : ' +
+        'active MESSAGE CONTENT INTENT et SERVER MEMBERS INTENT, puis redémarre le service Render.',
+    );
+  }
+});
+
+function withTimeout(promise, ms, message) {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(message)), ms);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
 
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
@@ -61,8 +92,11 @@ startKeepAlive();
 
 async function main() {
   // Charge les réglages depuis Supabase avant d'accepter les interactions.
-  await store.init();
+  console.log('[startup] Chargement des réglages depuis Supabase…');
+  await withTimeout(store.init(), 20_000, 'Supabase ne répond pas après 20 s (vérifie SUPABASE_URL).');
+  console.log('[startup] Réglages chargés. Connexion à Discord…');
   await client.login(token);
+  console.log('[startup] Connexion à Discord demandée.');
 }
 
 main().catch((err) => {
