@@ -3,6 +3,8 @@ const { handleConfigCommand, handleConfigInteraction } = require('./config');
 const ticket = require('./modules/ticket');
 const welcome = require('./modules/welcome');
 const leveling = require('./leveling');
+const suggestions = require('./modules/suggestions');
+const links = require('./modules/links');
 const { ephemeralPayload } = require('./ui');
 const { startServer } = require('./server');
 const { startKeepAlive } = require('./keepalive');
@@ -82,6 +84,8 @@ function registerHandlers(client) {
 
   ticket.registerEvents(client);
   welcome.registerEvents(client);
+  links.registerEvents(client);
+  suggestions.registerEvents(client);
 }
 
 // Journal des interactions reçues : permet de voir si Discord les transmet au bot.
@@ -99,12 +103,14 @@ async function handleInteraction(interaction) {
       if (interaction.commandName === 'config') return await handleConfigCommand(interaction);
       if (interaction.commandName === 'level') return await leveling.handleLevel(interaction);
       if (interaction.commandName === 'leaderboard') return await leveling.handleLeaderboard(interaction);
+      if (interaction.commandName === 'suggestion') return await suggestions.handleCommand(interaction);
       return;
     }
 
     const id = interaction.customId ?? '';
     if (id.startsWith('cfg:')) return await handleConfigInteraction(interaction);
     if (id.startsWith('tkt:')) return await ticket.handlePublicInteraction(interaction);
+    if (id.startsWith('suggest:')) return await suggestions.handleInteraction(interaction);
   } catch (err) {
     console.error('Erreur interaction :', err);
     const payload = ephemeralPayload('❌ Une erreur est survenue.');
@@ -206,6 +212,9 @@ async function main() {
     console.error('[niveaux] chargement impossible (la table edge_levels existe-t-elle ? voir supabase/schema.sql) :', err.message),
   );
   leveling.startTimers();
+  await withTimeout(suggestions.init(), 30_000, 'Lecture des suggestions trop lente (table edge_suggestions).').catch((err) =>
+    console.error('[suggestions] chargement impossible (la table edge_suggestions existe-t-elle ? voir supabase/schema.sql) :', err.message),
+  );
   console.log('[startup] Réglages chargés. Connexion à Discord…');
   // Si Discord impose une limite de débit, on attend sa fin avant toute tentative :
   // chaque demande envoyée pendant la limite la prolonge.

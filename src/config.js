@@ -5,6 +5,8 @@ const ticket = require('./modules/ticket');
 const embedModule = require('./modules/embed');
 const welcome = require('./modules/welcome');
 const levels = require('./modules/levels');
+const suggestions = require('./modules/suggestions');
+const links = require('./modules/links');
 
 // Modules réellement implémentés (id -> module).
 const MODULES = {
@@ -12,6 +14,8 @@ const MODULES = {
   [embedModule.ID]: embedModule,
   [welcome.ID]: welcome,
   [levels.ID]: levels,
+  [suggestions.ID]: suggestions,
+  [links.ID]: links,
 };
 
 // Panneau d'accueil de /config : choix du module.

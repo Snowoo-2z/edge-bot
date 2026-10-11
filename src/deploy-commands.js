@@ -32,6 +32,11 @@ const commands = [
     .setDescription('Affiche le classement vocal du serveur')
     .setDMPermission(false)
     .toJSON(),
+  new SlashCommandBuilder()
+    .setName('suggestion')
+    .setDescription('Propose une suggestion, publiée avec des votes pendant 3 jours')
+    .setDMPermission(false)
+    .toJSON(),
 ];
 
 (async () => {
@@ -40,7 +45,7 @@ const commands = [
     ? Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID)
     : Routes.applicationCommands(CLIENT_ID);
   await rest.put(route, { body: commands });
-  console.log(`Commandes /config, /level et /leaderboard enregistrées ${GUILD_ID ? `sur le serveur ${GUILD_ID}` : 'globalement'}.`);
+  console.log(`Commandes /config, /level, /leaderboard et /suggestion enregistrées ${GUILD_ID ? `sur le serveur ${GUILD_ID}` : 'globalement'}.`);
 })().catch((err) => {
   console.error(err);
   process.exit(1);

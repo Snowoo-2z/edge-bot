@@ -30,3 +30,25 @@ create table if not exists public.edge_levels (
 
 -- Même règle que ci-dessus : seule la clé service_role (le bot) y accède.
 alter table public.edge_levels enable row level security;
+
+-- ---------------------------------------------------------------------------
+-- 4. Suggestions (commande /suggestion) : une ligne par suggestion.
+--    up_ids / down_ids : identifiants des membres ayant voté Pour / Contre.
+--    Les votes se ferment à ends_at (3 jours après la publication).
+-- ---------------------------------------------------------------------------
+create table if not exists public.edge_suggestions (
+  id          text primary key,
+  guild_id    text not null,
+  channel_id  text not null,
+  message_id  text,
+  author_id   text not null,
+  content     text not null,
+  up_ids      text[] not null default '{}',
+  down_ids    text[] not null default '{}',
+  created_at  timestamptz not null default now(),
+  ends_at     timestamptz not null,
+  closed      boolean not null default false
+);
+
+-- Même règle que ci-dessus : seule la clé service_role (le bot) y accède.
+alter table public.edge_suggestions enable row level security;

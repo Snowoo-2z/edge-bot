@@ -23,7 +23,19 @@ const MODULE_LIST = [
     id: 'levels',
     label: 'Niveaux',
     emoji: '🏅',
-    description: 'Niveaux vocaux : thème de la carte /level',
+    description: 'Niveaux vocaux et texte : thème, annonces de niveau',
+  },
+  {
+    id: 'suggestions',
+    label: 'Suggestions',
+    emoji: '💡',
+    description: 'Commande /suggestion avec votes pendant 3 jours',
+  },
+  {
+    id: 'links',
+    label: 'Liens',
+    emoji: '🔗',
+    description: 'Blocage des liens et rôles autorisés',
   },
 ];
 

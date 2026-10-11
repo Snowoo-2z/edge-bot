@@ -81,6 +81,27 @@ Par défaut : titre « Bienvenue {user} ! », sous-titre « Membre n°{count} ·
 
 Les polices (Inter, licence SIL OFL) sont incluses dans `assets/fonts/`. Aucun fichier n'est à installer.
 
+## Suggestions
+
+Dans `/config` → **💡 Suggestions** : active le module et choisis le salon de publication.
+
+- Les membres utilisent **`/suggestion`** : une fenêtre demande le texte de la suggestion.
+- Le bot publie la suggestion dans le salon avec deux boutons **👍 Pour** et **👎 Contre** (compteurs en direct).
+- Un membre ne vote qu'une fois. Cliquer de nouveau sur le même bouton retire son vote ; cliquer sur l'autre change son vote.
+- Les votes sont ouverts **3 jours**. Ensuite les boutons se désactivent et le résultat s'affiche (majorité pour, contre ou égalité).
+- Les suggestions sont enregistrées dans Supabase (table `edge_suggestions`, section 4 de `supabase/schema.sql`) : elles restent actives après un redémarrage.
+
+## Liens
+
+Dans `/config` → **🔗 Liens** : active le blocage, choisis les **rôles autorisés à poster des liens**
+et modifie l'avertissement si besoin.
+
+- Un message contenant un lien (`https://…`, `www.…`, `discord.gg/…`, `exemple.com`…) est **supprimé**.
+- Le membre reçoit dans le salon : « Avertissement, vous n’êtes pas autorisé à poster des liens sur ce serveur Discord. »
+- Les membres ayant un rôle autorisé peuvent poster des liens. Les bots ne sont pas concernés.
+- Le bot doit avoir la permission **Gérer les messages** dans le salon.
+- Le contrôle s'applique aussi aux messages modifiés pour ajouter un lien.
+
 ## Niveaux (vocal et texte)
 
 Le temps passé en salon vocal et les messages écrits rapportent de l'XP. **AFK, micro coupé et casque coupé comptent aussi en vocal.**
@@ -230,6 +251,8 @@ src/
   level-card.js         carte de niveau /level (PNG)
   leaderboard-card.js   carte du classement /leaderboard (PNG)
   leveling.js           XP vocal et texte, niveaux, annonces, classement, sauvegarde Supabase
+  modules/suggestions.js  commande /suggestion, votes de 3 jours, fermeture automatique
+  modules/links.js      blocage des liens, rôles autorisés, avertissement
   xp-rules.js           valeurs de gain d'XP (vocal, texte)
   modules/registry.js   liste des modules affichés dans le menu
   modules/ticket.js     module Ticket (panneau, tickets, textes, images/GIF)

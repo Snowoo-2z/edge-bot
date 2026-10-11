@@ -123,8 +123,29 @@ async function saveLevelRows(rows) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Suggestions : table "edge_suggestions", une ligne par suggestion.
+// ---------------------------------------------------------------------------
+
+const SUGGESTIONS_TABLE = 'edge_suggestions';
+
+// Suggestions encore ouvertes (vote non terminé).
+async function loadOpenSuggestions() {
+  const { data, error } = await supabase.from(SUGGESTIONS_TABLE).select('*').eq('closed', false);
+  if (error) throw new Error(`Lecture Supabase impossible (table ${SUGGESTIONS_TABLE}) : ${error.message}`);
+  return data ?? [];
+}
+
+// Enregistre (ou met à jour) une suggestion.
+async function saveSuggestion(row) {
+  const { error } = await supabase.from(SUGGESTIONS_TABLE).upsert(row, { onConflict: 'id' });
+  if (error) throw new Error(`Écriture Supabase échouée (${SUGGESTIONS_TABLE}) : ${error.message}`);
+}
+
 module.exports = {
   init,
+  loadOpenSuggestions,
+  saveSuggestion,
   getModuleConfig,
   getGuildModule,
   updateModuleConfig,
