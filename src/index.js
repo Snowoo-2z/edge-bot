@@ -121,9 +121,22 @@ function isAuthError(err) {
   return err?.code === 'TokenInvalid' || err?.status === 401 || /invalid token|401/i.test(err?.message ?? '');
 }
 
+// Diagnostic réseau : vérifie si l'API Discord répond depuis cet hébergement (sans changer la connexion).
+async function probeDiscord() {
+  const started = Date.now();
+  try {
+    const res = await fetch('https://discord.com/api/v10/gateway', { signal: AbortSignal.timeout(10_000) });
+    console.log(`[probe] discord.com/api/v10/gateway : HTTP ${res.status} en ${Date.now() - started} ms`);
+  } catch (err) {
+    const cause = err.cause?.code ?? err.cause?.message ?? err.name ?? err.message;
+    console.warn(`[probe] discord.com injoignable après ${Date.now() - started} ms : ${cause}`);
+  }
+}
+
 // Essaie de se connecter à Discord toutes les 15 s, avec un client neuf à chaque tentative.
 async function connectWithRetry() {
   for (let attempt = 1; ; attempt++) {
+    probeDiscord();
     const client = buildClient();
     bot = client;
 
