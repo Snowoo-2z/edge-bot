@@ -69,9 +69,9 @@ async function resolveChannel(guild, channelId) {
 }
 
 // Publie (ou met à jour) le message du panneau et réagit avec chaque emoji manquant.
-async function publish(guild, panel) {
+async function publish(guild, panel, { requirePairs = true } = {}) {
   if (!panel.channelId) fail('Choisis d’abord un salon pour ce panneau.');
-  if (!panel.pairs.length) fail('Ajoute au moins un rôle avant de publier.');
+  if (requirePairs && !panel.pairs.length) fail('Ajoute au moins un rôle avant de publier.');
   const channel = await resolveChannel(guild, panel.channelId);
   if (!channel || !channel.isTextBased() || channel.type === ChannelType.GuildForum) {
     fail('Le salon choisi est introuvable ou n’accepte pas de messages.');
@@ -208,11 +208,13 @@ function renderPanel(guildId, userId, cfg, panel) {
   );
   if (pend && pend.roleId === null) {
     rows.push(
-      new RoleSelectMenuBuilder()
-        .setCustomId(`cfg:reaction_roles:pickrole:${panel.id}`)
-        .setPlaceholder('Choisir le rôle à donner')
-        .setMinValues(1)
-        .setMaxValues(1),
+      row(
+        new RoleSelectMenuBuilder()
+          .setCustomId(`cfg:reaction_roles:pickrole:${panel.id}`)
+          .setPlaceholder('Choisir le rôle à donner')
+          .setMinValues(1)
+          .setMaxValues(1),
+      ),
     );
   } else if (pend && pend.roleId) {
     rows.push(
@@ -365,10 +367,7 @@ async function handleComponent(interaction) {
     case 'delete': {
       const panel = findPanelById(cfg, arg);
       if (!panel) return;
-      if (panel.messageId && panel.channelId) {
-        const channel = await resolveChannel(guild, panel.channelId);
-        await channel?.messages.delete(panel.messageId).catch(() => {});
-      }
+      await deleteMessage(guild, panel);
       cfg.panels = cfg.panels.filter((p) => p.id !== panel.id);
       pending.delete(pendingKey(guild.id, userId, panel.id));
       save(guild.id, cfg);
@@ -438,8 +437,163 @@ async function handleModal(interaction) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Services partagés avec le tableau de bord. Chaque fonction retourne { config, warning? }.
+// « warning » signale qu'un message Discord n'a pas pu être mis à jour (les réglages restent enregistrés).
+// ---------------------------------------------------------------------------
+const panelById = (cfg, id) => {
+  const panel = cfg.panels.find((p) => p.id === id);
+  if (!panel) fail('Panneau introuvable. Recharge la page.');
+  return panel;
+};
+
+function cleanTitle(value) {
+  const title = String(value ?? '').trim();
+  if (!title) fail('Le titre ne peut pas être vide.');
+  if ([...title].length > 80) fail('Titre : 80 caractères maximum.');
+  return title;
+}
+
+function cleanDescription(value) {
+  const description = String(value ?? '').trim();
+  if ([...description].length > 800) fail('Texte d’introduction : 800 caractères maximum.');
+  return description;
+}
+
+// Salon de publication : null accepté (pas encore de salon). Salon texte ou annonces uniquement.
+function checkTextChannel(guild, channelId) {
+  if (channelId === null || channelId === undefined || channelId === '') return null;
+  const channel = guild.channels.cache.get(channelId);
+  if (!channel || !TEXT_KINDS.includes(channel.type)) fail('Salon introuvable ou qui n’accepte pas les messages.');
+  return channelId;
+}
+
+// Rôle attribuable : existant, pas @everyone, pas géré par une intégration, et sous le rôle du bot.
+function checkEditableRole(guild, roleId) {
+  const role = typeof roleId === 'string' ? guild.roles.cache.get(roleId) : null;
+  if (!role || role.id === guild.id || role.managed) fail('Rôle introuvable sur ce serveur.');
+  if (!role.editable) fail('Je ne peux pas attribuer ce rôle : il est au-dessus du mien ou géré par une intégration.');
+  return role;
+}
+
+// Supprime le message Discord d'un panneau (sans erreur si déjà supprimé).
+async function deleteMessage(guild, panel) {
+  if (!panel.messageId || !panel.channelId) return;
+  const channel = await resolveChannel(guild, panel.channelId);
+  const message = channel?.isTextBased() ? await channel.messages.fetch(panel.messageId).catch(() => null) : null;
+  await message?.delete().catch(() => {});
+}
+
+// Met le message à jour (embed et réactions). Retourne un avertissement en cas d'échec, sinon null.
+async function refreshMessage(guild, panel) {
+  try {
+    await publish(guild, panel, { requirePairs: false });
+    return null;
+  } catch (err) {
+    if (err instanceof ReactionRoleError) return err.message;
+    console.error('[rôles réaction] mise à jour du message :', err.message);
+    return 'Le message Discord n’a pas pu être mis à jour : vérifie les permissions du bot dans ce salon.';
+  }
+}
+
+async function createPanel(guild, input = {}) {
+  const cfg = cfgOf(guild.id);
+  if (cfg.panels.length >= MAX_PANELS) fail(`Maximum ${MAX_PANELS} panneaux par serveur.`);
+  const panel = {
+    id: crypto.randomBytes(4).toString('hex'),
+    channelId: checkTextChannel(guild, input.channelId ?? null),
+    messageId: null,
+    title: cleanTitle(input.title),
+    description: cleanDescription(input.description),
+    pairs: [],
+  };
+  cfg.panels.push(panel);
+  save(guild.id, cfg);
+  return { config: cfg };
+}
+
+async function updatePanel(guild, panelId, input = {}) {
+  const cfg = cfgOf(guild.id);
+  const panel = panelById(cfg, panelId);
+  const next = {};
+  if (input.title !== undefined) next.title = cleanTitle(input.title);
+  if (input.description !== undefined) next.description = cleanDescription(input.description);
+  if (input.channelId !== undefined) next.channelId = checkTextChannel(guild, input.channelId);
+  const channelChanged = next.channelId !== undefined && next.channelId !== panel.channelId;
+  if (channelChanged) {
+    // Le message reste dans l'ancien salon : on le supprime, le panneau devra être publié de nouveau.
+    await deleteMessage(guild, panel);
+    panel.messageId = null;
+  }
+  Object.assign(panel, next);
+  let warning = null;
+  if (!channelChanged && panel.messageId) warning = await refreshMessage(guild, panel);
+  save(guild.id, cfg);
+  return { config: cfg, warning };
+}
+
+async function deletePanel(guild, panelId) {
+  const cfg = cfgOf(guild.id);
+  const panel = panelById(cfg, panelId);
+  await deleteMessage(guild, panel);
+  cfg.panels = cfg.panels.filter((p) => p.id !== panel.id);
+  save(guild.id, cfg);
+  return { config: cfg };
+}
+
+// Ajoute un rôle au panneau. emojiInput : emoji classique ou emoji du serveur.
+async function addPair(guild, panelId, emojiInput, roleId) {
+  const cfg = cfgOf(guild.id);
+  const panel = panelById(cfg, panelId);
+  if (panel.pairs.length >= MAX_PAIRS) fail(`Maximum ${MAX_PAIRS} rôles par panneau.`);
+  const role = checkEditableRole(guild, roleId);
+  const parsed = parseEmoji(guild, emojiInput);
+  if (panel.pairs.some((p) => p.key === parsed.key)) fail('Cet emoji est déjà utilisé dans ce panneau.');
+  if (panel.pairs.some((p) => p.roleId === role.id)) fail('Ce rôle est déjà dans ce panneau.');
+  panel.pairs.push({ key: parsed.key, display: parsed.display, reactArg: parsed.reactArg, roleId: role.id });
+  let warning = null;
+  if (panel.messageId) warning = await refreshMessage(guild, panel);
+  save(guild.id, cfg);
+  return { config: cfg, warning };
+}
+
+// Retire un rôle du panneau. Les membres qui ont déjà le rôle le gardent.
+async function removePair(guild, panelId, key) {
+  const cfg = cfgOf(guild.id);
+  const panel = panelById(cfg, panelId);
+  const before = panel.pairs.length;
+  panel.pairs = panel.pairs.filter((p) => p.key !== key);
+  if (panel.pairs.length === before) fail('Ce rôle n’est pas dans ce panneau.');
+  let warning = null;
+  if (panel.messageId) warning = await refreshMessage(guild, panel);
+  save(guild.id, cfg);
+  return { config: cfg, warning };
+}
+
+// Publie le panneau (ou met à jour son message existant), avec les réactions.
+async function publishPanel(guild, panelId) {
+  const cfg = cfgOf(guild.id);
+  const panel = panelById(cfg, panelId);
+  try {
+    await publish(guild, panel);
+  } catch (err) {
+    if (err instanceof ReactionRoleError) throw err;
+    console.error('[rôles réaction] publication :', err);
+    fail('Publication impossible. Vérifie les permissions du bot dans ce salon (Voir le salon, Envoyer des messages, Ajouter des réactions).');
+  }
+  save(guild.id, cfg);
+  return { config: cfg };
+}
+
 module.exports = {
   ID,
+  ReactionRoleError,
+  createPanel,
+  updatePanel,
+  deletePanel,
+  addPair,
+  removePair,
+  publishPanel,
   DEFAULTS,
   MAX_PANELS,
   MAX_PAIRS,

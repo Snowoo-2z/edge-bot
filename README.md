@@ -190,7 +190,8 @@ Intents à activer dans le portail : **Server Members** et **Message Content** (
 
 ## Rôles par réaction
 
-`/config` → **Rôles par réaction**. Un panneau est un message du bot (embed violet) avec une réaction par rôle.
+`/config` → **Rôles par réaction**, ou la page **Rôles réaction** du tableau de bord (créer, modifier, ajouter ou retirer
+un rôle, publier, supprimer). Un panneau est un message du bot (embed violet) avec une réaction par rôle.
 
 - Réagir à la réaction d'un rôle donne le rôle ; **retirer sa réaction retire le rôle**.
 - Limites : 10 panneaux par serveur, 20 rôles par panneau.
@@ -201,7 +202,7 @@ Intents à activer dans le portail : **Server Members** et **Message Content** (
 
 ## Sécurité (anti-raid, anti-nuke)
 
-`/config` → **Sécurité** (la page Sécurité du tableau de bord est en lecture seule).
+`/config` → **Sécurité**, ou la page **Sécurité** du tableau de bord (mêmes réglages).
 
 - **Anti-raid** : si trop de comptes arrivent dans une fenêtre de temps (par défaut 10 arrivées en 10 s), le
   niveau de vérification du serveur passe à « élevé ». Le déverrouillage est **manuel** (« Lever le verrouillage »
@@ -251,7 +252,7 @@ aperçus, les listes (classement, suggestions, giveaways) et les envois (panneau
 - **Pages** : Accueil, Bienvenue, Niveaux (aperçus et classement), Suggestions, Giveaways (liste, fin manuelle),
   Liens, Logs (réglages par catégorie et journal consultable), Modération (rôles par commande, MP, avertissements),
   Tickets (réglages, images/GIF, types, textes, publication du panneau), Créateur d'embed (brouillon,
-  modèles, image importée, envoi), Sécurité et Rôles réaction (lecture seule), Sauvegardes (création,
+  modèles, image importée, envoi), Sécurité et Rôles réaction (réglages et panneaux éditables), Sauvegardes (création,
   restauration avec double confirmation, activation quotidienne).
 - **Compatibilité** : l'interface s'adapte aux téléphones, tablettes, portables et grands écrans. Elle fonctionne
   dans les navigateurs récents (Chrome, Edge, Firefox, Safari). Sur petit écran, la navigation passe en haut de page.

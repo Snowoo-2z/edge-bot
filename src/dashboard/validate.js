@@ -301,6 +301,66 @@ function sanitizeModeration(guild, input) {
   });
 }
 
+const NUKE_KEYS = ['channelDelete', 'roleDelete', 'channelCreate', 'ban', 'kick'];
+
+function integer(value, label, min, max) {
+  if (!Number.isInteger(value) || value < min || value > max) fail(`${label} : nombre entier entre ${min} et ${max}.`);
+  return value;
+}
+
+function plainObject(value, label) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) fail(`${label} : réglages attendus.`);
+  return value;
+}
+
+// Liste d'identifiants de membres (snowflakes), sans doublon.
+function userIds(value, label, max = 50) {
+  if (!Array.isArray(value)) fail(`${label} : liste attendue.`);
+  if (value.length > max) fail(`${label} : ${max} éléments maximum.`);
+  const unique = [...new Set(value)];
+  for (const id of unique) {
+    if (!isSnowflake(id)) fail(`${label} : identifiant de membre invalide (${String(id).slice(0, 30)}).`);
+  }
+  return unique;
+}
+
+// Réglages de sécurité. Les objets imbriqués sont complétés avec la configuration actuelle,
+// pour qu'une mise à jour partielle ne retire aucune valeur.
+function sanitizeSecurity(guild, input, current) {
+  return pick(input, ['raid', 'nuke', 'alertChannelId', 'whitelistUserIds', 'whitelistRoleIds'], (key, value) => {
+    switch (key) {
+      case 'raid': {
+        const v = plainObject(value, 'Anti-raid');
+        const base = current.raid ?? {};
+        return {
+          enabled: bool(v.enabled ?? base.enabled ?? false, 'Anti-raid'),
+          joinThreshold: integer(v.joinThreshold ?? base.joinThreshold, 'Arrivées (anti-raid)', 2, 100),
+          windowSeconds: integer(v.windowSeconds ?? base.windowSeconds, 'Fenêtre (anti-raid)', 5, 120),
+        };
+      }
+      case 'nuke': {
+        const v = plainObject(value, 'Anti-nuke');
+        const base = current.nuke ?? {};
+        const limits = plainObject(v.limits ?? {}, 'Seuils anti-nuke');
+        const baseLimits = base.limits ?? {};
+        const out = {
+          enabled: bool(v.enabled ?? base.enabled ?? false, 'Anti-nuke'),
+          windowSeconds: integer(v.windowSeconds ?? base.windowSeconds, 'Fenêtre (anti-nuke)', 5, 120),
+          limits: {},
+        };
+        for (const k of NUKE_KEYS) out.limits[k] = integer(limits[k] ?? baseLimits[k], `Seuil « ${k} »`, 1, 50);
+        return out;
+      }
+      case 'alertChannelId':
+        return channelId(guild, value, 'Salon d’alerte', TEXT_KINDS);
+      case 'whitelistUserIds':
+        return userIds(value, 'Membres de confiance');
+      case 'whitelistRoleIds':
+        return roleIds(guild, value, 'Rôles de confiance', 25);
+    }
+  });
+}
+
 function sanitizeBackups(guild, input) {
   return pick(input, ['enabled'], (key, value) => bool(value, 'Sauvegarde quotidienne'));
 }
@@ -308,6 +368,7 @@ function sanitizeBackups(guild, input) {
 module.exports = {
   ValidationError,
   sanitizeBackups,
+  sanitizeSecurity,
   isSnowflake,
   text,
   channelId,

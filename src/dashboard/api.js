@@ -37,12 +37,14 @@ const MODULES = {
   logs: { module: logsModule, sanitize: validate.sanitizeLogs },
   moderation: { module: moderation, sanitize: validate.sanitizeModeration },
   backups: { module: backup, sanitize: validate.sanitizeBackups },
+  security: { module: security, sanitize: validate.sanitizeSecurity },
 };
 
-// Modules affichés en lecture seule (leurs réglages se modifient dans /config).
-const READ_ONLY_MODULES = { security, reaction_roles: reactionRoles };
+// Modules dont les données passent par des routes dédiées (panneaux, pairs, publication) :
+// pas de PUT générique, pour ne pas écraser les panneaux.
+const EXTRA_MODULES = { [reactionRoles.ID]: reactionRoles };
 
-const ALL_MODULE_IDS = [...Object.keys(MODULES), embedModule.ID, ...Object.keys(READ_ONLY_MODULES)];
+const ALL_MODULE_IDS = [...Object.keys(MODULES), embedModule.ID, ...Object.keys(EXTRA_MODULES)];
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -51,7 +53,7 @@ async function guarded(fn) {
   try {
     return await fn();
   } catch (err) {
-    if (err instanceof backup.BackupError) throw new HttpError(400, err.message);
+    if (err instanceof backup.BackupError || err instanceof reactionRoles.ReactionRoleError) throw new HttpError(400, err.message);
     throw err;
   }
 }
@@ -95,7 +97,7 @@ function createApi({ getClient }) {
   }
 
   function configOf(guild, moduleId) {
-    const def = moduleId === embedModule.ID ? embedModule : (MODULES[moduleId]?.module ?? READ_ONLY_MODULES[moduleId]);
+    const def = moduleId === embedModule.ID ? embedModule : (MODULES[moduleId]?.module ?? EXTRA_MODULES[moduleId]);
     return store.getModuleConfig(guild.id, moduleId, def.DEFAULTS);
   }
 
@@ -480,6 +482,68 @@ function createApi({ getClient }) {
       throw new HttpError(404, 'Aperçu inconnu.');
     }
     sendBuffer(res, 200, png, 'image/png');
+  });
+
+  // -------------------------------------------------------------------------
+  // Sécurité : verrouillage et levée manuels (les réglages passent par PUT /modules/security).
+  // -------------------------------------------------------------------------
+
+  route('POST', '/api/guilds/:gid/security/lock', async ({ res, params }) => {
+    const { guild } = resolveGuild(params);
+    const cfg = security.cfgOf(guild.id);
+    if (cfg.lockdown.active) throw new HttpError(400, 'Le serveur est déjà verrouillé.');
+    await security.lockdown(guild, cfg, 'Verrouillage manuel (tableau de bord).');
+    console.log(`[dashboard] serveur verrouillé (serveur ${guild.name}).`);
+    sendJson(res, 200, { config: security.cfgOf(guild.id) });
+  });
+
+  route('POST', '/api/guilds/:gid/security/unlock', async ({ res, params }) => {
+    const { guild } = resolveGuild(params);
+    const cfg = security.cfgOf(guild.id);
+    if (!cfg.lockdown.active) throw new HttpError(400, 'Le serveur n’est pas verrouillé.');
+    const error = await security.unlock(guild, cfg, 'tableau de bord');
+    if (error) throw new HttpError(400, error);
+    console.log(`[dashboard] verrouillage levé (serveur ${guild.name}).`);
+    sendJson(res, 200, { config: security.cfgOf(guild.id) });
+  });
+
+  // -------------------------------------------------------------------------
+  // Rôles par réaction : panneaux, rôles (emoji → rôle) et publication du message Discord.
+  // -------------------------------------------------------------------------
+
+  const rrPanel = '/api/guilds/:gid/reaction-roles/panels/:pid';
+
+  route('POST', '/api/guilds/:gid/reaction-roles/panels', async ({ req, res, params }) => {
+    const { guild } = resolveGuild(params);
+    const body = await readJson(req);
+    sendJson(res, 200, await guarded(() => reactionRoles.createPanel(guild, body)));
+  });
+
+  route('PUT', rrPanel, async ({ req, res, params }) => {
+    const { guild } = resolveGuild(params);
+    const body = await readJson(req);
+    sendJson(res, 200, await guarded(() => reactionRoles.updatePanel(guild, params.pid, body)));
+  });
+
+  route('DELETE', rrPanel, async ({ res, params }) => {
+    const { guild } = resolveGuild(params);
+    sendJson(res, 200, await guarded(() => reactionRoles.deletePanel(guild, params.pid)));
+  });
+
+  route('POST', `${rrPanel}/pairs`, async ({ req, res, params }) => {
+    const { guild } = resolveGuild(params);
+    const body = await readJson(req);
+    sendJson(res, 200, await guarded(() => reactionRoles.addPair(guild, params.pid, body?.emoji, body?.roleId)));
+  });
+
+  route('DELETE', `${rrPanel}/pairs/:key`, async ({ res, params }) => {
+    const { guild } = resolveGuild(params);
+    sendJson(res, 200, await guarded(() => reactionRoles.removePair(guild, params.pid, params.key)));
+  });
+
+  route('POST', `${rrPanel}/publish`, async ({ res, params }) => {
+    const { guild } = resolveGuild(params);
+    sendJson(res, 200, await guarded(() => reactionRoles.publishPanel(guild, params.pid)));
   });
 
   // -------------------------------------------------------------------------

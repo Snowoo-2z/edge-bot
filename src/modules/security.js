@@ -463,6 +463,9 @@ module.exports = {
   handleComponent,
   handleModal,
   registerEvents,
+  // Verrouillage manuel et levée (tableau de bord et /config).
+  lockdown,
+  unlock,
   // Exposés pour les tests.
   _recordAction: recordAction,
   _onMemberJoin: onMemberJoin,

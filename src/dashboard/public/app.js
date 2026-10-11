@@ -372,8 +372,8 @@
     { id: 'tickets', label: 'Tickets', icon: '🎫', module: 'ticket', desc: 'Panneau, types, images et textes.' },
     { id: 'logs', label: 'Logs', icon: '📜', module: 'logs', desc: 'Journal détaillé des événements du serveur.' },
     { id: 'moderation', label: 'Modération', icon: '🛡️', module: 'moderation', desc: 'Commandes de sanction et rôles autorisés.' },
-    { id: 'securite', label: 'Sécurité', icon: '🛡️', status: (m) => m.security.raid.enabled || m.security.nuke.enabled, desc: 'Anti-raid et anti-nuke (lecture seule).' },
-    { id: 'roles-reaction', label: 'Rôles réaction', icon: '🎭', status: (m) => (m.reaction_roles.panels || []).length > 0, desc: 'Panneaux de rôles par réaction (lecture seule).' },
+    { id: 'securite', label: 'Sécurité', icon: '🛡️', status: (m) => m.security.raid.enabled || m.security.nuke.enabled, desc: 'Anti-raid, anti-nuke, verrouillage et liste blanche.' },
+    { id: 'roles-reaction', label: 'Rôles réaction', icon: '🎭', status: (m) => (m.reaction_roles.panels || []).length > 0, desc: 'Panneaux : réagir à un message donne un rôle.' },
     { id: 'sauvegardes', label: 'Sauvegardes', icon: '💾', module: 'backups', desc: 'Sauvegarde quotidienne, création et restauration.' },
     { id: 'embed', label: 'Créateur d’embed', icon: '🧩', desc: 'Construire un embed, modèles, envoi.' },
   ];
@@ -1589,7 +1589,7 @@
   }
 
   // -------------------------------------------------------------------------
-  // Sécurité (lecture seule : les réglages se modifient dans /config)
+  // Sécurité : anti-raid, anti-nuke, verrouillage, liste blanche (modifiable)
   // -------------------------------------------------------------------------
 
   const NUKE_LABEL = {
@@ -1600,24 +1600,67 @@
     kick: 'Expulsions',
   };
 
-  function keyValueTable(rows) {
-    return h(
-      'table',
-      null,
-      h('tbody', null, rows.map(([k, v]) => h('tr', null, h('th', { text: k, scope: 'row' }), h('td', null, v)))),
-    );
+  // Nombre entier : la valeur est transmise telle quelle, le serveur vérifie les bornes.
+  function fieldNumber(label, value, { min, max, hint, onInput } = {}) {
+    const input = h('input', {
+      type: 'number',
+      min,
+      max,
+      step: 1,
+      value: String(value ?? ''),
+      oninput: (e) => onInput(Number(e.target.value)),
+    });
+    return wrapField(label, input, hint);
   }
 
   function viewSecurity() {
-    const cfg = S.data.modules.security;
-    const channelName = (id) => (S.data.meta.channels || []).find((c) => c.id === id)?.name;
-    const lock = cfg.lockdown?.active
-      ? h('span', { class: 'pill warn', text: `Verrouillé depuis ${fmtDate(cfg.lockdown.since)}` })
+    // Copie de travail : les champs la modifient, « Enregistrer » l'envoie.
+    const d = clone(S.data.modules.security);
+    const locked = Boolean(d.lockdown?.active);
+    const lockStatus = locked
+      ? h('span', { class: 'pill warn', text: `Verrouillé depuis ${fmtDate(d.lockdown.since)}` })
       : h('span', { class: 'pill on', text: 'Serveur ouvert' });
+
+    const lockButton = locked
+      ? button(
+          'Lever le verrouillage',
+          async () => {
+            const res = await api('POST', gp('/security/unlock'));
+            S.data.modules.security = res.config;
+            toast('Verrouillage levé.');
+            rerender();
+          },
+          { cls: 'primary' },
+        )
+      : button(
+          'Verrouiller maintenant',
+          async () => {
+            if (!confirm('Verrouiller le serveur ? Le niveau de vérification sera relevé jusqu’à la levée manuelle.')) return;
+            const res = await api('POST', gp('/security/lock'));
+            S.data.modules.security = res.config;
+            toast('Serveur verrouillé.');
+            rerender();
+          },
+          { cls: 'danger' },
+        );
+
+    const saveAll = () =>
+      saveModule(
+        'security',
+        {
+          raid: d.raid,
+          nuke: d.nuke,
+          alertChannelId: d.alertChannelId,
+          whitelistUserIds: d.whitelistUserIds,
+          whitelistRoleIds: d.whitelistRoleIds,
+        },
+        'Sécurité enregistrée.',
+      );
+
     return h(
       'section',
       null,
-      pageHead('Sécurité', 'Lecture seule. Pour modifier ces réglages ou lever un verrouillage : /config → Sécurité.'),
+      pageHead('Sécurité', 'Anti-raid, anti-nuke, verrouillage et liste blanche. Enregistré, le réglage s’applique tout de suite.'),
       h(
         'div',
         { class: 'grid' },
@@ -1625,84 +1668,196 @@
           'div',
           { class: 'card' },
           h('h2', { text: 'Anti-raid' }),
-          h('p', null, h('span', { class: cfg.raid.enabled ? 'pill on' : 'pill', text: cfg.raid.enabled ? 'Activé' : 'Désactivé' })),
-          keyValueTable([
-            ['Seuil', `${cfg.raid.joinThreshold} arrivées`],
-            ['Fenêtre', `${cfg.raid.windowSeconds} s`],
-          ]),
-          h('p', { class: 'hint', text: 'Au-delà du seuil, le niveau de vérification du serveur passe à « élevé ». Levée manuelle uniquement.' }),
+          h('p', { class: 'hint', text: 'Si trop de comptes arrivent en peu de temps, le niveau de vérification passe à « élevé ». La levée est manuelle.' }),
+          fieldSwitch('Activer l’anti-raid', null, d.raid.enabled, (v) => (d.raid.enabled = v)),
+          fieldNumber('Arrivées déclenchant le verrouillage (2 à 100)', d.raid.joinThreshold, { min: 2, max: 100, onInput: (v) => (d.raid.joinThreshold = v) }),
+          fieldNumber('Fenêtre en secondes (5 à 120)', d.raid.windowSeconds, { min: 5, max: 120, onInput: (v) => (d.raid.windowSeconds = v) }),
         ),
         h(
           'div',
           { class: 'card' },
           h('h2', { text: 'Verrouillage' }),
-          h('p', null, lock),
-          h('p', { class: 'hint', text: 'Un verrouillage n’est jamais restauré depuis une sauvegarde.' }),
+          h('p', null, lockStatus),
+          h('p', { class: 'hint', text: 'Un verrouillage n’est jamais restauré depuis une sauvegarde. Les modifications non enregistrées sont perdues si tu verrouilles ou lèves le verrouillage avant.' }),
+          h('div', { class: 'actions' }, lockButton),
         ),
         h(
           'div',
           { class: 'card' },
           h('h2', { text: 'Anti-nuke' }),
-          h('p', null, h('span', { class: cfg.nuke.enabled ? 'pill on' : 'pill', text: cfg.nuke.enabled ? 'Activé' : 'Désactivé' })),
-          keyValueTable([['Fenêtre', `${cfg.nuke.windowSeconds} s`], ...Object.entries(cfg.nuke.limits).map(([k, v]) => [NUKE_LABEL[k] ?? k, String(v)])]),
-          h('p', { class: 'hint', text: 'Au-delà des seuils, l’auteur perd ses rôles à risque puis il est banni. Propriétaire, bot et liste blanche sont exemptés.' }),
+          h('p', { class: 'hint', text: 'Au-delà des seuils, l’auteur perd ses rôles à risque, puis il est banni.' }),
+          fieldSwitch('Activer l’anti-nuke', null, d.nuke.enabled, (v) => (d.nuke.enabled = v)),
+          fieldNumber('Fenêtre en secondes (5 à 120)', d.nuke.windowSeconds, { min: 5, max: 120, onInput: (v) => (d.nuke.windowSeconds = v) }),
+          ...Object.keys(NUKE_LABEL).map((k) =>
+            fieldNumber(`${NUKE_LABEL[k]} (1 à 50)`, d.nuke.limits[k], { min: 1, max: 50, onInput: (v) => (d.nuke.limits[k] = v) }),
+          ),
         ),
         h(
           'div',
           { class: 'card' },
           h('h2', { text: 'Alertes et liste blanche' }),
-          keyValueTable([
-            ['Salon d’alerte', cfg.alertChannelId ? `#${channelName(cfg.alertChannelId) ?? 'salon supprimé'}` : 'Aucun (MP au propriétaire)'],
-            ['Membres de confiance', cfg.whitelistUserIds.length ? cfg.whitelistUserIds.join(', ') : 'Aucun'],
-            ['Rôles de confiance', cfg.whitelistRoleIds.length ? cfg.whitelistRoleIds.map((id) => roleById(id)?.name ?? 'rôle supprimé').join(', ') : 'Aucun'],
-          ]),
+          fieldChannel(
+            'Salon d’alerte',
+            d.alertChannelId,
+            TEXT_KINDS,
+            (v) => (d.alertChannelId = v),
+            'Sans salon, les alertes sont envoyées en MP au propriétaire.',
+            'Aucun (MP au propriétaire)',
+          ),
+          fieldText('Membres de confiance (identifiants, un par ligne)', d.whitelistUserIds.join('\n'), {
+            multiline: true,
+            hint: 'Ignorés par l’anti-nuke. Le propriétaire et le bot le sont toujours.',
+            onInput: (v) => (d.whitelistUserIds = v.split(/[\s,;]+/).filter(Boolean)),
+          }),
+          fieldChecks('Rôles de confiance', roleItems(), d.whitelistRoleIds, (v) => (d.whitelistRoleIds = v), 'Les membres ayant l’un de ces rôles sont ignorés par l’anti-nuke.'),
         ),
       ),
+      saveButton(saveAll, 'Enregistrer la sécurité'),
     );
   }
 
   // -------------------------------------------------------------------------
-  // Rôles par réaction (lecture seule : les panneaux se créent dans /config)
+  // Rôles par réaction : panneaux, rôles emoji → rôle, publication (modifiable)
   // -------------------------------------------------------------------------
 
   function viewReactionRoles() {
-    const cfg = S.data.modules.reaction_roles;
-    const channelName = (id) => (S.data.meta.channels || []).find((c) => c.id === id)?.name;
-    const panels = cfg.panels || [];
+    const panels = S.data.modules.reaction_roles.panels || [];
+    const roleOptions = [{ value: '', label: '— Choisir un rôle —' }, ...roleItems().map((r) => ({ value: r.id, label: r.label }))];
+
+    // Chaque action renvoie la configuration à jour et le message Discord est mis à jour côté bot.
+    const applyPanels = (res, message) => {
+      S.data.modules.reaction_roles = res.config;
+      if (res.warning) toast(res.warning, false);
+      else if (message) toast(message);
+      rerender();
+    };
+
+    const created = { title: '', description: '', channelId: null };
+    const createCard = h(
+      'div',
+      { class: 'card' },
+      h('h2', { text: 'Nouveau panneau' }),
+      h('p', { class: 'hint', text: `Maximum 10 panneaux par serveur (${panels.length} actuellement).` }),
+      fieldText('Titre', '', { max: 80, required: true, onInput: (v) => (created.title = v) }),
+      fieldText('Texte d’introduction', '', { max: 800, multiline: true, onInput: (v) => (created.description = v) }),
+      fieldChannel('Salon de publication', null, TEXT_KINDS, (v) => (created.channelId = v), 'Optionnel : tu peux le choisir plus tard.'),
+      h(
+        'div',
+        { class: 'actions' },
+        button(
+          'Créer le panneau',
+          async () => {
+            const res = await api('POST', gp('/reaction-roles/panels'), created);
+            applyPanels(res, 'Panneau créé. Ajoute des rôles, puis publie-le.');
+          },
+          { cls: 'primary' },
+        ),
+      ),
+    );
+
+    const panelCard = (p) => {
+      const draft = { title: p.title, description: p.description ?? '', channelId: p.channelId ?? null };
+      const pair = { emoji: '', roleId: '' };
+      const pairsTable = (p.pairs || []).length
+        ? h(
+            'table',
+            null,
+            h('thead', null, h('tr', null, ...['Emoji', 'Rôle', ''].map((t) => h('th', { text: t })))),
+            h(
+              'tbody',
+              null,
+              p.pairs.map((x) =>
+                h(
+                  'tr',
+                  null,
+                  h('td', { text: x.display }),
+                  h('td', { text: roleById(x.roleId)?.name ?? 'rôle supprimé' }),
+                  h(
+                    'td',
+                    null,
+                    button(
+                      'Retirer',
+                      async () => {
+                        const res = await api('DELETE', gp(`/reaction-roles/panels/${p.id}/pairs/${encodeURIComponent(x.key)}`));
+                        applyPanels(res, 'Rôle retiré. Les membres qui l’ont gardent leur rôle.');
+                      },
+                      { cls: 'danger small' },
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          )
+        : h('p', { class: 'muted', text: 'Aucun rôle dans ce panneau.' });
+
+      return h(
+        'div',
+        { class: 'card' },
+        h(
+          'div',
+          { class: 'page-head' },
+          h('h2', { text: p.title }),
+          h('span', { class: p.messageId ? 'pill on' : 'pill', text: p.messageId ? 'Publié' : 'Non publié' }),
+        ),
+        fieldText('Titre', draft.title, { max: 80, required: true, onInput: (v) => (draft.title = v) }),
+        fieldText('Texte d’introduction', draft.description, { max: 800, multiline: true, onInput: (v) => (draft.description = v) }),
+        fieldChannel(
+          'Salon',
+          draft.channelId,
+          TEXT_KINDS,
+          (v) => (draft.channelId = v),
+          'Changer de salon supprime l’ancien message : il faudra publier de nouveau.',
+        ),
+        h(
+          'div',
+          { class: 'actions' },
+          button(
+            'Enregistrer',
+            async () => {
+              const res = await api('PUT', gp(`/reaction-roles/panels/${p.id}`), draft);
+              applyPanels(res, 'Panneau enregistré.');
+            },
+            { cls: 'primary' },
+          ),
+          button(p.messageId ? 'Mettre à jour le message' : 'Publier dans le salon', async () => {
+            const res = await api('POST', gp(`/reaction-roles/panels/${p.id}/publish`));
+            applyPanels(res, 'Message publié.');
+          }),
+          button(
+            'Supprimer le panneau',
+            async () => {
+              if (!confirm(`Supprimer le panneau « ${p.title} » et son message ? Les membres gardent les rôles déjà attribués.`)) return;
+              const res = await api('DELETE', gp(`/reaction-roles/panels/${p.id}`));
+              applyPanels(res, 'Panneau supprimé.');
+            },
+            { cls: 'danger' },
+          ),
+        ),
+        h('h3', { text: 'Rôles du panneau' }),
+        pairsTable,
+        h(
+          'div',
+          { class: 'row' },
+          fieldText('Emoji', '', { max: 60, placeholder: '🎮 ou emoji du serveur', onInput: (v) => (pair.emoji = v) }),
+          fieldSelect('Rôle à donner', '', roleOptions, (v) => (pair.roleId = v)),
+        ),
+        h(
+          'div',
+          { class: 'actions' },
+          button('Ajouter ce rôle', async () => {
+            const res = await api('POST', gp(`/reaction-roles/panels/${p.id}/pairs`), pair);
+            applyPanels(res, 'Rôle ajouté.');
+          }),
+        ),
+      );
+    };
+
     return h(
       'section',
       null,
-      pageHead('Rôles par réaction', 'Lecture seule. Réagir à un message donne le rôle, retirer la réaction le retire. Modification : /config → Rôles par réaction.'),
-      panels.length
-        ? panels.map((p) =>
-            h(
-              'div',
-              { class: 'card' },
-              h(
-                'div',
-                { class: 'page-head' },
-                h('h2', { text: p.title }),
-                h('span', { class: p.messageId ? 'pill on' : 'pill', text: p.messageId ? 'Publié' : 'Non publié' }),
-              ),
-              keyValueTable([
-                ['Salon', p.channelId ? `#${channelName(p.channelId) ?? 'salon supprimé'}` : 'Non défini'],
-                ['Rôles', String((p.pairs || []).length)],
-              ]),
-              (p.pairs || []).length
-                ? h(
-                    'table',
-                    null,
-                    h('thead', null, h('tr', null, h('th', { text: 'Emoji' }), h('th', { text: 'Rôle' }))),
-                    h(
-                      'tbody',
-                      null,
-                      p.pairs.map((pair) => h('tr', null, h('td', { text: pair.display }), h('td', { text: roleById(pair.roleId)?.name ?? 'rôle supprimé' }))),
-                    ),
-                  )
-                : h('p', { class: 'muted', text: 'Aucun rôle dans ce panneau.' }),
-            ),
-          )
-        : h('div', { class: 'card' }, h('p', { class: 'muted', text: 'Aucun panneau pour le moment.' })),
+      pageHead('Rôles par réaction', 'Réagir au message d’un panneau donne le rôle ; retirer la réaction le retire.'),
+      createCard,
+      panels.length ? panels.map(panelCard) : h('div', { class: 'card' }, h('p', { class: 'muted', text: 'Aucun panneau pour le moment.' })),
     );
   }
 
