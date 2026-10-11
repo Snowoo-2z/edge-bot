@@ -1,7 +1,7 @@
 // Enregistre la commande /config auprès de Discord.
 // - Si GUILD_ID est défini : enregistrement instantané sur ce serveur (idéal pour tester).
 // - Sinon : enregistrement global (peut prendre jusqu'à 1 h à apparaître).
-const { REST, Routes, SlashCommandBuilder, PermissionFlagsBits } = require('discord.js');
+const { REST, Routes, SlashCommandBuilder, PermissionFlagsBits, ChannelType } = require('discord.js');
 
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 // Accepte CLIENT_ID ou DISCORD_CLIENT_ID (les deux noms sont courants).
@@ -37,6 +37,27 @@ const commands = [
     .setDescription('Propose une suggestion, publiée avec des votes pendant 3 jours')
     .setDMPermission(false)
     .toJSON(),
+  new SlashCommandBuilder()
+    .setName('giveaway')
+    .setDescription('Lance un giveaway (tirage au sort avec bouton de participation)')
+    .addStringOption((option) =>
+      option.setName('prix').setDescription('Ce qui est à gagner').setRequired(true).setMaxLength(200),
+    )
+    .addStringOption((option) =>
+      option.setName('duree').setDescription('Durée : 30m, 2h, 3j, 1j 12h (1 min à 30 jours)').setRequired(true),
+    )
+    .addIntegerOption((option) =>
+      option.setName('gagnants').setDescription('Nombre de gagnants (1 à 20, 1 par défaut)').setMinValue(1).setMaxValue(20).setRequired(false),
+    )
+    .addChannelOption((option) =>
+      option
+        .setName('salon')
+        .setDescription('Salon du giveaway (par défaut : le salon configuré, ou celui-ci)')
+        .addChannelTypes(ChannelType.GuildText)
+        .setRequired(false),
+    )
+    .setDMPermission(false)
+    .toJSON(),
 ];
 
 (async () => {
@@ -45,7 +66,7 @@ const commands = [
     ? Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID)
     : Routes.applicationCommands(CLIENT_ID);
   await rest.put(route, { body: commands });
-  console.log(`Commandes /config, /level, /leaderboard et /suggestion enregistrées ${GUILD_ID ? `sur le serveur ${GUILD_ID}` : 'globalement'}.`);
+  console.log(`Commandes /config, /level, /leaderboard, /suggestion et /giveaway enregistrées ${GUILD_ID ? `sur le serveur ${GUILD_ID}` : 'globalement'}.`);
 })().catch((err) => {
   console.error(err);
   process.exit(1);

@@ -81,6 +81,21 @@ Par défaut : titre « Bienvenue {user} ! », sous-titre « Membre n°{count} ·
 
 Les polices (Inter, licence SIL OFL) sont incluses dans `assets/fonts/`. Aucun fichier n'est à installer.
 
+## Giveaways
+
+Dans `/config` → **🎁 Giveaways** : active le module, choisis les **rôles autorisés à créer un giveaway**
+et, si tu veux, le salon par défaut.
+
+- Commande **`/giveaway prix duree [gagnants] [salon]`** :
+  - `prix` : ce qui est à gagner (200 caractères max) ;
+  - `duree` : `30m`, `2h`, `3j`, `1j 12h` (de 1 minute à 30 jours) ;
+  - `gagnants` : de 1 à 20 (1 par défaut) ;
+  - `salon` : facultatif. Sinon : le salon par défaut configuré, ou le salon où la commande est tapée.
+- Qui peut créer : les membres ayant un rôle autorisé, et les membres « Gérer le serveur » (admins).
+- Le message propose un bouton **🎉 Participer** avec le nombre de participants. Un second clic annule la participation.
+- À la fin, le bot tire les gagnants au sort parmi les participants (sans doublon), désactive le bouton et annonce les gagnants dans le salon.
+- Les giveaways sont enregistrés dans Supabase (table `edge_giveaways`, section 5 de `supabase/schema.sql`) : ils restent actifs après un redémarrage.
+
 ## Suggestions
 
 Dans `/config` → **💡 Suggestions** : active le module et choisis le salon de publication.
@@ -254,6 +269,7 @@ src/
   leveling.js           XP vocal et texte, niveaux, annonces, classement, sauvegarde Supabase
   modules/suggestions.js  commande /suggestion, votes de 3 jours, fermeture automatique
   modules/links.js      blocage des liens, rôles autorisés, avertissement
+  modules/giveaways.js  commande /giveaway, participation, tirage au sort
   xp-rules.js           valeurs de gain d'XP (vocal, texte)
   modules/registry.js   liste des modules affichés dans le menu
   modules/ticket.js     module Ticket (panneau, tickets, textes, images/GIF)

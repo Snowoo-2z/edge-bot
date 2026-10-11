@@ -142,10 +142,31 @@ async function saveSuggestion(row) {
   if (error) throw new Error(`Écriture Supabase échouée (${SUGGESTIONS_TABLE}) : ${error.message}`);
 }
 
+// ---------------------------------------------------------------------------
+// Giveaways : table "edge_giveaways", une ligne par tirage au sort.
+// ---------------------------------------------------------------------------
+
+const GIVEAWAYS_TABLE = 'edge_giveaways';
+
+// Giveaways encore en cours (non terminés).
+async function loadOpenGiveaways() {
+  const { data, error } = await supabase.from(GIVEAWAYS_TABLE).select('*').eq('ended', false);
+  if (error) throw new Error(`Lecture Supabase impossible (table ${GIVEAWAYS_TABLE}) : ${error.message}`);
+  return data ?? [];
+}
+
+// Enregistre (ou met à jour) un giveaway.
+async function saveGiveaway(row) {
+  const { error } = await supabase.from(GIVEAWAYS_TABLE).upsert(row, { onConflict: 'id' });
+  if (error) throw new Error(`Écriture Supabase échouée (${GIVEAWAYS_TABLE}) : ${error.message}`);
+}
+
 module.exports = {
   init,
   loadOpenSuggestions,
   saveSuggestion,
+  loadOpenGiveaways,
+  saveGiveaway,
   getModuleConfig,
   getGuildModule,
   updateModuleConfig,

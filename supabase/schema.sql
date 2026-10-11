@@ -52,3 +52,25 @@ create table if not exists public.edge_suggestions (
 
 -- Même règle que ci-dessus : seule la clé service_role (le bot) y accède.
 alter table public.edge_suggestions enable row level security;
+
+-- ---------------------------------------------------------------------------
+-- 5. Giveaways (commande /giveaway) : une ligne par tirage au sort.
+--    participant_ids : membres inscrits ; winner_ids : gagnants tirés à la fin.
+-- ---------------------------------------------------------------------------
+create table if not exists public.edge_giveaways (
+  id              text primary key,
+  guild_id        text not null,
+  channel_id      text not null,
+  message_id      text,
+  host_id         text not null,
+  prize           text not null,
+  winners_count   integer not null default 1,
+  participant_ids text[] not null default '{}',
+  winner_ids      text[] not null default '{}',
+  created_at      timestamptz not null default now(),
+  ends_at         timestamptz not null,
+  ended           boolean not null default false
+);
+
+-- Même règle que ci-dessus : seule la clé service_role (le bot) y accède.
+alter table public.edge_giveaways enable row level security;

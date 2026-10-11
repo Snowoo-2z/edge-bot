@@ -32,6 +32,12 @@ const MODULE_LIST = [
     description: 'Commande /suggestion avec votes pendant 3 jours',
   },
   {
+    id: 'giveaways',
+    label: 'Giveaways',
+    emoji: '🎁',
+    description: 'Commande /giveaway : rôles créateurs, tirage au sort automatique',
+  },
+  {
     id: 'links',
     label: 'Liens',
     emoji: '🔗',

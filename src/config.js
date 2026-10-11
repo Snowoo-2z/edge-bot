@@ -7,6 +7,7 @@ const welcome = require('./modules/welcome');
 const levels = require('./modules/levels');
 const suggestions = require('./modules/suggestions');
 const links = require('./modules/links');
+const giveaways = require('./modules/giveaways');
 
 // Modules réellement implémentés (id -> module).
 const MODULES = {
@@ -16,6 +17,7 @@ const MODULES = {
   [levels.ID]: levels,
   [suggestions.ID]: suggestions,
   [links.ID]: links,
+  [giveaways.ID]: giveaways,
 };
 
 // Panneau d'accueil de /config : choix du module.
