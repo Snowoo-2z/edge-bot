@@ -9,7 +9,7 @@ const FONTS_DIR = path.join(__dirname, '..', 'assets', 'fonts');
 const W = 1000;
 const H = 400;
 // Thèmes disponibles. stops = dégradé (du coin haut-gauche au coin bas-droit).
-// decor : 'moon' (lune) | 'snow' (neige) | null.
+// decor : 'bats' (chauves-souris) | 'noel' (guirlande, boules, neige) | null.
 const THEMES = {
   violet: {
     label: 'Violet',
@@ -36,16 +36,17 @@ const THEMES = {
     stops: ['#0b0610', '#3a1a33', '#d9621a'],
     light: '#ffc98a',
     glow: 'rgba(255,160,70,0.55)',
-    decor: 'moon',
+    decor: 'bats',
   },
   noel: {
     label: 'Noël',
     emoji: '🎄',
-    description: 'Vert sapin, rouge et neige',
-    stops: ['#04200f', '#0f4a2a', '#a31d2e'],
+    description: 'Vert sapin, rouge et or, guirlande et neige',
+    stops: ['#03200f', '#0e4a29', '#9e1b2c'],
     light: '#f7e7c4',
     glow: 'rgba(247,231,196,0.5)',
-    decor: 'snow',
+    frame: 'rgba(242,193,78,0.75)',
+    decor: 'noel',
   },
 };
 const DEFAULT_THEME = 'violet';
@@ -56,18 +57,97 @@ const THEME_LIST = Object.entries(THEMES).map(([id, t]) => ({
   description: t.description,
 }));
 
-// Génère des positions de neige stables (même carte à chaque rendu).
-function snowflakes(count) {
-  let seed = 7;
-  const rand = () => {
-    seed = (seed * 16807) % 2147483647;
-    return seed / 2147483647;
+// Générateur pseudo-aléatoire à graine fixe : même carte à chaque rendu.
+function seeded(seed) {
+  let v = seed;
+  return () => {
+    v = (v * 16807) % 2147483647;
+    return v / 2147483647;
   };
-  const flakes = [];
+}
+
+// Neige : points de tailles variées, plus denses vers le bas.
+function drawSnow(g, count) {
+  const rand = seeded(7);
   for (let i = 0; i < count; i++) {
-    flakes.push({ x: rand() * W, y: rand() * H, r: 1.5 + rand() * 2.5, a: 0.45 + rand() * 0.45 });
+    const x = rand() * W;
+    const y = rand() * H;
+    const r = 1 + rand() * rand() * 4;
+    g.fillStyle = `rgba(255,255,255,${(0.35 + rand() * 0.55).toFixed(2)})`;
+    circle(g, x, y, r);
+    g.fill();
   }
-  return flakes;
+}
+
+// Guirlande dorée qui pend le long du bord haut, ornée de boules rouges, dorées et blanches.
+function drawGarland(g) {
+  const x0 = 560;
+  const x1 = 985;
+  const y0 = 16;
+  const sag = 36;
+  const yAt = (x) => {
+    const u = (x - x0) / (x1 - x0);
+    return y0 + sag * 4 * u * (1 - u);
+  };
+
+  g.beginPath();
+  g.moveTo(x0, y0);
+  for (let x = x0; x <= x1; x += 4) g.lineTo(x, yAt(x));
+  g.strokeStyle = 'rgba(242,193,78,0.85)';
+  g.lineWidth = 3;
+  g.stroke();
+
+  const colors = ['#c8102e', '#f2c14e', '#fbfbf5', '#c8102e', '#f2c14e', '#fbfbf5', '#c8102e', '#f2c14e', '#fbfbf5'];
+  const n = colors.length;
+  colors.forEach((color, i) => {
+    const x = x0 + ((i + 0.5) / n) * (x1 - x0);
+    const y = yAt(x) + 12;
+    const r = 9;
+    // Petit bouchon au-dessus de la boule
+    g.fillStyle = '#f2c14e';
+    g.fillRect(x - 3, y - r - 4, 6, 5);
+    // Boule avec reflet
+    g.fillStyle = color;
+    circle(g, x, y, r);
+    g.fill();
+    g.fillStyle = 'rgba(255,255,255,0.55)';
+    circle(g, x - 3, y - 3, 2.5);
+    g.fill();
+  });
+}
+
+// Chauves-souris : silhouettes sombres et discrètes, dans le coin haut-droit.
+function drawBat(g, x, y, s) {
+  const p = (dx, dy) => [x + dx * s, y + dy * s];
+  g.beginPath();
+  g.moveTo(...p(0, -0.15));
+  g.quadraticCurveTo(...p(-0.35, -0.75), ...p(-1.25, -0.45));
+  g.quadraticCurveTo(...p(-0.85, -0.25), ...p(-1.05, 0.25));
+  g.quadraticCurveTo(...p(-0.6, 0.1), ...p(-0.3, 0.25));
+  g.quadraticCurveTo(...p(-0.1, 0.45), ...p(0, 0.3));
+  g.quadraticCurveTo(...p(0.1, 0.45), ...p(0.3, 0.25));
+  g.quadraticCurveTo(...p(0.6, 0.1), ...p(1.05, 0.25));
+  g.quadraticCurveTo(...p(0.85, -0.25), ...p(1.25, -0.45));
+  g.quadraticCurveTo(...p(0.35, -0.75), ...p(0, -0.15));
+  g.closePath();
+  g.fill();
+  // Oreilles
+  g.beginPath();
+  g.moveTo(...p(-0.22, -0.1));
+  g.lineTo(...p(-0.3, -0.42));
+  g.lineTo(...p(-0.08, -0.2));
+  g.moveTo(...p(0.22, -0.1));
+  g.lineTo(...p(0.3, -0.42));
+  g.lineTo(...p(0.08, -0.2));
+  g.closePath();
+  g.fill();
+}
+
+function drawBats(g) {
+  g.fillStyle = 'rgba(255,200,140,0.42)';
+  drawBat(g, 640, 62, 14);
+  drawBat(g, 790, 38, 9);
+  drawBat(g, 905, 84, 11);
 }
 
 let fontsReady = false;
@@ -165,20 +245,11 @@ async function renderWelcomeCard({ title, subtitle, avatarUrl, initial = '?', sh
   g.fill();
 
   // 2b. Décor propre au thème
-  if (t.decor === 'moon') {
-    g.save();
-    g.shadowColor = 'rgba(255,220,160,0.7)';
-    g.shadowBlur = 50;
-    g.fillStyle = 'rgba(255,241,207,0.92)';
-    circle(g, 925, 62, 36);
-    g.fill();
-    g.restore();
-  } else if (t.decor === 'snow') {
-    for (const f of snowflakes(70)) {
-      g.fillStyle = `rgba(255,255,255,${f.a.toFixed(2)})`;
-      circle(g, f.x, f.y, f.r);
-      g.fill();
-    }
+  if (t.decor === 'bats') {
+    drawBats(g);
+  } else if (t.decor === 'noel') {
+    drawSnow(g, 80);
+    drawGarland(g);
   }
 
   // 3. Cadre arrondi
@@ -186,7 +257,7 @@ async function renderWelcomeCard({ title, subtitle, avatarUrl, initial = '?', sh
   g.fillStyle = 'rgba(255,255,255,0.07)';
   g.fill();
   g.lineWidth = 3;
-  g.strokeStyle = t.glow.replace(/[\d.]+\)$/, '0.35)');
+  g.strokeStyle = t.frame ?? t.glow.replace(/[\d.]+\)$/, '0.35)');
   g.stroke();
 
   // 4. Avatar dans un anneau
