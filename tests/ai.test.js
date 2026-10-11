@@ -966,6 +966,41 @@ describe('ai : silence et contexte du salon', () => {
     assert.equal(ai.sanitizeLine('x'.repeat(500), 300).length, 300);
   });
 
+  it('règles de silence : le texte du tableau de bord remplace le texte par défaut ; l’appel de stay_silent reste ajouté', async () => {
+    store.updateModuleConfig(G3, ai.ID, {
+      ...structuredClone(ai.DEFAULTS),
+      enabled: true,
+      channelIds: [CH3],
+      cooldownSeconds: 0,
+      silenceRules: 'Ne parle jamais de politique ; tais-toi si deux personnes se répondent.',
+    });
+    await ai.handleMessage(client, msg('bonjour', { id: '920' }));
+    const system = bodies[0].messages[0].content;
+    assert.ok(system.includes('Ne parle jamais de politique'), 'texte personnalisé présent');
+    assert.ok(!system.includes(ai.DEFAULT_SILENCE_RULES.slice(0, 40)), 'texte par défaut absent');
+    assert.ok(system.includes('stay_silent'), 'l’appel de l’outil reste dans le prompt');
+    assert.ok(bodies[0].tools.some((t) => t.function.name === 'stay_silent'));
+  });
+
+  it('règles de silence vides : le texte par défaut est utilisé', async () => {
+    await ai.handleMessage(client, msg('bonjour', { id: '921' }));
+    assert.ok(bodies[0].messages[0].content.includes(ai.DEFAULT_SILENCE_RULES));
+  });
+
+  it('silence désactivé : pas d’outil ni de règles, mais le bot répond toujours dans les salons libres', async () => {
+    store.updateModuleConfig(G3, ai.ID, {
+      ...structuredClone(ai.DEFAULTS),
+      enabled: true,
+      channelIds: [CH3],
+      cooldownSeconds: 0,
+      silenceEnabled: false,
+    });
+    await ai.handleMessage(client, msg('salut', { id: '922' }));
+    assert.deepEqual(sent, ['Réponse']);
+    assert.equal((bodies[0].tools ?? []).some((t) => t.function.name === 'stay_silent'), false);
+    assert.ok(!bodies[0].messages[0].content.includes(ai.DEFAULT_SILENCE_RULES.slice(0, 40)));
+  });
+
   function cfg3() {
     return { ...structuredClone(ai.DEFAULTS) };
   }

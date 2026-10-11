@@ -200,8 +200,9 @@ function createApi({ getClient }) {
     const body = await readJson(req);
     const cfg = configOf(guild, ai.ID);
     const ctx = aiContext(guild, body);
-    const { system, active, grants } = ai.composeSystemPrompt(cfg, ctx);
-    const tools = ai.toolsFor(cfg, grants).map((t) => t.function.name);
+    const canStaySilent = ai.staySilentAllowed(cfg, ctx.mentioned);
+    const { system, active, grants } = ai.composeSystemPrompt(cfg, { ...ctx, canStaySilent });
+    const tools = ai.toolsFor(cfg, grants, { staySilent: canStaySilent }).map((t) => t.function.name);
     sendJson(res, 200, {
       system,
       active: active.map((a) => ({ id: a.id, text: a.text })),

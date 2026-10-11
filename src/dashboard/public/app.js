@@ -843,6 +843,8 @@
     cooldownSeconds: cfg.cooldownSeconds,
     memoryEnabled: cfg.memoryEnabled,
     memoryMaxNotes: cfg.memoryMaxNotes,
+    silenceEnabled: cfg.silenceEnabled !== false,
+    silenceRules: cfg.silenceRules ?? '',
     // Une abréviation à moitié saisie n'est pas envoyée : elle reste affichée et sera enregistrée une fois complète.
     abbreviations: (cfg.abbreviations ?? []).filter((a) => String(a.short ?? '').trim() && String(a.meaning ?? '').trim()),
     graph: cfg.graph,
@@ -1955,6 +1957,12 @@
     markAiDirty();
   }
 
+  // Texte par défaut des règles de silence (affiché en exemple ; vide = ce texte est utilisé par le bot).
+  const AI_DEFAULT_SILENCE_RULES =
+    'Tu lis aussi les derniers messages du salon (ils sont fournis avant le message auquel tu peux répondre). ' +
+    'Si la conversation est déjà en cours entre d’autres personnes, ou si tu n’as rien d’utile à ajouter, ne réponds pas. ' +
+    'Réponds seulement quand tu as quelque chose d’utile à dire ou qu’on te sollicite.';
+
   function viewAi() {
     const d = aiDraft();
     const test = S.aiTest ?? null;
@@ -2094,6 +2102,46 @@
           required: true,
           onInput: (v) => (d.systemPrompt = v),
         }),
+      ),
+      h(
+        'div',
+        { class: 'card' },
+        h('h2', { text: 'Règles de silence' }),
+        h('p', {
+          class: 'hint',
+          text:
+            'Dans les salons de réponse libre, le bot peut choisir de ne pas répondre (par exemple si une discussion est déjà en cours). ' +
+            'Sur mention, il répond toujours. Ici, tu modifies les règles qu’il suit pour décider de se taire.',
+        }),
+        fieldSwitch(
+          'Le bot peut se taire',
+          'Désactivé : il répond à chaque message des salons libres (les mentions restent toujours traitées).',
+          d.silenceEnabled !== false,
+          (v) => {
+            d.silenceEnabled = v;
+            markAiDirty();
+          },
+        ),
+        fieldText('Règles de silence', d.silenceRules ?? '', {
+          max: 600,
+          multiline: true,
+          placeholder: AI_DEFAULT_SILENCE_RULES,
+          hint: 'Laisse vide pour utiliser le texte par défaut (affiché en exemple dans la zone vide).',
+          onInput: (v) => (d.silenceRules = v),
+        }),
+        h(
+          'div',
+          { class: 'actions' },
+          button(
+            'Rétablir le texte par défaut',
+            () => {
+              d.silenceRules = '';
+              markAiDirty();
+              rerender();
+            },
+            { cls: 'small' },
+          ),
+        ),
       ),
       h(
         'div',

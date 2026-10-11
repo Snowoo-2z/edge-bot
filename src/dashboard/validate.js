@@ -442,6 +442,8 @@ function sanitizeAi(guild, input, current = {}) {
       'graph',
       'memoryEnabled',
       'memoryMaxNotes',
+      'silenceEnabled',
+      'silenceRules',
     ],
     (key, value) => {
       switch (key) {
@@ -467,6 +469,10 @@ function sanitizeAi(guild, input, current = {}) {
           return bool(value, 'Mémoire des membres');
         case 'memoryMaxNotes':
           return integer(value, 'Notes par personne', 5, ai.LIMITS.memoryMaxNotes);
+        case 'silenceEnabled':
+          return bool(value, 'Silence dans les salons libres');
+        case 'silenceRules':
+          return text(value, 'Règles de silence', ai.LIMITS.silenceChars);
         default:
           return undefined;
       }

@@ -257,6 +257,10 @@ est en fin de vie) ou Ministral 8B. Tout se règle sur le tableau de bord, page 
 - **Silence** : dans un salon de réponse libre (jamais sur mention, où le bot répond toujours), le modèle peut appeler
   l'outil `stay_silent` avec une raison, par exemple s'il voit une discussion déjà en cours entre membres. Rien n'est alors
   envoyé. Le bot n'écrit aucun message dans le salon de logs, pour éviter le spam.
+  - **Règles modifiables** : section « Règles de silence » du tableau de bord. L'interrupteur « Le bot peut se taire »
+    désactive le silence (il répond alors à chaque message des salons libres). Le texte des règles (600 caractères maximum)
+    est remplacé par celui de la zone ; vide, c'est le texte par défaut qui s'applique. « Rétablir le texte par défaut »
+    vide la zone. La phrase qui demande d'appeler `stay_silent` est toujours ajoutée, pour que le mécanisme fonctionne.
 - **Journal des décisions** : chaque réponse ou silence est enregistré (salon, membre, décision, raison, extrait du message).
   Il s'affiche sur le tableau de bord, section « Décisions récentes » (100 dernières, bouton Actualiser). Conservé **30 jours**,
   purgé automatiquement chaque heure. Stocké dans Supabase (table `edge_ai_decisions`, section 11 de `supabase/schema.sql`).
