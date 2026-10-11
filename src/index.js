@@ -28,17 +28,24 @@ const client = new Client({
   ],
 });
 
-// Alerte si Discord ne confirme pas la connexion (token, intents privilégiés…).
-const readyWatchdog = setTimeout(() => {
-  console.error(
-    '[discord] Toujours pas connecté 60 s après le démarrage. Vérifie le token et les intents privilégiés (portail développeur).',
-  );
+// Suivi de la connexion : depuis cet hébergement, Discord peut mettre 1 à 3 minutes à répondre.
+// Le bot réessaie tout seul ; ce suivi indique seulement où en est la connexion.
+const connectStarted = Date.now();
+const connectWatch = setInterval(() => {
+  const minutes = Math.floor((Date.now() - connectStarted) / 60_000);
+  console.log(`[discord] Connexion toujours en cours après ${minutes} min (le bot continue d'essayer).`);
 }, 60_000);
 
 client.once(Events.ClientReady, (c) => {
-  clearTimeout(readyWatchdog);
+  clearInterval(connectWatch);
   console.log(`Edge connecté en tant que ${c.user.tag}`);
 });
+
+// Cycle de vie de la connexion (utile pour voir les coupures et reconnexions).
+client.on(Events.ShardReady, (id) => console.log(`[discord] shard ${id} prêt`));
+client.on(Events.ShardDisconnect, (event, id) => console.warn(`[discord] shard ${id} déconnecté (code ${event?.code})`));
+client.on(Events.ShardReconnecting, (id) => console.log(`[discord] shard ${id} : reconnexion…`));
+client.on(Events.ShardResume, (id) => console.log(`[discord] shard ${id} : session reprise`));
 
 // Erreurs de passerelle Discord. Un intent privilégié non activé dans le portail
 // empêche la connexion sans planter le processus : on le signale explicitement.
