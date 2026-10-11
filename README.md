@@ -99,6 +99,7 @@ et modifie l'avertissement si besoin.
 - Un message contenant un lien (`https://…`, `www.…`, `discord.gg/…`, `exemple.com`…) est **supprimé**.
 - Le membre reçoit dans le salon : « Avertissement, vous n’êtes pas autorisé à poster des liens sur ce serveur Discord. »
 - Les membres ayant un rôle autorisé peuvent poster des liens. Les bots ne sont pas concernés.
+- Les **salons libres** (bouton **Salons libres**) : tu peux en choisir un ou plusieurs, salons texte ou forums. Tout le monde peut y poster des liens. Dans un forum, tous les posts sont concernés.
 - Le bot doit avoir la permission **Gérer les messages** dans le salon.
 - Le contrôle s'applique aussi aux messages modifiés pour ajouter un lien.
 

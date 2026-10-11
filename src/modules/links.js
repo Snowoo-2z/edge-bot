@@ -1,6 +1,6 @@
 // Module « Liens » de /config : supprime les messages contenant un lien, sauf pour les rôles autorisés.
 // Le membre reçoit un avertissement dans le salon. Le texte d'avertissement est modifiable.
-const { ButtonStyle, RoleSelectMenuBuilder } = require('discord.js');
+const { ButtonStyle, ChannelType, ChannelSelectMenuBuilder, RoleSelectMenuBuilder } = require('discord.js');
 const { getModuleConfig, updateModuleConfig } = require('../store');
 const { embed, button, row, toggleButton, textModal, moduleSelectRow, truncate } = require('../ui');
 const { MODULE_LIST } = require('./registry');
@@ -10,6 +10,7 @@ const DEFAULT_WARNING = 'Avertissement, vous n’êtes pas autorisé à poster d
 const DEFAULTS = {
   enabled: false,
   allowedRoleIds: [],
+  allowedChannelIds: [], // salons (texte ou forum) où tout le monde peut poster des liens
   warning: DEFAULT_WARNING,
 };
 
@@ -28,18 +29,23 @@ function cfgOf(guildId) {
 
 function render(view, guild) {
   if (view === 'roles') return renderRoles(guild);
+  if (view === 'channels') return renderChannels(guild);
   return renderMain(guild);
 }
 
 function renderMain(guild) {
   const cfg = cfgOf(guild.id);
   const roles = cfg.allowedRoleIds.length ? cfg.allowedRoleIds.map((id) => `<@&${id}>`).join(' ') : 'aucun';
+  const channels = cfg.allowedChannelIds.length
+    ? cfg.allowedChannelIds.map((id) => `<#${id}>`).join(' ')
+    : 'aucun';
   return {
     content: '🔗 **Module Liens** · supprime les messages contenant un lien, sauf pour les rôles autorisés.',
     embeds: [
       embed().addFields(
         { name: 'Blocage des liens', value: cfg.enabled ? '🟢 Activé' : '⚪ Désactivé', inline: true },
         { name: 'Rôles autorisés à poster des liens', value: truncate(roles, 500), inline: false },
+        { name: 'Salons où tout le monde peut poster des liens', value: truncate(channels, 500), inline: false },
         { name: 'Avertissement envoyé', value: truncate(cfg.warning, 300), inline: false },
       ),
     ],
@@ -48,9 +54,30 @@ function renderMain(guild) {
       row(
         toggleButton('cfg:links:toggle:enabled', 'Blocage', cfg.enabled),
         button('cfg:links:view:roles', 'Rôles autorisés', ButtonStyle.Primary, '🎭'),
+        button('cfg:links:view:channels', 'Salons libres', ButtonStyle.Primary, '📢'),
         button('cfg:links:open:texts', 'Avertissement', ButtonStyle.Primary, '✏️'),
       ),
     ],
+  };
+}
+
+function renderChannels(guild) {
+  const cfg = cfgOf(guild.id);
+  const select = new ChannelSelectMenuBuilder()
+    .setCustomId('cfg:links:pick:channels')
+    .setPlaceholder('Sélectionne un ou plusieurs salons ou forums')
+    .setChannelTypes(ChannelType.GuildText, ChannelType.GuildForum)
+    .setMinValues(0)
+    .setMaxValues(25);
+  if (cfg.allowedChannelIds.length) select.setDefaultChannels(...cfg.allowedChannelIds);
+  return {
+    embeds: [
+      embed(
+        'Choisis les salons ou forums où tout le monde peut poster des liens, quel que soit son rôle. ' +
+          'Dans un forum, tous les posts sont concernés. Vide la sélection pour ne garder aucun salon libre.',
+      ),
+    ],
+    components: [row(select), row(button('cfg:links:view:main', '◀ Retour', ButtonStyle.Danger))],
   };
 }
 
@@ -91,8 +118,9 @@ async function handleComponent(interaction) {
     }
 
     case 'pick': {
-      if (arg !== 'roles') return;
-      cfg.allowedRoleIds = [...interaction.values];
+      if (arg === 'roles') cfg.allowedRoleIds = [...interaction.values];
+      else if (arg === 'channels') cfg.allowedChannelIds = [...interaction.values];
+      else return;
       updateModuleConfig(guild.id, ID, cfg);
       return interaction.update(renderMain(guild));
     }
@@ -129,7 +157,7 @@ async function handleModal(interaction) {
   return interaction.editReply(renderMain(guild));
 }
 
-// Un message est contrôlé s'il contient un lien et si son auteur n'a pas un rôle autorisé.
+// Un message est contrôlé s'il contient un lien, hors rôles autorisés et salons libres.
 async function checkMessage(message) {
   if (!message.guild || !message.author || message.author.bot) return;
   const cfg = cfgOf(message.guild.id);
@@ -137,6 +165,11 @@ async function checkMessage(message) {
 
   const member = message.member ?? (await message.guild.members.fetch(message.author.id).catch(() => null));
   if (member && cfg.allowedRoleIds.some((roleId) => member.roles.cache.has(roleId))) return;
+
+  // Salon libre : le salon lui-même ou, pour un post de forum, le forum parent.
+  const channel = message.channel;
+  const freeChannels = cfg.allowedChannelIds ?? [];
+  if (freeChannels.includes(channel?.id) || freeChannels.includes(channel?.parentId)) return;
 
   try {
     await message.delete();
