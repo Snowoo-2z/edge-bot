@@ -265,7 +265,12 @@ est en fin de vie) ou Ministral 8B. Tout se règle sur le tableau de bord, page 
   (`i` identifiant, `t` type, `x`/`y` position, `d` données, omis si vide). Le moteur est partagé par le navigateur et le
   serveur : `src/dashboard/public/ai-graph.js`.
 - **Tester** : « Voir le prompt final » montre le prompt exact sans appel réseau ; « Tester avec Mistral » fait un appel réel
-  (consomme des tokens). Enregistre d'abord les modifications : les tests utilisent la version enregistrée.
+  (consomme des tokens). Les tests utilisent la version enregistrée : attends le statut « ✓ Enregistré » avant de tester.
+- **Sauvegarde automatique** : chaque modification est enregistrée environ 1,2 s après la dernière action. Le statut en haut
+  de la page indique « Enregistrement… », « ✓ Enregistré à HH:MM » ou « ⚠ Non enregistré (raison) ». Les modifications restent
+  affichées en cas d'erreur et sont renvoyées à la modification suivante. Le navigateur demande confirmation si on ferme la page
+  avant l'envoi. Une abréviation à moitié saisie n'est pas envoyée tant qu'elle est incomplète.
+- **Plein écran** : bouton « Plein écran » dans la barre de l'éditeur ; `Échap` pour quitter.
 - **Confidentialité** : le texte du membre part dans le message « user » ; il n'entre jamais dans le prompt système.
   La clé `MISTRAL_API_KEY` n'est jamais écrite dans le dépôt, ni affichée, ni journalisée.
 - `/config` → **IA (Mistral)** : activation rapide uniquement.

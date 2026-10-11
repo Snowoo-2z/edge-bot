@@ -813,6 +813,140 @@
     return S.aiView;
   }
 
+  // Sauvegarde automatique : chaque modification part peu après la dernière action.
+  // Un seul envoi à la fois par serveur ; le brouillon complet est envoyé à chaque fois.
+  const AI_AUTOSAVE_MS = 1200;
+  const aiSave = { pending: new Map(), sends: new Map(), timer: null, failed: false, message: '', at: null };
+
+  const aiPayload = (cfg) => ({
+    enabled: cfg.enabled,
+    model: cfg.model,
+    systemPrompt: cfg.systemPrompt,
+    temperature: cfg.temperature,
+    maxReplyTokens: cfg.maxReplyTokens,
+    channelIds: cfg.channelIds,
+    cooldownSeconds: cfg.cooldownSeconds,
+    // Une abréviation à moitié saisie n'est pas envoyée : elle reste affichée et sera enregistrée une fois complète.
+    abbreviations: (cfg.abbreviations ?? []).filter((a) => String(a.short ?? '').trim() && String(a.meaning ?? '').trim()),
+    graph: cfg.graph,
+  });
+
+  function aiState() {
+    if (aiSave.sends.size) return 'saving';
+    if (aiSave.pending.size) return 'dirty';
+    return aiSave.failed ? 'error' : 'saved';
+  }
+
+  function aiStatusText() {
+    switch (aiState()) {
+      case 'saving':
+        return 'Enregistrement…';
+      case 'dirty':
+        return 'Modifications en attente d’enregistrement…';
+      case 'error':
+        return `⚠ Non enregistré (${aiSave.message}). Tes modifications restent affichées : elles seront renvoyées à la prochaine modification.`;
+      default:
+        return aiSave.at
+          ? `✓ Enregistré à ${aiSave.at.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}`
+          : '✓ Tout est enregistré';
+    }
+  }
+
+  function paintAiSave() {
+    for (const el of document.querySelectorAll('.ai-save')) {
+      el.textContent = aiStatusText();
+      el.dataset.state = aiState();
+    }
+  }
+
+  // Appelée après chaque modification : le brouillon part dans AI_AUTOSAVE_MS.
+  function markAiDirty() {
+    aiSave.pending.set(S.gid, { gid: S.gid, cfg: aiDraft() });
+    clearTimeout(aiSave.timer);
+    aiSave.timer = setTimeout(() => flushAi(), AI_AUTOSAVE_MS);
+    paintAiSave();
+  }
+
+  // Envoie les brouillons en attente. Renvoie une promesse qui se résout quand les envois en cours sont finis.
+  function flushAi() {
+    clearTimeout(aiSave.timer);
+    aiSave.timer = null;
+    for (const [gid, target] of [...aiSave.pending]) {
+      if (aiSave.sends.has(gid)) continue; // l'envoi en cours relancera celui-ci à la fin
+      aiSave.pending.delete(gid);
+      aiSave.sends.set(gid, sendAi(target));
+    }
+    paintAiSave();
+    return Promise.all([...aiSave.sends.values()]);
+  }
+
+  async function sendAi(target) {
+    paintAiSave();
+    try {
+      const res = await api('PUT', `/api/guilds/${target.gid}/modules/ai`, aiPayload(target.cfg));
+      if (S.gid === target.gid && S.data) S.data.modules.ai = res.config;
+      aiSave.at = new Date();
+      aiSave.failed = false;
+      aiSave.message = '';
+    } catch (err) {
+      aiSave.failed = true;
+      aiSave.message = err.message;
+    } finally {
+      aiSave.sends.delete(target.gid);
+      // Une modification faite pendant l'envoi part maintenant. Pas de boucle : après un échec, seul un nouveau changement relance.
+      flushAi();
+    }
+  }
+
+  // Filet de sécurité : fermer l'onglet ou changer d'appli envoie ce qui reste, et prévient avant de quitter.
+  function aiKeepAlive() {
+    for (const target of aiSave.pending.values()) {
+      fetch(`/api/guilds/${target.gid}/modules/ai`, {
+        method: 'PUT',
+        keepalive: true,
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json', 'X-Edge-Dashboard': '1' },
+        body: JSON.stringify(aiPayload(target.cfg)),
+      }).catch(() => {});
+    }
+  }
+  window.addEventListener('pagehide', aiKeepAlive);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') aiKeepAlive();
+  });
+  window.addEventListener('beforeunload', (e) => {
+    if (aiSave.pending.size || aiSave.sends.size) {
+      e.preventDefault();
+      e.returnValue = '';
+    }
+  });
+
+  // Plein écran de l'éditeur : API plein écran du navigateur, avec repli en plein cadre si elle est refusée.
+  function applyFsState() {
+    const on = Boolean(aiView().fs);
+    if (!graphRefs) return;
+    graphRefs.wrap.classList.toggle('graph-fs', on);
+    graphRefs.fsButton.textContent = on ? '✕ Quitter le plein écran' : '⛶ Plein écran';
+  }
+
+  function setGraphFullscreen(on) {
+    aiView().fs = on;
+    applyFsState();
+    if (on) {
+      const request = graphRefs?.wrap.requestFullscreen?.();
+      request?.catch?.(() => {}); // refusé : le plein cadre CSS reste affiché
+    } else if (document.fullscreenElement) {
+      document.exitFullscreen?.().catch(() => {});
+    }
+  }
+
+  document.addEventListener('fullscreenchange', () => {
+    if (!document.fullscreenElement && S.aiView?.fs) setGraphFullscreen(false);
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && S.aiView?.fs) setGraphFullscreen(false);
+  });
+
   // « abréviation = signification » ou « abréviation : signification », une par ligne.
   function parseAbbreviationLines(raw) {
     return String(raw ?? '')
@@ -856,6 +990,7 @@
     try {
       aiDraft().graph = change(graphNow());
       view.status = okMessage;
+      markAiDirty();
     } catch (err) {
       view.status = err.message;
     }
@@ -885,6 +1020,7 @@
       aiDraft().graph = result.graph;
       view.selected = result.id;
       view.status = 'Nœud ajouté.';
+      markAiDirty();
     } catch (err) {
       view.status = err.message;
     }
@@ -1197,9 +1333,11 @@
       if (!d.moved) view.selected = null;
       repaintGraph();
     } else if (d.kind === 'node') {
+      if (d.moved) markAiDirty();
       repaintGraph();
     } else if (d.kind === 'wire') {
       d.temp.remove();
+      markAiDirty(); // un fil détaché peut avoir été retiré au pointeur bas
       const target = document.elementFromPoint(e.clientX, e.clientY)?.closest?.('.gn-pin');
       if (target) {
         finishWire(d.from, { node: target.dataset.node, pin: target.dataset.pin, dir: target.dataset.dir });
@@ -1269,9 +1407,12 @@
     viewport.addEventListener('keydown', onGraphKeyDown);
 
     const view = aiView();
+    const fsButton = button('⛶ Plein écran', async () => setGraphFullscreen(!aiView().fs), { cls: 'small' });
+    graphRefs.fsButton = fsButton;
     const toolbar = ge(
       'div',
       { class: 'graph-toolbar' },
+      fsButton,
       ...Object.entries(EdgeAiGraph.CATALOG).map(([type, def]) =>
         button(`+ ${def.label}`, async () => {
           const c = centerWorld();
@@ -1294,34 +1435,24 @@
       }, { cls: 'small' }),
     );
 
+    toolbar.append(ge('span', { class: 'hint ai-save', 'data-state': aiState(), text: aiStatusText() }));
+    const wrap = ge('div', { class: 'graph-wrap' }, ge('div', null, toolbar, viewport, status), inspector);
+    graphRefs.wrap = wrap;
+    applyFsState();
     repaintGraph();
-    return ge('div', { class: 'graph-wrap' }, ge('div', null, toolbar, viewport, status), inspector);
+    return wrap;
+  }
+
+  // Toute saisie dans la page IA déclenche la sauvegarde, sauf les champs marqués data-nosave (test, lot).
+  function onAiEdit(e) {
+    if (e.target.closest('[data-nosave]')) return;
+    markAiDirty();
   }
 
   function viewAi() {
     const d = aiDraft();
     const test = S.aiTest ?? null;
     const textChannels = channelsOf(TEXT_KINDS);
-
-    const save = async () => {
-      const payload = {
-        enabled: d.enabled,
-        model: d.model,
-        systemPrompt: d.systemPrompt,
-        temperature: d.temperature,
-        maxReplyTokens: d.maxReplyTokens,
-        channelIds: d.channelIds,
-        cooldownSeconds: d.cooldownSeconds,
-        abbreviations: d.abbreviations,
-        graph: d.graph,
-      };
-      const res = await api('PUT', gp('/modules/ai'), payload);
-      S.data.modules.ai = res.config;
-      S.aiDraft = null;
-      S.aiView = null;
-      toast('Module IA enregistré.');
-      rerender();
-    };
 
     const abbrRows = d.abbreviations.map((a, i) =>
       h(
@@ -1336,6 +1467,7 @@
             'Supprimer',
             async () => {
               d.abbreviations.splice(i, 1);
+              markAiDirty();
               rerender();
             },
             { cls: 'danger small' },
@@ -1357,6 +1489,7 @@
         added += 1;
       }
       S.aiBulk = '';
+      markAiDirty();
       toast(`${added} abréviation(s) ajoutée(s). Pense à enregistrer.`);
       rerender();
     };
@@ -1390,13 +1523,14 @@
       mentioned: Boolean(S.aiTestMention),
     });
 
-    return h(
+    const root = h(
       'section',
       null,
       pageHead(
         '🤖 IA (Mistral)',
-        'Le bot répond avec Ministral 14B. Prompt, abréviations et graphe se règlent ici ; enregistre avant de tester.',
+        'Le bot répond avec Ministral 14B. Tout est enregistré automatiquement, peu après ta dernière modification.',
       ),
+      h('p', { class: 'hint ai-save', 'data-state': aiState(), text: aiStatusText() }),
       h(
         'div',
         { class: 'card' },
@@ -1459,17 +1593,18 @@
             async () => {
               if (d.abbreviations.length >= AI_MAX_ABBR) throw new Error(`${AI_MAX_ABBR} abréviations maximum.`);
               d.abbreviations.push({ short: '', meaning: '' });
+              markAiDirty();
               rerender();
             },
             { cls: 'primary' },
           ),
         ),
         h('h3', { text: 'Ajout en lot' }),
-        fieldText('Une par ligne : abréviation = signification', S.aiBulk ?? '', {
+        h('div', { 'data-nosave': true }, fieldText('Une par ligne : abréviation = signification', S.aiBulk ?? '', {
           max: 5000,
           multiline: true,
           onInput: (v) => (S.aiBulk = v),
-        }),
+        })),
         h('div', { class: 'actions' }, button('Ajouter ces lignes', addBulk)),
       ),
       h(
@@ -1485,7 +1620,7 @@
       ),
       h(
         'div',
-        { class: 'card' },
+        { class: 'card', 'data-nosave': true },
         h('h2', { text: 'Tester' }),
         fieldText('Message d’exemple', S.aiTestInput ?? '', {
           max: 500,
@@ -1515,8 +1650,16 @@
         ),
         resultBlock,
       ),
-      saveButton(save, 'Enregistrer le module IA'),
+      saveButton(async () => {
+        markAiDirty();
+        await flushAi();
+        if (aiSave.failed) throw new Error(aiSave.message);
+        toast('Module IA enregistré.');
+      }, 'Enregistrer maintenant'),
     );
+    root.addEventListener('input', onAiEdit);
+    root.addEventListener('change', onAiEdit);
+    return root;
   }
 
   function viewLinks() {

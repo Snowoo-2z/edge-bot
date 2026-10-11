@@ -252,6 +252,18 @@ th { color: var(--muted); font-weight: 600; font-size: .82rem; }
 .graph-inspector h3 { margin: 0 0 .4rem; font-size: 1rem; }
 .graph-node-title { font-weight: 700; color: var(--purple); margin: 0 0 .5rem; }
 .graph-help { margin-top: .75rem; }
+.ai-save { margin: .1rem 0 .6rem; font-size: .88rem; }
+.ai-save[data-state="saved"] { color: var(--ok); }
+.ai-save[data-state="error"] { color: var(--warn); }
+.graph-toolbar .ai-save { margin: 0 0 0 auto; align-self: center; font-size: .82rem; }
+/* Plein écran : l'éditeur couvre toute la fenêtre (API plein écran, ou plein cadre si refusée). */
+.graph-wrap.graph-fs { position: fixed; inset: 0; z-index: 200; margin: 0; padding: 14px; background: var(--bg); grid-template-columns: minmax(0, 1fr) 300px; overflow: auto; border-radius: 0; }
+.graph-wrap.graph-fs .graph-viewport { height: calc(100vh - 150px); min-height: 320px; }
+.graph-wrap.graph-fs .graph-inspector { overflow: auto; max-height: calc(100vh - 120px); }
+@media (max-width: 760px) {
+  .graph-wrap.graph-fs { grid-template-columns: minmax(0, 1fr); }
+  .graph-wrap.graph-fs .graph-viewport { height: 55vh; }
+}
 @media (max-width: 760px) {
   .graph-wrap { grid-template-columns: minmax(0, 1fr); }
   .graph-viewport { height: 340px; }
