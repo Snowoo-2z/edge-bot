@@ -17,57 +17,62 @@ if (missing.length) {
 }
 const token = process.env.DISCORD_TOKEN;
 
-// MessageContent : nécessaire pour recevoir les pièces jointes (import image / GIF).
-const client = new Client({
-  // GuildMembers : nécessaire pour l'arrivée des membres (module Bienvenue). Intent privilégié à activer.
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMembers,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
-  ],
-});
+// Une tentative de connexion dure au plus 15 s ; si elle échoue, on recrée le client et on réessaie.
+const LOGIN_TRY_MS = 15_000;
 
-// Suivi de la connexion : depuis cet hébergement, Discord peut mettre 1 à 3 minutes à répondre.
-// Le bot réessaie tout seul ; ce suivi indique seulement où en est la connexion.
-const connectStarted = Date.now();
-const connectWatch = setInterval(() => {
-  const minutes = Math.floor((Date.now() - connectStarted) / 60_000);
-  console.log(`[discord] Connexion toujours en cours après ${minutes} min (le bot continue d'essayer).`);
-}, 60_000);
+// Client Discord courant (recréé à chaque tentative de connexion).
+let bot = null;
 
-client.once(Events.ClientReady, (c) => {
-  clearInterval(connectWatch);
-  console.log(`Edge connecté en tant que ${c.user.tag}`);
-});
+function buildClient() {
+  const client = new Client({
+    intents: [
+      GatewayIntentBits.Guilds,
+      // GuildMembers : arrivée des membres (module Bienvenue). Intent privilégié à activer.
+      GatewayIntentBits.GuildMembers,
+      GatewayIntentBits.GuildMessages,
+      // MessageContent : pièces jointes (import image / GIF). Intent privilégié à activer.
+      GatewayIntentBits.MessageContent,
+    ],
+  });
+  registerHandlers(client);
+  return client;
+}
 
-// Cycle de vie de la connexion (utile pour voir les coupures et reconnexions).
-client.on(Events.ShardReady, (id) => console.log(`[discord] shard ${id} prêt`));
-client.on(Events.ShardDisconnect, (event, id) => console.warn(`[discord] shard ${id} déconnecté (code ${event?.code})`));
-client.on(Events.ShardReconnecting, (id) => console.log(`[discord] shard ${id} : reconnexion…`));
-client.on(Events.ShardResume, (id) => console.log(`[discord] shard ${id} : session reprise`));
+function registerHandlers(client) {
+  // Détail de la connexion (gateway, shard, reconnexions). Les heartbeats et le token sont exclus.
+  client.on(Events.Debug, (message) => {
+    const firstLine = String(message).split('\n')[0].trim();
+    if (/heartbeat|token|destroyed/i.test(firstLine)) return;
+    if (!/gateway|shard|connect|websocket|identify|session|hello|reconnect|handshake|resum/i.test(firstLine)) return;
+    console.log(`[debug] ${firstLine.slice(0, 200)}`);
+  });
 
-// Erreurs de passerelle Discord. Un intent privilégié non activé dans le portail
-// empêche la connexion sans planter le processus : on le signale explicitement.
-client.on(Events.ShardError, (error) => {
-  const message = error?.message ?? String(error);
-  console.error('[discord] Erreur de connexion :', message);
-  if (/disallowed intents/i.test(message)) {
-    console.error(
-      '[discord] Intent privilégié refusé. Portail développeur → Bot → Privileged Gateway Intents : ' +
-        'active MESSAGE CONTENT INTENT et SERVER MEMBERS INTENT, puis redémarre le service Render.',
-    );
-  }
-});
+  // Cycle de vie de la connexion (coupures et reconnexions).
+  client.on(Events.ShardReady, (id) => console.log(`[discord] shard ${id} prêt`));
+  client.on(Events.ShardDisconnect, (event, id) => console.warn(`[discord] shard ${id} déconnecté (code ${event?.code})`));
+  client.on(Events.ShardReconnecting, (id) => console.log(`[discord] shard ${id} : reconnexion…`));
+  client.on(Events.ShardResume, (id) => console.log(`[discord] shard ${id} : session reprise`));
 
-function withTimeout(promise, ms, message) {
-  let timer;
-  return Promise.race([
-    promise,
-    new Promise((_, reject) => {
-      timer = setTimeout(() => reject(new Error(message)), ms);
-    }),
-  ]).finally(() => clearTimeout(timer));
+  // Erreurs de passerelle. Un intent privilégié non activé dans le portail empêche la connexion
+  // sans planter le processus : on le signale explicitement.
+  client.on(Events.ShardError, (error) => {
+    const message = error?.message ?? String(error);
+    console.error('[discord] Erreur de connexion :', message);
+    if (/disallowed intents/i.test(message)) {
+      console.error(
+        '[discord] Intent privilégié refusé. Portail développeur → Bot → Privileged Gateway Intents : ' +
+          'active MESSAGE CONTENT INTENT et SERVER MEMBERS INTENT (le bot réessaiera automatiquement).',
+      );
+    }
+  });
+
+  client.on(Events.Warn, (message) => console.warn('[discord] avertissement :', message));
+  client.on(Events.Error, (error) => console.error('[discord] erreur client :', error?.message ?? error));
+
+  client.on(Events.InteractionCreate, handleInteraction);
+
+  ticket.registerEvents(client);
+  welcome.registerEvents(client);
 }
 
 // Journal des interactions reçues : permet de voir si Discord les transmet au bot.
@@ -77,7 +82,7 @@ function describeInteraction(interaction) {
   return `${interaction.componentType ? 'composant' : 'interaction'} ${interaction.customId ?? ''}`;
 }
 
-client.on(Events.InteractionCreate, async (interaction) => {
+async function handleInteraction(interaction) {
   const started = Date.now();
   console.log(`[interaction] reçue : ${describeInteraction(interaction)} (${interaction.guildId ?? 'MP'})`);
   try {
@@ -100,17 +105,58 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const ms = Date.now() - started;
     if (ms > 2500) console.warn(`[interaction] traitement lent : ${ms} ms`);
   }
-});
+}
 
-// Messages internes de discord.js (avertissements, erreurs de client).
-client.on(Events.Warn, (message) => console.warn('[discord] avertissement :', message));
-client.on(Events.Error, (error) => console.error('[discord] erreur client :', error?.message ?? error));
+function withTimeout(promise, ms, message) {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(message)), ms);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
 
-ticket.registerEvents(client);
-welcome.registerEvents(client);
+// Erreurs qui ne se résoudront pas en réessayant (token invalide ou refusé).
+function isAuthError(err) {
+  return err?.code === 'TokenInvalid' || err?.status === 401 || /invalid token|401/i.test(err?.message ?? '');
+}
+
+// Essaie de se connecter à Discord toutes les 15 s, avec un client neuf à chaque tentative.
+async function connectWithRetry() {
+  for (let attempt = 1; ; attempt++) {
+    const client = buildClient();
+    bot = client;
+
+    const readyP = new Promise((resolve) => {
+      client.once(Events.ClientReady, (c) => {
+        console.log(`Edge connecté en tant que ${c.user.tag} (tentative n°${attempt}).`);
+        resolve('ready');
+      });
+    });
+    const loginP = client.login(token).then(
+      () => 'login-ok',
+      (error) => ({ error }),
+    );
+    const timeoutP = new Promise((resolve) => setTimeout(() => resolve('timeout'), LOGIN_TRY_MS));
+
+    console.log(`[discord] Tentative de connexion n°${attempt} (délai ${LOGIN_TRY_MS / 1000} s)…`);
+    const result = await Promise.race([readyP, loginP, timeoutP]);
+
+    if (result === 'ready' || result === 'login-ok') return client;
+
+    if (result?.error) {
+      console.error(`[discord] Connexion refusée (tentative n°${attempt}) :`, result.error.message);
+      if (isAuthError(result.error)) throw result.error;
+    } else {
+      console.warn(`[discord] Pas connecté après ${LOGIN_TRY_MS / 1000} s (tentative n°${attempt}). Nouvel essai…`);
+    }
+    await client.destroy().catch(() => {});
+  }
+}
 
 // Serveur HTTP (health check Render) + auto-ping anti-veille.
-startServer(() => ({ bot: client.isReady() ? 'connected' : 'connecting' }));
+startServer(() => ({ bot: bot?.isReady() ? 'connected' : 'connecting' }));
 startKeepAlive();
 
 async function main() {
@@ -118,8 +164,7 @@ async function main() {
   console.log('[startup] Chargement des réglages depuis Supabase…');
   await withTimeout(store.init(), 20_000, 'Supabase ne répond pas après 20 s (vérifie SUPABASE_URL).');
   console.log('[startup] Réglages chargés. Connexion à Discord…');
-  await client.login(token);
-  console.log('[startup] Connexion à Discord demandée.');
+  await connectWithRetry();
 }
 
 main().catch((err) => {
