@@ -31,7 +31,14 @@ const commands = [
     .toJSON(),
   new SlashCommandBuilder()
     .setName('leaderboard')
-    .setDescription('Affiche le classement vocal du serveur')
+    .setDescription('Classement du serveur en image (Edge Dollar par défaut, ou XP)')
+    .addStringOption((option) =>
+      option
+        .setName('type')
+        .setDescription('Quel classement afficher (par défaut : Edge Dollar)')
+        .setRequired(false)
+        .addChoices({ name: 'Edge Dollar ($)', value: 'argent' }, { name: 'XP (niveau et vocal)', value: 'xp' }),
+    )
     .setDMPermission(false)
     .toJSON(),
   new SlashCommandBuilder()
@@ -72,7 +79,7 @@ const commands = [
     .toJSON(),
   new SlashCommandBuilder()
     .setName('profile')
-    .setDescription('Affiche ton profil : solde, rang, série (réponse privée)')
+    .setDescription('Affiche ta carte : solde, rang, série (réponse privée, en image)')
     .setDMPermission(false)
     .toJSON(),
   buildServerCommand(),

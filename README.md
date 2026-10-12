@@ -133,7 +133,8 @@ Le temps passé en salon vocal et les messages écrits rapportent de l'XP. **AFK
 Commandes (disponibles pour tout le monde) :
 - **`/level`** : carte PNG avec ton niveau, ta barre de progression, ton rang et ton temps vocal.
   Tu peux aussi afficher celui d'un membre : `/level membre:@quelqu'un`.
-- **`/leaderboard`** : image PNG du top 10 du serveur (rang, pseudo, niveau, temps vocal), dans le thème des niveaux.
+- **`/leaderboard type:XP`** : image PNG du top 10 du classement XP (rang, pseudo, niveau, temps vocal), dans le thème des niveaux.
+  Sans option, `/leaderboard` affiche le classement en Edge Dollar (voir Économie).
 
 Thème de la carte : `/config` → **🏅 Niveaux**. Le thème par défaut est le **violet foncé**
 (les mêmes thèmes que la carte de bienvenue sont disponibles).
@@ -325,14 +326,15 @@ argent réel.
   série, et les boutons *Récompense quotidienne* et *Profil*.
 - **`/daily`** : récompense quotidienne, 100 `$` de base. Un passage toutes les 22 h ; la série continue si l'on revient
   dans les 48 h, avec +10 `$` par jour de série, plafonné à 100 `$` de bonus.
-- **`/profile`** : solde, rang sur le serveur, série et prochaine récompense. Réponse privée.
+- **`/profile`** : carte PNG privée (avatar, solde, rang sur le serveur, série et prochaine récompense). Aucun montant d'XP.
+- **`/leaderboard`** : classement du serveur en Edge Dollar, en PNG (top 10, du plus riche au moins riche).
 - **Réglages** : nom et symbole de la monnaie, solde de départ (min/max), montants quotidiens, sur le tableau de bord
   (page **Économie**). L'activation se fait dans `/config` → **Économie**.
 - **Données** : soldes et journal dans Supabase (section 12 de `supabase/schema.sql`, tables `edge_economy_accounts` et
   `edge_economy_ledger`). Chaque mouvement passe par une fonction SQL qui verrouille le compte : un double clic ne
   double jamais une récompense.
 - **Après une mise à jour** : exécuter la section 12 dans Supabase, relancer `deploy-commands.js` (nouvelles commandes
-  `/play`, `/daily`, `/profile`).
+  `/play`, `/daily`, `/profile`, `/leaderboard`).
 
 ## Tests
 
@@ -488,7 +490,8 @@ src/
   ui.js                 helpers d'embeds (violet), boutons, menus
   welcome-image.js      génération de la carte de bienvenue (PNG)
   level-card.js         carte de niveau /level (PNG)
-  leaderboard-card.js   carte du classement /leaderboard (PNG)
+  leaderboard-card.js   carte du classement XP (/leaderboard type:XP, PNG)
+  economy-card.js       cartes /profile et /leaderboard de l'économie (PNG)
   leveling.js           XP vocal et texte, niveaux, annonces, classement, sauvegarde Supabase
   modules/suggestions.js  commande /suggestion, votes de 3 jours, fermeture automatique
   modules/links.js      blocage des liens, rôles autorisés, avertissement

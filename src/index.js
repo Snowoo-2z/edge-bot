@@ -140,7 +140,11 @@ async function handleInteraction(interaction) {
     if (interaction.isChatInputCommand()) {
       if (interaction.commandName === 'config') return await handleConfigCommand(interaction);
       if (interaction.commandName === 'level') return await leveling.handleLevel(interaction);
-      if (interaction.commandName === 'leaderboard') return await leveling.handleLeaderboard(interaction);
+      if (interaction.commandName === 'leaderboard') {
+        // /leaderboard : Edge Dollar par défaut ; /leaderboard type:XP pour le classement XP (niveau et vocal).
+        if (interaction.options.getString('type') === 'xp') return await leveling.handleLeaderboard(interaction);
+        return await economy.handleLeaderboard(interaction);
+      }
       if (interaction.commandName === 'suggestion') return await suggestions.handleCommand(interaction);
       if (interaction.commandName === 'giveaway') return await giveaways.handleCommand(interaction);
       if (['play', 'daily', 'profile'].includes(interaction.commandName)) return await economy.handleCommand(interaction);

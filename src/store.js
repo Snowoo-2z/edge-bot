@@ -395,6 +395,19 @@ async function economyDaily(guildId, userId, { base, bonus, cap, cooldownHours, 
   return data;
 }
 
+// Meilleurs soldes du serveur (membres ayant reçu leur solde de départ), du plus riche au moins riche.
+async function economyTop(guildId, limit = 10) {
+  const { data, error } = await supabase
+    .from(ECONOMY_ACCOUNTS_TABLE)
+    .select('user_id, balance')
+    .eq('guild_id', guildId)
+    .eq('started', true)
+    .order('balance', { ascending: false })
+    .limit(limit);
+  if (error) throw new Error(`Lecture du classement impossible : ${error.message}`);
+  return data ?? [];
+}
+
 // Rang d'un solde parmi les membres ayant reçu leur solde de départ (1 = le plus riche).
 async function economyRank(guildId, balance) {
   const { count, error } = await supabase
@@ -412,6 +425,7 @@ module.exports = {
   economyStart,
   economyDaily,
   economyRank,
+  economyTop,
   insertAiDecision,
   listAiDecisions,
   purgeAiDecisions,

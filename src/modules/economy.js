@@ -6,10 +6,12 @@
 //  - Réglages (nom et symbole de la monnaie, montants) : tableau de bord. Activation : /config.
 // Les soldes sont dans Supabase (section 12 de schema.sql) : chaque mouvement est verrouillé côté base.
 const crypto = require('crypto');
-const { ButtonStyle, MessageFlags } = require('discord.js');
+const { AttachmentBuilder, ButtonStyle, MessageFlags } = require('discord.js');
 const store = require('../store');
 const { embed, button, row, toggleButton, moduleSelectRow, ephemeralPayload } = require('../ui');
 const { MODULE_LIST } = require('./registry');
+const levelsModule = require('./levels');
+const { renderProfileCard, renderEconomyLeaderboardCard, ECONOMY_DEFAULT_THEME } = require('../economy-card');
 
 const ID = 'economy';
 const DEFAULTS = {
@@ -25,6 +27,7 @@ const DEFAULTS = {
 const LIMITS = { amount: 100000, streakBonus: 10000, currencyName: 30, symbol: 4 };
 // /daily : un passage toutes les 22 h ; la série continue si le passage précédent date de moins de 48 h.
 const DAILY_TIMING = { cooldownHours: 22, windowHours: 48 };
+const LEADERBOARD_SIZE = 10;
 const NBSP = '\u00a0';
 
 let frameDelayMs = 700; // délai entre deux images de l'animation (réduit dans les tests)
@@ -92,6 +95,16 @@ function privateReply(description, components = []) {
   return { embeds: [embed(description)], components, flags: MessageFlags.Ephemeral };
 }
 
+// Charge utile d'une édition de message : Discord ne change pas l'indicateur « privé » après coup.
+function editPayload({ flags, ...rest }) {
+  return rest;
+}
+
+// Thème des cartes : celui du module Niveaux (violet par défaut).
+function themeOf(guildId) {
+  return store.getModuleConfig(guildId, levelsModule.ID, levelsModule.DEFAULTS).theme ?? ECONOMY_DEFAULT_THEME;
+}
+
 // Prochaine récompense : « disponible » ou un repère Discord relatif (« dans 3 heures »).
 function nextDailyText(account) {
   if (!account.last_daily) return 'Disponible maintenant';
@@ -152,7 +165,7 @@ async function startAction(interaction, cfg) {
   const guildId = interaction.guild.id;
   const existing = await store.getEconomyAccount(guildId, interaction.user.id);
   if (existing?.started) {
-    return interaction.update(privateReply('Tu as déjà reçu ton solde de départ.', [hubButtons()]));
+    return interaction.update(editPayload(privateReply('Tu as déjà reçu ton solde de départ.', [hubButtons()])));
   }
   await interaction.deferUpdate();
   const amount = drawStart(cfg);
@@ -162,12 +175,14 @@ async function startAction(interaction, cfg) {
   }
   const res = await store.economyStart(guildId, interaction.user.id, amount);
   if (res.status === 'already') {
-    return interaction.editReply(privateReply('Tu as déjà reçu ton solde de départ.', [hubButtons()]));
+    return interaction.editReply(editPayload(privateReply('Tu as déjà reçu ton solde de départ.', [hubButtons()])));
   }
   return interaction.editReply(
-    privateReply(
-      `🎉 Bienvenue ! Tu reçois **${formatMoney(amount, cfg)}**. Ton solde est de **${formatMoney(res.balance, cfg)}**.`,
-      [hubButtons()],
+    editPayload(
+      privateReply(
+        `🎉 Bienvenue ! Tu reçois **${formatMoney(amount, cfg)}**. Ton solde est de **${formatMoney(res.balance, cfg)}**.`,
+        [hubButtons()],
+      ),
     ),
   );
 }
@@ -194,18 +209,65 @@ async function dailyAction(interaction, cfg) {
   );
 }
 
+// Prochaine récompense, en millisecondes (0 ou moins = disponible).
+function msUntilDaily(account) {
+  if (!account.last_daily) return 0;
+  return Date.parse(account.last_daily) + DAILY_TIMING.cooldownHours * 3600 * 1000 - Date.now();
+}
+
+// /profile : carte PNG privée (solde, rang, série, prochaine récompense). Aucun montant d'XP.
 async function profileAction(interaction, cfg) {
   const guildId = interaction.guild.id;
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   const account = await store.getEconomyAccount(guildId, interaction.user.id);
-  if (!account?.started) return interaction.reply(privateReply('Tu n’as pas encore de compte. Lance **/play**.'));
+  if (!account?.started) {
+    return interaction.editReply({ embeds: [embed('Tu n’as pas encore de compte. Lance **/play**.')] });
+  }
   const rank = await store.economyRank(guildId, account.balance);
-  const e = embed().setTitle(`👤 Profil · ${interaction.user.displayName ?? interaction.user.username}`).addFields(
-    { name: `Solde (${cfg.currencyName})`, value: formatMoney(account.balance, cfg), inline: true },
-    { name: 'Rang', value: `#${rank}`, inline: true },
-    { name: 'Série', value: `${account.daily_streak ?? 0} jour(s)`, inline: true },
-    { name: 'Prochaine récompense', value: nextDailyText(account), inline: true },
-  );
-  return interaction.reply({ embeds: [e], flags: MessageFlags.Ephemeral });
+  const png = await renderProfileCard({
+    name: interaction.user.displayName ?? interaction.user.username,
+    avatarUrl: interaction.user.displayAvatarURL?.({ extension: 'png', size: 256 }) ?? null,
+    balance: account.balance,
+    currencyName: cfg.currencyName,
+    symbol: cfg.symbol,
+    rank,
+    streak: account.daily_streak ?? 0,
+    nextDailyMs: msUntilDaily(account),
+    theme: themeOf(guildId),
+  });
+  return interaction.editReply({ files: [new AttachmentBuilder(png, { name: 'profil.png' })] });
+}
+
+// /leaderboard : classement en Edge Dollar, en PNG (public). Le classement XP est sur /leaderboard type:XP.
+async function handleLeaderboard(interaction) {
+  const guild = interaction.guild;
+  if (!guild) return interaction.reply(ephemeralPayload('Cette commande ne fonctionne que sur un serveur.'));
+  const cfg = cfgOf(guild.id);
+  if (!cfg.enabled) {
+    return interaction.reply(
+      ephemeralPayload('L’économie n’est pas activée sur ce serveur. Pour le classement XP : `/leaderboard type:XP`.'),
+    );
+  }
+  await interaction.deferReply();
+  const top = await store.economyTop(guild.id, LEADERBOARD_SIZE);
+  const ids = top.map((r) => r.user_id);
+  const members = ids.length ? await guild.members.fetch({ user: ids }).catch(() => null) : null;
+  const rows = top.map((r, i) => ({
+    rank: i + 1,
+    name: members?.get(r.user_id)?.displayName ?? `Membre ${r.user_id.slice(-4)}`,
+    balance: r.balance,
+  }));
+  const png = await renderEconomyLeaderboardCard({
+    rows,
+    currencyName: cfg.currencyName,
+    symbol: cfg.symbol,
+    theme: themeOf(guild.id),
+    subtitle: `Top ${LEADERBOARD_SIZE} · ${cfg.currencyName}`,
+  });
+  return interaction.editReply({
+    files: [new AttachmentBuilder(png, { name: 'classement.png' })],
+    allowedMentions: { parse: [] },
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -269,6 +331,7 @@ module.exports = {
   handleModal,
   handleCommand,
   handleInteraction,
+  handleLeaderboard,
   drawStart,
   formatMoney,
   setFrameDelay,

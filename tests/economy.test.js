@@ -43,8 +43,8 @@ function fake({ customId, commandName } = {}) {
     log,
     customId,
     commandName,
-    guild: { id: G },
-    user: { id: U, username: 'lea', displayName: 'Léa' },
+    guild: { id: G, members: { fetch: async () => new Map() } },
+    user: { id: U, username: 'lea', displayName: 'Léa', displayAvatarURL: () => null },
     reply: async (p) => {
       log.replies.push(p);
       return p;
@@ -54,6 +54,9 @@ function fake({ customId, commandName } = {}) {
       return p;
     },
     deferUpdate: async () => {
+      log.deferred += 1;
+    },
+    deferReply: async () => {
       log.deferred += 1;
     },
     editReply: async (p) => {
@@ -175,25 +178,27 @@ test('/daily sans compte : renvoie vers /play', async () => {
   assert.match(textOf(it.log.replies[0]), /\/play/);
 });
 
-test('/profile : solde, rang et prochaine récompense ; réponse privée', async () => {
+const PNG_MAGIC = [0x89, 0x50, 0x4e, 0x47];
+
+test('/profile : carte PNG privée (solde, rang, série)', async () => {
   enable();
   account = { started: true, balance: 900, daily_streak: 1, last_daily: new Date().toISOString() };
   rankValue = 2;
   const it = fake({ commandName: 'profile' });
   await economy.handleCommand(it);
-  const p = it.log.replies[0];
-  assert.equal(p.flags & 64, 64, 'message éphémère (privé)');
-  const values = p.embeds[0].data.fields.map((f) => f.value);
-  assert.ok(values.includes('900\u00a0$'));
-  assert.ok(values.includes('#2'));
-  assert.match(values[3], /<t:\d+:R>/, 'prochaine récompense datée');
+  assert.equal(it.log.deferred, 1, 'réponse différée (rendu d’image)');
+  const file = it.log.edits[0].files[0];
+  assert.equal(file.name, 'profil.png');
+  assert.deepEqual([...file.attachment.subarray(0, 4)], PNG_MAGIC);
+  assert.equal(rankValue, 2);
 });
 
-test('/profile sans compte : invitation à lancer /play', async () => {
+test('/profile sans compte : message texte pour lancer /play', async () => {
   enable();
   const it = fake({ commandName: 'profile' });
   await economy.handleCommand(it);
-  assert.match(textOf(it.log.replies[0]), /\/play/);
+  assert.match(textOf(it.log.edits[0]), /\/play/);
+  assert.equal(it.log.edits[0].files, undefined);
 });
 
 test('module désactivé : commandes refusées avec un message clair', async () => {
@@ -218,4 +223,38 @@ test('réglages du tableau de bord : bornes et cohérence du solde de départ', 
   assert.throws(() => validate.sanitizeEconomy(null, { startMin: 600 }, { startMax: 500 }), /minimum ne peut pas dépasser/);
   assert.throws(() => validate.sanitizeEconomy(null, { symbol: '   ' }, {}), /Symbole/);
   assert.throws(() => validate.sanitizeEconomy(null, { dailyAmount: -1 }, {}), /Récompense quotidienne/);
+});
+
+test('/leaderboard : classement Edge Dollar en PNG, du plus riche au moins riche', async () => {
+  enable();
+  const seen = {};
+  store.economyTop = async (g, limit) => {
+    seen.limit = limit;
+    return [
+      { user_id: '851000000000000009', balance: 12450 },
+      { user_id: '851000000000000001', balance: 9800 },
+    ];
+  };
+  const it = fake({ commandName: 'leaderboard' });
+  it.guild.members.fetch = async () => new Map([['851000000000000009', { displayName: 'Max' }]]);
+  await economy.handleLeaderboard(it);
+  assert.equal(seen.limit, 10);
+  assert.equal(it.log.deferred, 1);
+  const file = it.log.edits[0].files[0];
+  assert.equal(file.name, 'classement.png');
+  assert.deepEqual([...file.attachment.subarray(0, 4)], PNG_MAGIC);
+});
+
+test('/leaderboard : classement vide accepté (personne n’a encore de solde)', async () => {
+  enable();
+  store.economyTop = async () => [];
+  const it = fake({ commandName: 'leaderboard' });
+  await economy.handleLeaderboard(it);
+  assert.equal(it.log.edits[0].files[0].name, 'classement.png');
+});
+
+test('/leaderboard : module désactivé → renvoie vers /leaderboard type:XP', async () => {
+  const it = fake({ commandName: 'leaderboard' });
+  await economy.handleLeaderboard(it);
+  assert.match(textOf(it.log.replies[0]), /type:XP/);
 });
