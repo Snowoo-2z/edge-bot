@@ -356,7 +356,62 @@ async function purgeAiDecisions(cutoff) {
   if (error) throw new Error(`Purge Supabase échouée (${AI_DECISIONS_TABLE}) : ${error.message}`);
 }
 
+// ---------------------------------------------------------------------------
+// Économie (Edge Dollar, $) : tables edge_economy_accounts et edge_economy_ledger (section 12 de schema.sql).
+// Les mouvements passent par des fonctions SQL verrouillées (edge_economy_start, edge_economy_daily).
+// ---------------------------------------------------------------------------
+const ECONOMY_ACCOUNTS_TABLE = 'edge_economy_accounts';
+
+async function getEconomyAccount(guildId, userId) {
+  const { data, error } = await supabase
+    .from(ECONOMY_ACCOUNTS_TABLE)
+    .select('balance, started, last_daily, daily_streak')
+    .eq('guild_id', guildId)
+    .eq('user_id', userId)
+    .maybeSingle();
+  if (error) throw new Error(`Lecture Supabase échouée (${ECONOMY_ACCOUNTS_TABLE}) : ${error.message}`);
+  return data;
+}
+
+// Solde de départ (une seule fois). Renvoie { status: 'ok' | 'already', balance, amount? }.
+async function economyStart(guildId, userId, amount) {
+  const { data, error } = await supabase.rpc('edge_economy_start', { p_guild: guildId, p_user: userId, p_amount: amount });
+  if (error) throw new Error(`Solde de départ impossible : ${error.message}`);
+  return data;
+}
+
+// Récompense quotidienne. Renvoie { status: 'ok', amount, streak, balance } | { status: 'cooldown', next_at } | { status: 'not_started' }.
+async function economyDaily(guildId, userId, { base, bonus, cap, cooldownHours, windowHours }) {
+  const { data, error } = await supabase.rpc('edge_economy_daily', {
+    p_guild: guildId,
+    p_user: userId,
+    p_base: base,
+    p_bonus: bonus,
+    p_cap: cap,
+    p_cooldown: `${cooldownHours} hours`,
+    p_window: `${windowHours} hours`,
+  });
+  if (error) throw new Error(`Récompense quotidienne impossible : ${error.message}`);
+  return data;
+}
+
+// Rang d'un solde parmi les membres ayant reçu leur solde de départ (1 = le plus riche).
+async function economyRank(guildId, balance) {
+  const { count, error } = await supabase
+    .from(ECONOMY_ACCOUNTS_TABLE)
+    .select('user_id', { count: 'exact', head: true })
+    .eq('guild_id', guildId)
+    .eq('started', true)
+    .gt('balance', balance);
+  if (error) throw new Error(`Lecture du classement impossible : ${error.message}`);
+  return (count ?? 0) + 1;
+}
+
 module.exports = {
+  getEconomyAccount,
+  economyStart,
+  economyDaily,
+  economyRank,
   insertAiDecision,
   listAiDecisions,
   purgeAiDecisions,

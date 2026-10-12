@@ -60,6 +60,21 @@ const commands = [
     )
     .setDMPermission(false)
     .toJSON(),
+  new SlashCommandBuilder()
+    .setName('play')
+    .setDescription('Ouvre ton compte Edge Dollar ($) : solde de départ, récompense et profil')
+    .setDMPermission(false)
+    .toJSON(),
+  new SlashCommandBuilder()
+    .setName('daily')
+    .setDescription('Récupère ta récompense quotidienne en Edge Dollar ($)')
+    .setDMPermission(false)
+    .toJSON(),
+  new SlashCommandBuilder()
+    .setName('profile')
+    .setDescription('Affiche ton profil : solde, rang, série (réponse privée)')
+    .setDMPermission(false)
+    .toJSON(),
   buildServerCommand(),
   ...buildModerationCommands(),
 ];
@@ -70,7 +85,7 @@ const commands = [
     ? Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID)
     : Routes.applicationCommands(CLIENT_ID);
   await rest.put(route, { body: commands });
-  console.log(`${commands.length} commandes enregistrées ${GUILD_ID ? `sur le serveur ${GUILD_ID}` : 'globalement'} (config, level, leaderboard, suggestion, giveaway, server, ban, unban, kick, timeout, untimeout, warn, warnings, unwarn, purge, slowmode).`);
+  console.log(`${commands.length} commandes enregistrées ${GUILD_ID ? `sur le serveur ${GUILD_ID}` : 'globalement'} (config, level, leaderboard, suggestion, giveaway, play, daily, profile, server, ban, unban, kick, timeout, untimeout, warn, warnings, unwarn, purge, slowmode).`);
 })().catch((err) => {
   console.error(err);
   process.exit(1);

@@ -315,6 +315,25 @@ est en fin de vie) ou Ministral 8B. Tout se règle sur le tableau de bord, page 
   le journal des décisions la section 11 (table `edge_ai_decisions`). Les deux sections sont à exécuter une fois.
 - `/config` → **IA (Mistral)** : activation rapide uniquement.
 
+## Économie (Edge Dollar, $)
+
+Monnaie virtuelle du serveur : l'**Edge Dollar**, symbole `$` (affiché après le montant : `250 $`). Aucune conversion en
+argent réel.
+
+- **`/play`** : point d'entrée. Sans compte, une présentation et une courte animation donnent le **solde de départ**,
+  tiré au hasard entre 100 et 500 `$` (une seule fois par membre). Avec un compte, un tableau de bord : solde, rang,
+  série, et les boutons *Récompense quotidienne* et *Profil*.
+- **`/daily`** : récompense quotidienne, 100 `$` de base. Un passage toutes les 22 h ; la série continue si l'on revient
+  dans les 48 h, avec +10 `$` par jour de série, plafonné à 100 `$` de bonus.
+- **`/profile`** : solde, rang sur le serveur, série et prochaine récompense. Réponse privée.
+- **Réglages** : nom et symbole de la monnaie, solde de départ (min/max), montants quotidiens, sur le tableau de bord
+  (page **Économie**). L'activation se fait dans `/config` → **Économie**.
+- **Données** : soldes et journal dans Supabase (section 12 de `supabase/schema.sql`, tables `edge_economy_accounts` et
+  `edge_economy_ledger`). Chaque mouvement passe par une fonction SQL qui verrouille le compte : un double clic ne
+  double jamais une récompense.
+- **Après une mise à jour** : exécuter la section 12 dans Supabase, relancer `deploy-commands.js` (nouvelles commandes
+  `/play`, `/daily`, `/profile`).
+
 ## Tests
 
 `npm test` lance les tests automatisés (`tests/`, `node:test`) : module IA, validation, routes du tableau de bord,

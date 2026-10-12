@@ -135,6 +135,39 @@ function sanitizeSuggestions(guild, input) {
   );
 }
 
+// Économie : nom et symbole de la monnaie, solde de départ (min/max), récompense quotidienne.
+function sanitizeEconomy(guild, input, current = {}) {
+  const patch = pick(
+    input,
+    ['enabled', 'currencyName', 'symbol', 'startMin', 'startMax', 'dailyAmount', 'dailyStreakBonus', 'dailyStreakMax'],
+    (key, value) => {
+      switch (key) {
+        case 'enabled':
+          return bool(value, 'Module Économie');
+        case 'currencyName':
+          return text(value, 'Nom de la monnaie', 30, { required: true });
+        case 'symbol':
+          return text(value, 'Symbole', 4, { required: true });
+        case 'startMin':
+          return integer(value, 'Solde de départ minimum', 0, 100000);
+        case 'startMax':
+          return integer(value, 'Solde de départ maximum', 0, 100000);
+        case 'dailyAmount':
+          return integer(value, 'Récompense quotidienne', 0, 100000);
+        case 'dailyStreakBonus':
+          return integer(value, 'Bonus par jour de série', 0, 10000);
+        case 'dailyStreakMax':
+          return integer(value, 'Plafond du bonus de série', 0, 100000);
+        default:
+          return undefined;
+      }
+    },
+  );
+  const merged = { ...current, ...patch };
+  if (merged.startMin > merged.startMax) fail('Solde de départ : le minimum ne peut pas dépasser le maximum.');
+  return patch;
+}
+
 function sanitizeGiveaways(guild, input) {
   return pick(input, ['enabled', 'channelId', 'creatorRoleIds'], (key, value) => {
     switch (key) {
@@ -487,6 +520,7 @@ function sanitizeAi(guild, input, current = {}) {
 
 module.exports = {
   sanitizeAi,
+  sanitizeEconomy,
   aiNotes,
   ValidationError,
   sanitizeBackups,

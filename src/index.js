@@ -4,6 +4,7 @@ const ticket = require('./modules/ticket');
 const welcome = require('./modules/welcome');
 const leveling = require('./leveling');
 const suggestions = require('./modules/suggestions');
+const economy = require('./modules/economy');
 const links = require('./modules/links');
 const ai = require('./modules/ai');
 const giveaways = require('./modules/giveaways');
@@ -142,6 +143,7 @@ async function handleInteraction(interaction) {
       if (interaction.commandName === 'leaderboard') return await leveling.handleLeaderboard(interaction);
       if (interaction.commandName === 'suggestion') return await suggestions.handleCommand(interaction);
       if (interaction.commandName === 'giveaway') return await giveaways.handleCommand(interaction);
+      if (['play', 'daily', 'profile'].includes(interaction.commandName)) return await economy.handleCommand(interaction);
       if (interaction.commandName === 'server') return await handleServerCommand(interaction);
       if (MODERATION_COMMANDS.has(interaction.commandName)) return await moderation.handleCommand(interaction);
       return;
@@ -152,6 +154,7 @@ async function handleInteraction(interaction) {
     if (id.startsWith('tkt:')) return await ticket.handlePublicInteraction(interaction);
     if (id.startsWith('suggest:')) return await suggestions.handleInteraction(interaction);
     if (id.startsWith('giveaway:')) return await giveaways.handleInteraction(interaction);
+    if (id.startsWith('eco:')) return await economy.handleInteraction(interaction);
   } catch (err) {
     console.error('Erreur interaction :', err);
     const payload = ephemeralPayload('❌ Une erreur est survenue.');

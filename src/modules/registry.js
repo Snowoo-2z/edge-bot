@@ -38,6 +38,12 @@ const MODULE_LIST = [
     description: 'Commande /giveaway : rôles créateurs, tirage au sort automatique',
   },
   {
+    id: 'economy',
+    label: 'Économie',
+    emoji: '💰',
+    description: 'Edge Dollar ($) : /play, /daily, /profile ; solde de départ et récompense quotidienne',
+  },
+  {
     id: 'links',
     label: 'Liens',
     emoji: '🔗',

@@ -6,6 +6,7 @@ const welcome = require('../modules/welcome');
 const levels = require('../modules/levels');
 const suggestions = require('../modules/suggestions');
 const giveaways = require('../modules/giveaways');
+const economy = require('../modules/economy');
 const links = require('../modules/links');
 const logsModule = require('../modules/logs');
 const moderation = require('../modules/moderation');
@@ -34,6 +35,7 @@ const MODULES = {
   levels: { module: levels, sanitize: validate.sanitizeLevels },
   suggestions: { module: suggestions, sanitize: validate.sanitizeSuggestions },
   giveaways: { module: giveaways, sanitize: validate.sanitizeGiveaways },
+  economy: { module: economy, sanitize: validate.sanitizeEconomy },
   links: { module: links, sanitize: validate.sanitizeLinks },
   ticket: { module: ticket, sanitize: validate.sanitizeTicket },
   logs: { module: logsModule, sanitize: validate.sanitizeLogs },

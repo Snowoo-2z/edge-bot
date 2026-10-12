@@ -8,6 +8,7 @@ const levels = require('./modules/levels');
 const suggestions = require('./modules/suggestions');
 const links = require('./modules/links');
 const giveaways = require('./modules/giveaways');
+const economy = require('./modules/economy');
 const logs = require('./modules/logs');
 const moderation = require('./modules/moderation');
 const reactionRoles = require('./modules/reaction-roles');
@@ -24,6 +25,7 @@ const MODULES = {
   [suggestions.ID]: suggestions,
   [links.ID]: links,
   [giveaways.ID]: giveaways,
+  [economy.ID]: economy,
   [logs.ID]: logs,
   [moderation.ID]: moderation,
   [ai.ID]: ai,

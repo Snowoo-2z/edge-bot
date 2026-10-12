@@ -368,6 +368,7 @@
     { id: 'niveaux', label: 'Niveaux', icon: '🏅', module: 'levels', desc: 'Carte /level, classement et annonces.' },
     { id: 'suggestions', label: 'Suggestions', icon: '💡', module: 'suggestions', desc: 'Commande /suggestion et votes de 3 jours.' },
     { id: 'giveaways', label: 'Giveaways', icon: '🎁', module: 'giveaways', desc: 'Commande /giveaway et tirages au sort.' },
+    { id: 'economie', label: 'Économie', icon: '💰', module: 'economy', desc: 'Edge Dollar ($) : solde de départ, récompense quotidienne.' },
     { id: 'liens', label: 'Liens', icon: '🔗', module: 'links', desc: 'Blocage des liens et salons libres.' },
     { id: 'tickets', label: 'Tickets', icon: '🎫', module: 'ticket', desc: 'Panneau, types, images et textes.' },
     { id: 'logs', label: 'Logs', icon: '📜', module: 'logs', desc: 'Journal détaillé des événements du serveur.' },
@@ -394,6 +395,7 @@
       niveaux: viewLevels,
       suggestions: viewSuggestions,
       giveaways: viewGiveaways,
+      economie: viewEconomy,
       liens: viewLinks,
       tickets: viewTickets,
       embed: viewEmbed,
@@ -2356,6 +2358,79 @@
     } catch (err) {
       box.replaceChildren(h('p', { class: 'error', text: err.message }));
     }
+  }
+
+  function viewEconomy() {
+    const cfg = clone(S.data.modules.economy);
+    return h(
+      'section',
+      null,
+      pageHead('💰 Économie', 'La monnaie du serveur (Edge Dollar, $) : commandes /play, /daily et /profile.'),
+      h(
+        'div',
+        { class: 'card' },
+        fieldSwitch(
+          'Économie activée',
+          'Les commandes /play, /daily et /profile ne répondent que si le module est activé.',
+          cfg.enabled,
+          (v) => (cfg.enabled = v),
+        ),
+        fieldText('Nom de la monnaie', cfg.currencyName, {
+          max: 30,
+          required: true,
+          onInput: (v) => (cfg.currencyName = v),
+        }),
+        fieldText('Symbole', cfg.symbol, {
+          max: 4,
+          required: true,
+          hint: 'Affiché après le montant, par exemple « 250 $ ».',
+          onInput: (v) => (cfg.symbol = v),
+        }),
+      ),
+      h(
+        'div',
+        { class: 'card' },
+        h('h2', { text: 'Solde de départ' }),
+        h('p', {
+          class: 'hint',
+          text: 'Reçu une seule fois par membre, avec /play. Le montant est tiré au hasard entre les deux bornes.',
+        }),
+        fieldNumber('Minimum', cfg.startMin, { min: 0, max: 100000, onInput: (v) => (cfg.startMin = v) }),
+        fieldNumber('Maximum', cfg.startMax, { min: 0, max: 100000, onInput: (v) => (cfg.startMax = v) }),
+      ),
+      h(
+        'div',
+        { class: 'card' },
+        h('h2', { text: 'Récompense quotidienne' }),
+        h('p', {
+          class: 'hint',
+          text: '/daily : une récompense toutes les 22 h. La série continue si l’on revient dans les 48 h, avec un bonus par jour.',
+        }),
+        fieldNumber('Montant de base', cfg.dailyAmount, { min: 0, max: 100000, onInput: (v) => (cfg.dailyAmount = v) }),
+        fieldNumber('Bonus par jour de série', cfg.dailyStreakBonus, {
+          min: 0,
+          max: 10000,
+          onInput: (v) => (cfg.dailyStreakBonus = v),
+        }),
+        fieldNumber('Plafond du bonus', cfg.dailyStreakMax, {
+          min: 0,
+          max: 100000,
+          onInput: (v) => (cfg.dailyStreakMax = v),
+        }),
+      ),
+      saveButton(() =>
+        saveModule('economy', {
+          enabled: cfg.enabled,
+          currencyName: cfg.currencyName,
+          symbol: cfg.symbol,
+          startMin: cfg.startMin,
+          startMax: cfg.startMax,
+          dailyAmount: cfg.dailyAmount,
+          dailyStreakBonus: cfg.dailyStreakBonus,
+          dailyStreakMax: cfg.dailyStreakMax,
+        }),
+      ),
+    );
   }
 
   function viewLinks() {
