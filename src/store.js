@@ -420,7 +420,64 @@ async function economyRank(guildId, balance) {
   return (count ?? 0) + 1;
 }
 
+// ---------------------------------------------------------------------------
+// Banque du serveur et emprunts (section 13 de schema.sql). Mouvements verrouillés côté base.
+// ---------------------------------------------------------------------------
+
+// Crée la banque avec son montant initial (sans effet si elle existe déjà). Renvoie { reserve }.
+async function economyBankFund(guildId, initial) {
+  const { data, error } = await supabase.rpc('edge_economy_bank_fund', { p_guild: guildId, p_initial: initial });
+  if (error) throw new Error(`Banque du serveur impossible : ${error.message}`);
+  return data;
+}
+
+// Réserve actuelle de la banque (null si pas encore créée).
+async function economyBankReserve(guildId) {
+  const { data, error } = await supabase.from('edge_economy_bank').select('reserve').eq('guild_id', guildId).maybeSingle();
+  if (error) throw new Error(`Lecture de la banque impossible : ${error.message}`);
+  return data?.reserve ?? null;
+}
+
+// Emprunt ouvert du membre (ou null).
+async function economyOpenLoan(guildId, userId) {
+  const { data, error } = await supabase
+    .from('edge_economy_loans')
+    .select('principal, total_due, repaid, due_at')
+    .eq('guild_id', guildId)
+    .eq('user_id', userId)
+    .eq('closed', false)
+    .maybeSingle();
+  if (error) throw new Error(`Lecture de l'emprunt impossible : ${error.message}`);
+  return data;
+}
+
+// Emprunt. Renvoie { status: 'ok', balance, total_due, due_at } ou un statut de refus (not_started, open_loan, limit, bank_short, no_bank).
+async function economyBorrow(guildId, userId, { amount, total, max, days }) {
+  const { data, error } = await supabase.rpc('edge_economy_borrow', {
+    p_guild: guildId,
+    p_user: userId,
+    p_amount: amount,
+    p_total: total,
+    p_max: max,
+    p_days: days,
+  });
+  if (error) throw new Error(`Emprunt impossible : ${error.message}`);
+  return data;
+}
+
+// Remboursement. Renvoie { status: 'ok', paid, remaining, balance } ou un statut de refus (no_loan, invalid, funds).
+async function economyRepay(guildId, userId, amount) {
+  const { data, error } = await supabase.rpc('edge_economy_repay', { p_guild: guildId, p_user: userId, p_amount: amount });
+  if (error) throw new Error(`Remboursement impossible : ${error.message}`);
+  return data;
+}
+
 module.exports = {
+  economyBankFund,
+  economyBankReserve,
+  economyOpenLoan,
+  economyBorrow,
+  economyRepay,
   getEconomyAccount,
   economyStart,
   economyDaily,

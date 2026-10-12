@@ -139,7 +139,20 @@ function sanitizeSuggestions(guild, input) {
 function sanitizeEconomy(guild, input, current = {}) {
   const patch = pick(
     input,
-    ['enabled', 'currencyName', 'symbol', 'startMin', 'startMax', 'dailyAmount', 'dailyStreakBonus', 'dailyStreakMax'],
+    [
+      'enabled',
+      'currencyName',
+      'symbol',
+      'startMin',
+      'startMax',
+      'dailyAmount',
+      'dailyStreakBonus',
+      'dailyStreakMax',
+      'bankInitial',
+      'loanMax',
+      'loanRatePercent',
+      'loanDays',
+    ],
     (key, value) => {
       switch (key) {
         case 'enabled':
@@ -158,6 +171,14 @@ function sanitizeEconomy(guild, input, current = {}) {
           return integer(value, 'Bonus par jour de série', 0, 10000);
         case 'dailyStreakMax':
           return integer(value, 'Plafond du bonus de série', 0, 100000);
+        case 'bankInitial':
+          return integer(value, 'Montant initial de la banque', 0, 100000000);
+        case 'loanMax':
+          return integer(value, 'Emprunt maximum', 1, 1000000);
+        case 'loanRatePercent':
+          return integer(value, 'Intérêts des emprunts (%)', 0, 100);
+        case 'loanDays':
+          return integer(value, 'Délai de remboursement (jours)', 1, 30);
         default:
           return undefined;
       }

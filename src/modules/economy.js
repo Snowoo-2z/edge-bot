@@ -1,14 +1,19 @@
 // Module « Économie » : monnaie du serveur, l'Edge Dollar (symbole $). Monnaie virtuelle uniquement.
-//  - /play   : point d'entrée. Sans compte : présentation puis animation qui donne le solde de départ
-//              (tiré au hasard entre startMin et startMax, une seule fois). Avec compte : tableau de bord personnel.
-//  - /daily  : récompense quotidienne (montant de base + bonus de série, plafonné).
-//  - /profile: solde, rang, série. Réponse privée.
-//  - Réglages (nom et symbole de la monnaie, montants) : tableau de bord. Activation : /config.
-// Les soldes sont dans Supabase (section 12 de schema.sql) : chaque mouvement est verrouillé côté base.
+//  - /play   : panneau PUBLIC (visible de tous) : présentation et banque du serveur. Le bouton « Ouvrir mon compte »
+//              ouvre le tableau de bord personnel (privé) : solde, rang, récompense quotidienne, emprunt.
+//              Le premier /play ouvre la banque du serveur avec son montant initial (300 000 $ par défaut).
+//  - Compte sans solde : animation qui donne le solde de départ (tiré entre startMin et startMax, une seule fois).
+//  - Emprunt : on emprunte à la banque (un seul emprunt ouvert à la fois), on rembourse à l'échéance ou avant.
+//  - /daily  : récompense quotidienne (montant de base + bonus de série, plafonné). Le bouton devient rouge une fois
+//              récupérée.
+//  - /profile: carte PNG privée (solde, rang, série).
+//  - Réglages (monnaie, montants, banque, emprunts) : tableau de bord. Activation : /config.
+// Les soldes, la banque et les emprunts sont dans Supabase (sections 12 et 13 de schema.sql) : chaque mouvement est
+// verrouillé côté base.
 const crypto = require('crypto');
 const { AttachmentBuilder, ButtonStyle, MessageFlags } = require('discord.js');
 const store = require('../store');
-const { embed, button, row, toggleButton, moduleSelectRow, ephemeralPayload } = require('../ui');
+const { embed, button, row, toggleButton, moduleSelectRow, ephemeralPayload, textModal } = require('../ui');
 const { MODULE_LIST } = require('./registry');
 const levelsModule = require('./levels');
 const { renderProfileCard, renderEconomyLeaderboardCard, ECONOMY_DEFAULT_THEME } = require('../economy-card');
@@ -23,8 +28,12 @@ const DEFAULTS = {
   dailyAmount: 100, // /daily : montant de base
   dailyStreakBonus: 10, // ajouté par jour de série supplémentaire
   dailyStreakMax: 100, // plafond du bonus de série
+  bankInitial: 300000, // montant initial de la banque du serveur (ouverte au premier /play)
+  loanMax: 10000, // emprunt maximum par membre et par emprunt
+  loanRatePercent: 10, // intérêts forfaitaires, en pourcentage du montant emprunté
+  loanDays: 7, // délai de remboursement
 };
-const LIMITS = { amount: 100000, streakBonus: 10000, currencyName: 30, symbol: 4 };
+const LIMITS = { amount: 100000000, streakBonus: 10000, currencyName: 30, symbol: 4 };
 // /daily : un passage toutes les 22 h ; la série continue si le passage précédent date de moins de 48 h.
 const DAILY_TIMING = { cooldownHours: 22, windowHours: 48 };
 const LEADERBOARD_SIZE = 10;
@@ -52,6 +61,19 @@ function formatMoney(n, cfg = DEFAULTS) {
   return `${formatNumber(n)}${NBSP}${cfg.symbol}`;
 }
 
+// Saisie d'un montant : chiffres seuls (espaces et symbole tolérés). null si invalide.
+function parseAmount(raw) {
+  const digits = String(raw ?? '').replace(/[\s\u00a0\u202f$]/g, '');
+  if (!/^\d{1,12}$/.test(digits)) return null;
+  const n = Number(digits);
+  return n > 0 ? n : null;
+}
+
+// Montant à rembourser : principal + intérêts forfaitaires, arrondis à l'unité supérieure.
+function loanTotal(amount, ratePercent) {
+  return amount + Math.ceil((amount * ratePercent) / 100);
+}
+
 // Tirage du solde de départ, dans l'intervalle configuré (bornes incluses), avec un générateur cryptographique.
 function drawStart(cfg) {
   const min = Math.max(0, Math.trunc(cfg.startMin));
@@ -62,11 +84,6 @@ function drawStart(cfg) {
 // ---------------------------------------------------------------------------
 // Affichage
 // ---------------------------------------------------------------------------
-
-const hubButtons = () => row(
-  button('eco:daily', 'Récompense quotidienne', ButtonStyle.Primary, '🎁'),
-  button('eco:profile', 'Profil', ButtonStyle.Secondary, '👤'),
-);
 
 function introPayload(cfg) {
   return {
@@ -82,22 +99,62 @@ function introPayload(cfg) {
   };
 }
 
-function hubPayload(cfg, account, rank) {
-  const e = embed(`💰 **${cfg.currencyName}** · ton tableau de bord`).addFields(
+// Prochaine récompense, en millisecondes (0 ou moins = disponible).
+function msUntilDaily(account) {
+  if (!account.last_daily) return 0;
+  return Date.parse(account.last_daily) + DAILY_TIMING.cooldownHours * 3600 * 1000 - Date.now();
+}
+
+// Bouton de la récompense : bleu quand elle est disponible, rouge une fois récupérée.
+function dailyButton(account) {
+  if (msUntilDaily(account) <= 0) {
+    return button('eco:daily', 'Récompense quotidienne', ButtonStyle.Primary, '🎁');
+  }
+  return button('eco:daily', 'Récompense quotidienne déjà récupérée', ButtonStyle.Danger, '🎁');
+}
+
+// Données du tableau de bord (un seul aller-retour par action).
+async function loadHub(guildId, userId) {
+  const account = await store.getEconomyAccount(guildId, userId);
+  if (!account?.started) return null;
+  const [rank, loan, reserve] = await Promise.all([
+    store.economyRank(guildId, account.balance),
+    store.economyOpenLoan(guildId, userId),
+    store.economyBankReserve(guildId),
+  ]);
+  return { account, rank, loan, reserve };
+}
+
+// Vue du tableau de bord (sans indicateur « privé » : il est fixé à la réponse d'origine).
+function hubView(cfg, hub, notice = '') {
+  const { account, rank, loan, reserve } = hub;
+  const title = `💰 **${cfg.currencyName}** · ton tableau de bord`;
+  const e = embed(notice ? `${notice}\n\n${title}` : title).addFields(
     { name: 'Solde', value: formatMoney(account.balance, cfg), inline: true },
     { name: 'Rang', value: `#${rank} sur le serveur`, inline: true },
     { name: 'Série', value: `${account.daily_streak ?? 0} jour(s)`, inline: true },
+    { name: '🏦 Banque du serveur', value: formatMoney(reserve ?? 0, cfg), inline: true },
   );
-  return { embeds: [e], components: [hubButtons()], flags: MessageFlags.Ephemeral };
+  if (loan) {
+    const remaining = loan.total_due - loan.repaid;
+    const unix = Math.floor(Date.parse(loan.due_at) / 1000);
+    const overdue = Date.parse(loan.due_at) < Date.now();
+    e.addFields({
+      name: 'Emprunt en cours',
+      value: `Reste à rembourser : **${formatMoney(remaining, cfg)}**\n${overdue ? '⚠️ En retard' : `Échéance : <t:${unix}:f>`}`,
+    });
+  }
+  const loanButton = loan
+    ? button('eco:repay', 'Rembourser', ButtonStyle.Success, '💳')
+    : button('eco:borrow', 'Emprunter', ButtonStyle.Secondary, '🏦');
+  return {
+    embeds: [e],
+    components: [row(dailyButton(account), button('eco:profile', 'Profil', ButtonStyle.Secondary, '👤')), row(loanButton)],
+  };
 }
 
 function privateReply(description, components = []) {
   return { embeds: [embed(description)], components, flags: MessageFlags.Ephemeral };
-}
-
-// Charge utile d'une édition de message : Discord ne change pas l'indicateur « privé » après coup.
-function editPayload({ flags, ...rest }) {
-  return rest;
 }
 
 // Thème des cartes : celui du module Niveaux (violet par défaut).
@@ -105,7 +162,7 @@ function themeOf(guildId) {
   return store.getModuleConfig(guildId, levelsModule.ID, levelsModule.DEFAULTS).theme ?? ECONOMY_DEFAULT_THEME;
 }
 
-// Prochaine récompense : « disponible » ou un repère Discord relatif (« dans 3 heures »).
+// Prochaine récompense pour la carte /profile (texte non utilisé ici).
 function nextDailyText(account) {
   if (!account.last_daily) return 'Disponible maintenant';
   const next = Date.parse(account.last_daily) + DAILY_TIMING.cooldownHours * 3600 * 1000;
@@ -114,7 +171,7 @@ function nextDailyText(account) {
 }
 
 // ---------------------------------------------------------------------------
-// Commandes et composants
+// Commandes
 // ---------------------------------------------------------------------------
 
 async function handleCommand(interaction) {
@@ -134,30 +191,58 @@ async function handleCommand(interaction) {
   }
 }
 
-// Boutons « eco:<action> » (messages privés de /play).
+// /play : panneau public. Ouvre aussi la banque du serveur avec son montant initial (sans effet si elle existe).
+async function playAction(interaction, cfg) {
+  const guildId = interaction.guild.id;
+  await store.economyBankFund(guildId, cfg.bankInitial);
+  const reserve = await store.economyBankReserve(guildId);
+  const panel = embed(
+    `💰 **${cfg.currencyName}** (${cfg.symbol}) · la monnaie du serveur.\n\n` +
+      'Ouvre ton compte pour voir ton solde, récupérer ta récompense quotidienne et emprunter à la banque du serveur.',
+  ).addFields({ name: '🏦 Banque du serveur', value: formatMoney(reserve ?? 0, cfg), inline: true });
+  // Pas d'indicateur « privé » : le panneau est visible de tous.
+  return interaction.reply({
+    embeds: [panel],
+    components: [row(button('eco:open', 'Ouvrir mon compte', ButtonStyle.Primary, '💰'))],
+    allowedMentions: { parse: [] },
+  });
+}
+
+// Boutons « eco:<action> » et formulaires « eco:<action>:modal ».
 async function handleInteraction(interaction) {
   const guild = interaction.guild;
   if (!guild) return;
   const cfg = cfgOf(guild.id);
   if (!cfg.enabled) return interaction.reply(ephemeralPayload('L’économie n’est pas activée sur ce serveur.'));
   const [, action] = interaction.customId.split(':');
+  if (interaction.isModalSubmit?.()) {
+    if (action === 'borrow') return borrowSubmitAction(interaction, cfg);
+    if (action === 'repay') return repaySubmitAction(interaction, cfg);
+    return;
+  }
   switch (action) {
+    case 'open':
+      return openAction(interaction, cfg);
     case 'start':
       return startAction(interaction, cfg);
     case 'daily':
       return dailyAction(interaction, cfg);
     case 'profile':
       return profileAction(interaction, cfg);
+    case 'borrow':
+      return borrowAction(interaction, cfg);
+    case 'repay':
+      return repayAction(interaction, cfg);
     default:
       return;
   }
 }
 
-async function playAction(interaction, cfg) {
-  const account = await store.getEconomyAccount(interaction.guild.id, interaction.user.id);
-  if (!account?.started) return interaction.reply(introPayload(cfg));
-  const rank = await store.economyRank(interaction.guild.id, account.balance);
-  return interaction.reply(hubPayload(cfg, account, rank));
+// « Ouvrir mon compte » : tableau de bord privé, ou présentation si le compte n'existe pas encore.
+async function openAction(interaction, cfg) {
+  const hub = await loadHub(interaction.guild.id, interaction.user.id);
+  if (!hub) return interaction.reply(introPayload(cfg));
+  return interaction.reply({ ...hubView(cfg, hub), flags: MessageFlags.Ephemeral });
 }
 
 // Animation puis solde de départ. Le bouton disparaît pendant le tirage.
@@ -165,7 +250,8 @@ async function startAction(interaction, cfg) {
   const guildId = interaction.guild.id;
   const existing = await store.getEconomyAccount(guildId, interaction.user.id);
   if (existing?.started) {
-    return interaction.update(editPayload(privateReply('Tu as déjà reçu ton solde de départ.', [hubButtons()])));
+    const hub = await loadHub(guildId, interaction.user.id);
+    return interaction.update(hubView(cfg, hub, 'Tu as déjà reçu ton solde de départ.'));
   }
   await interaction.deferUpdate();
   const amount = drawStart(cfg);
@@ -174,45 +260,42 @@ async function startAction(interaction, cfg) {
     await sleep(frameDelayMs);
   }
   const res = await store.economyStart(guildId, interaction.user.id, amount);
-  if (res.status === 'already') {
-    return interaction.editReply(editPayload(privateReply('Tu as déjà reçu ton solde de départ.', [hubButtons()])));
-  }
-  return interaction.editReply(
-    editPayload(
-      privateReply(
-        `🎉 Bienvenue ! Tu reçois **${formatMoney(amount, cfg)}**. Ton solde est de **${formatMoney(res.balance, cfg)}**.`,
-        [hubButtons()],
-      ),
-    ),
-  );
+  const hub = await loadHub(guildId, interaction.user.id);
+  const notice =
+    res.status === 'already'
+      ? 'Tu as déjà reçu ton solde de départ.'
+      : `🎉 Bienvenue ! Tu reçois **${formatMoney(amount, cfg)}**.`;
+  return interaction.editReply(hubView(cfg, hub, notice));
 }
 
+// Récompense quotidienne. Depuis le tableau de bord, il est mis à jour sur place (bouton rouge après le passage).
 async function dailyAction(interaction, cfg) {
-  const res = await store.economyDaily(interaction.guild.id, interaction.user.id, {
+  const fromHub = String(interaction.customId ?? '').startsWith('eco:');
+  const guildId = interaction.guild.id;
+  const res = await store.economyDaily(guildId, interaction.user.id, {
     base: cfg.dailyAmount,
     bonus: cfg.dailyStreakBonus,
     cap: cfg.dailyStreakMax,
     ...DAILY_TIMING,
   });
   if (res.status === 'not_started') {
-    return interaction.reply(privateReply('Lance d’abord **/play** pour recevoir ton solde de départ.'));
+    return interaction.reply(privateReply('Ouvre d’abord ton compte avec **/play**.'));
   }
   if (res.status === 'cooldown') {
     const unix = Math.floor(Date.parse(res.next_at) / 1000);
-    return interaction.reply(privateReply(`Tu as déjà récupéré ta récompense. Reviens <t:${unix}:R>.`));
+    const notice = `Tu as déjà récupéré ta récompense. Reviens <t:${unix}:R>.`;
+    if (fromHub) {
+      const hub = await loadHub(guildId, interaction.user.id);
+      return interaction.update(hubView(cfg, hub, notice));
+    }
+    return interaction.reply(privateReply(notice));
   }
-  return interaction.reply(
-    privateReply(
-      `🎁 Récompense quotidienne : **+${formatMoney(res.amount, cfg)}**. Série de **${res.streak}** jour(s). ` +
-        `Ton solde est de **${formatMoney(res.balance, cfg)}**.`,
-    ),
-  );
-}
-
-// Prochaine récompense, en millisecondes (0 ou moins = disponible).
-function msUntilDaily(account) {
-  if (!account.last_daily) return 0;
-  return Date.parse(account.last_daily) + DAILY_TIMING.cooldownHours * 3600 * 1000 - Date.now();
+  const notice = `🎁 Récompense quotidienne : **+${formatMoney(res.amount, cfg)}**. Série de **${res.streak}** jour(s).`;
+  if (fromHub) {
+    const hub = await loadHub(guildId, interaction.user.id);
+    return interaction.update(hubView(cfg, hub, notice));
+  }
+  return interaction.reply(privateReply(`${notice} Ton solde est de **${formatMoney(res.balance, cfg)}**.`));
 }
 
 // /profile : carte PNG privée (solde, rang, série, prochaine récompense). Aucun montant d'XP.
@@ -237,6 +320,114 @@ async function profileAction(interaction, cfg) {
   });
   return interaction.editReply({ files: [new AttachmentBuilder(png, { name: 'profil.png' })] });
 }
+
+// ---------------------------------------------------------------------------
+// Emprunts
+// ---------------------------------------------------------------------------
+
+// Bouton « Emprunter » : formulaire de montant, ou explication si un emprunt est déjà ouvert.
+async function borrowAction(interaction, cfg) {
+  const guildId = interaction.guild.id;
+  const hub = await loadHub(guildId, interaction.user.id);
+  if (!hub) return interaction.reply(privateReply('Ouvre d’abord ton compte avec **/play**.'));
+  if (hub.loan) return interaction.reply(privateReply('Tu as déjà un emprunt en cours. Rembourse-le avant d’en prendre un autre.'));
+  const modal = textModal('eco:borrow:modal', 'Emprunter à la banque', [
+    {
+      key: 'amount',
+      label: `Montant (1 à ${cfg.loanMax} ${cfg.symbol})`,
+      max: 12,
+      required: true,
+      placeholder: `Intérêts : ${cfg.loanRatePercent} % · à rembourser sous ${cfg.loanDays} jour(s)`,
+    },
+  ]);
+  return interaction.showModal(modal);
+}
+
+async function borrowSubmitAction(interaction, cfg) {
+  const guildId = interaction.guild.id;
+  const amount = parseAmount(interaction.fields.getTextInputValue('amount'));
+  if (!amount || amount > cfg.loanMax) {
+    return interaction.reply(privateReply(`Montant invalide : entre 1 et ${formatMoney(cfg.loanMax, cfg)}.`));
+  }
+  const total = loanTotal(amount, cfg.loanRatePercent);
+  const res = await store.economyBorrow(guildId, interaction.user.id, {
+    amount,
+    total,
+    max: cfg.loanMax,
+    days: cfg.loanDays,
+  });
+  switch (res.status) {
+    case 'ok': {
+      const unix = Math.floor(Date.parse(res.due_at) / 1000);
+      return interaction.reply(
+        privateReply(
+          `🏦 Emprunt accepté : **+${formatMoney(amount, cfg)}**. Tu rembourseras **${formatMoney(total, cfg)}** avant ` +
+            `<t:${unix}:f> (<t:${unix}:R>). Ton solde est de **${formatMoney(res.balance, cfg)}**.`,
+        ),
+      );
+    }
+    case 'not_started':
+      return interaction.reply(privateReply('Ouvre d’abord ton compte avec **/play**.'));
+    case 'open_loan':
+      return interaction.reply(privateReply('Tu as déjà un emprunt en cours. Rembourse-le avant d’en prendre un autre.'));
+    case 'limit':
+      return interaction.reply(privateReply(`Montant invalide : entre 1 et ${formatMoney(cfg.loanMax, cfg)}.`));
+    case 'bank_short':
+      return interaction.reply(
+        privateReply(`La banque du serveur ne peut prêter que **${formatMoney(res.reserve, cfg)}** pour le moment.`),
+      );
+    case 'no_bank':
+      return interaction.reply(privateReply('La banque du serveur n’est pas encore ouverte : un membre doit lancer **/play**.'));
+    default:
+      return interaction.reply(privateReply('L’emprunt n’a pas pu aboutir. Réessaie dans un instant.'));
+  }
+}
+
+// Bouton « Rembourser » : formulaire pré-rempli avec ce qui reste dû.
+async function repayAction(interaction, cfg) {
+  const loan = await store.economyOpenLoan(interaction.guild.id, interaction.user.id);
+  if (!loan) return interaction.reply(privateReply('Tu n’as aucun emprunt en cours.'));
+  const remaining = loan.total_due - loan.repaid;
+  const modal = textModal('eco:repay:modal', 'Rembourser l’emprunt', [
+    {
+      key: 'amount',
+      label: `Montant (reste à payer : ${remaining} ${cfg.symbol})`,
+      max: 12,
+      required: true,
+      value: String(remaining),
+    },
+  ]);
+  return interaction.showModal(modal);
+}
+
+async function repaySubmitAction(interaction, cfg) {
+  const guildId = interaction.guild.id;
+  const amount = parseAmount(interaction.fields.getTextInputValue('amount'));
+  if (!amount) return interaction.reply(privateReply('Montant invalide.'));
+  const res = await store.economyRepay(guildId, interaction.user.id, amount);
+  switch (res.status) {
+    case 'ok':
+      return interaction.reply(
+        privateReply(
+          res.remaining > 0
+            ? `💳 Remboursé **${formatMoney(res.paid, cfg)}**. Reste à payer : **${formatMoney(res.remaining, cfg)}**.`
+            : `✅ Emprunt entièrement remboursé (**${formatMoney(res.paid, cfg)}** versés). Ton solde est de **${formatMoney(res.balance, cfg)}**.`,
+        ),
+      );
+    case 'no_loan':
+      return interaction.reply(privateReply('Tu n’as aucun emprunt en cours.'));
+    case 'funds':
+      return interaction.reply(
+        privateReply(`Solde insuffisant : tu as **${formatMoney(res.balance, cfg)}**. Essaie un montant plus petit.`),
+      );
+    default:
+      return interaction.reply(privateReply('Montant invalide.'));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Classement
+// ---------------------------------------------------------------------------
 
 // /leaderboard : classement en Edge Dollar, en PNG (public). Le classement XP est sur /leaderboard type:XP.
 async function handleLeaderboard(interaction) {
@@ -282,7 +473,7 @@ function renderMain(guild) {
   const cfg = cfgOf(guild.id);
   return {
     content:
-      '💰 **Module Économie** · la monnaie du serveur, avec les commandes `/play`, `/daily` et `/profile`.',
+      '💰 **Module Économie** · la monnaie du serveur, avec les commandes `/play`, `/daily`, `/profile` et `/leaderboard`.',
     embeds: [
       embed().addFields(
         { name: 'Module', value: cfg.enabled ? '🟢 Activé' : '⚪ Désactivé', inline: true },
@@ -294,7 +485,8 @@ function renderMain(guild) {
         },
         {
           name: 'Réglages',
-          value: 'Nom et symbole de la monnaie, montants du solde de départ et de la récompense quotidienne : tableau de bord.',
+          value:
+            'Monnaie, solde de départ, récompense quotidienne, banque du serveur et emprunts : tableau de bord.',
         },
       ),
     ],
@@ -318,7 +510,7 @@ async function handleComponent(interaction) {
   }
 }
 
-// Ce module n'a pas de modale.
+// Ce module n'a pas de modale de configuration.
 async function handleModal() {}
 
 module.exports = {
@@ -334,5 +526,8 @@ module.exports = {
   handleLeaderboard,
   drawStart,
   formatMoney,
+  parseAmount,
+  loanTotal,
   setFrameDelay,
+  nextDailyText,
 };

@@ -321,20 +321,31 @@ est en fin de vie) ou Ministral 8B. Tout se règle sur le tableau de bord, page 
 Monnaie virtuelle du serveur : l'**Edge Dollar**, symbole `$` (affiché après le montant : `250 $`). Aucune conversion en
 argent réel.
 
-- **`/play`** : point d'entrée. Sans compte, une présentation et une courte animation donnent le **solde de départ**,
-  tiré au hasard entre 100 et 500 `$` (une seule fois par membre). Avec un compte, un tableau de bord : solde, rang,
-  série, et les boutons *Récompense quotidienne* et *Profil*.
-- **`/daily`** : récompense quotidienne, 100 `$` de base. Un passage toutes les 22 h ; la série continue si l'on revient
-  dans les 48 h, avec +10 `$` par jour de série, plafonné à 100 `$` de bonus.
+- **`/play`** : panneau **public** (visible de tous) qui présente l'économie et la **banque du serveur**. Le bouton
+  *Ouvrir mon compte* affiche, en privé, le tableau de bord du membre. Le premier `/play` ouvre la banque avec son
+  montant initial (300 000 `$` par défaut). Sans compte, une courte animation donne le **solde de départ**, tiré au
+  hasard entre 100 et 500 `$` (une seule fois par membre). Avec un compte, le tableau de bord affiche le solde, le rang,
+  la série, la banque et les boutons *Récompense quotidienne*, *Emprunter* et *Rembourser*.
+- **Récompense quotidienne** : bouton bleu *Récompense quotidienne* tant qu'elle est disponible ; une fois prise, il
+  devient rouge *Récompense quotidienne déjà récupérée*. Montant de base 100 `$`, un passage toutes les 22 h ; la série
+  continue si l'on revient dans les 48 h, avec +10 `$` par jour de série, plafonné à 100 `$` de bonus.
+- **`/daily`** : même récompense, en commande (réponse privée).
+- **Banque et emprunts** : un membre peut emprunter à la banque, dans la limite de **10 000 `$`** par emprunt, avec
+  **10 % d'intérêts** fixes et un délai de **7 jours**. Un seul emprunt ouvert à la fois. Un emprunt de 10 000 `$`
+  coûte 11 000 `$` à rembourser ; le remboursement peut être partiel. Un emprunt en retard est seulement signalé :
+  pas de pénalité, et aucun nouvel emprunt n'est bloqué au-delà de la règle « un emprunt ouvert à la fois ».
+  La banque ne peut prêter que ce qu'elle a en réserve.
 - **`/profile`** : carte PNG privée (avatar, solde, rang sur le serveur, série et prochaine récompense). Aucun montant d'XP.
 - **`/leaderboard`** : classement du serveur en Edge Dollar, en PNG (top 10, du plus riche au moins riche).
-- **Réglages** : nom et symbole de la monnaie, solde de départ (min/max), montants quotidiens, sur le tableau de bord
-  (page **Économie**). L'activation se fait dans `/config` → **Économie**.
-- **Données** : soldes et journal dans Supabase (section 12 de `supabase/schema.sql`, tables `edge_economy_accounts` et
-  `edge_economy_ledger`). Chaque mouvement passe par une fonction SQL qui verrouille le compte : un double clic ne
-  double jamais une récompense.
-- **Après une mise à jour** : exécuter la section 12 dans Supabase, relancer `deploy-commands.js` (nouvelles commandes
-  `/play`, `/daily`, `/profile`, `/leaderboard`).
+  Le classement XP reste disponible avec `/leaderboard type:XP`.
+- **Réglages** : nom et symbole de la monnaie, solde de départ (min/max), montants quotidiens, banque (montant initial),
+  emprunts (maximum, intérêts, délai), sur le tableau de bord (page **Économie**). L'activation se fait dans
+  `/config` → **Économie**.
+- **Données** : soldes, journal, banque et emprunts dans Supabase (sections 12 et 13 de `supabase/schema.sql` : tables
+  `edge_economy_accounts`, `edge_economy_ledger`, `edge_economy_bank`, `edge_economy_loans`). Chaque mouvement passe par
+  une fonction SQL qui verrouille les lignes concernées : un double clic ne double jamais une récompense ni un emprunt.
+- **Après une mise à jour** : exécuter les sections 12 puis 13 de `supabase/schema.sql` dans Supabase. Relancer
+  `deploy-commands.js` seulement si les définitions de commandes ont changé.
 
 ## Tests
 

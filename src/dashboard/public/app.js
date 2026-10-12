@@ -2418,6 +2418,35 @@
           onInput: (v) => (cfg.dailyStreakMax = v),
         }),
       ),
+      h(
+        'div',
+        { class: 'card' },
+        h('h2', { text: 'Banque du serveur et emprunts' }),
+        h('p', {
+          class: 'hint',
+          text: 'La banque est ouverte au premier /play avec le montant initial ; les membres y empruntent et remboursent avec intérêts. Ensuite, son solde évolue avec les emprunts et les remboursements.',
+        }),
+        fieldNumber('Montant initial de la banque', cfg.bankInitial, {
+          min: 0,
+          max: 100000000,
+          onInput: (v) => (cfg.bankInitial = v),
+        }),
+        fieldNumber('Emprunt maximum (par emprunt)', cfg.loanMax, {
+          min: 1,
+          max: 1000000,
+          onInput: (v) => (cfg.loanMax = v),
+        }),
+        fieldNumber('Intérêts (%)', cfg.loanRatePercent, {
+          min: 0,
+          max: 100,
+          onInput: (v) => (cfg.loanRatePercent = v),
+        }),
+        fieldNumber('Délai de remboursement (jours)', cfg.loanDays, {
+          min: 1,
+          max: 30,
+          onInput: (v) => (cfg.loanDays = v),
+        }),
+      ),
       saveButton(() =>
         saveModule('economy', {
           enabled: cfg.enabled,
@@ -2428,6 +2457,10 @@
           dailyAmount: cfg.dailyAmount,
           dailyStreakBonus: cfg.dailyStreakBonus,
           dailyStreakMax: cfg.dailyStreakMax,
+          bankInitial: cfg.bankInitial,
+          loanMax: cfg.loanMax,
+          loanRatePercent: cfg.loanRatePercent,
+          loanDays: cfg.loanDays,
         }),
       ),
     );
