@@ -2365,13 +2365,13 @@
     return h(
       'section',
       null,
-      pageHead('💰 Économie', 'La monnaie du serveur (Edge Dollar, $) : commandes /play, /daily et /profile.'),
+      pageHead('💰 Économie', 'La monnaie du serveur (Edge Dollar, $) : commandes /play, /daily, /profile et /rob.'),
       h(
         'div',
         { class: 'card' },
         fieldSwitch(
           'Économie activée',
-          'Les commandes /play, /daily et /profile ne répondent que si le module est activé.',
+          'Les commandes /play, /daily, /profile et /rob ne répondent que si le module est activé.',
           cfg.enabled,
           (v) => (cfg.enabled = v),
         ),
@@ -2447,6 +2447,50 @@
           onInput: (v) => (cfg.loanDays = v),
         }),
       ),
+      h(
+        'div',
+        { class: 'card' },
+        h('h2', { text: 'Vols (/rob) et banques' }),
+        h('p', {
+          class: 'hint',
+          text: 'Un vol ne touche que l’argent que le membre a sur lui ; l’argent déposé dans une banque est protégé. La chance de réussite monte avec le solde de la victime.',
+        }),
+        fieldNumber('Délai entre deux vols (heures)', cfg.robCooldownHours, {
+          min: 1,
+          max: 24,
+          onInput: (v) => (cfg.robCooldownHours = v),
+        }),
+        fieldNumber('Chance de réussite de base (%)', cfg.robSuccessPercent, {
+          min: 1,
+          max: 100,
+          hint: 'Pour une victime qui a 1 000 $ ; elle augmente avec sa fortune, et reste entre 5 et 90 %.',
+          onInput: (v) => (cfg.robSuccessPercent = v),
+        }),
+        fieldNumber('Part maximum volée (%)', cfg.robMaxPercent, {
+          min: 1,
+          max: 100,
+          hint: 'Un vol réussi prend entre 1 % et ce pourcentage du solde de la victime.',
+          onInput: (v) => (cfg.robMaxPercent = v),
+        }),
+        fieldNumber('Amende minimum (vol raté)', cfg.robFailMin, {
+          min: 0,
+          max: 100000,
+          onInput: (v) => (cfg.robFailMin = v),
+        }),
+        fieldNumber('Amende maximum (vol raté)', cfg.robFailMax, {
+          min: 0,
+          max: 100000,
+          hint: 'Versée à la victime, dans la limite du solde du voleur.',
+          onInput: (v) => (cfg.robFailMax = v),
+        }),
+        fieldNumber('Frais du serveur sur les banques (%)', cfg.bankFeePercent, {
+          min: 0,
+          max: 5,
+          step: 0.01,
+          hint: 'Prélevé chaque jour, sur la trésorerie de la banque, à partir du total stocké dans cette banque.',
+          onInput: (v) => (cfg.bankFeePercent = v),
+        }),
+      ),
       saveButton(() =>
         saveModule('economy', {
           enabled: cfg.enabled,
@@ -2461,6 +2505,12 @@
           loanMax: cfg.loanMax,
           loanRatePercent: cfg.loanRatePercent,
           loanDays: cfg.loanDays,
+          robCooldownHours: cfg.robCooldownHours,
+          robSuccessPercent: cfg.robSuccessPercent,
+          robMaxPercent: cfg.robMaxPercent,
+          robFailMin: cfg.robFailMin,
+          robFailMax: cfg.robFailMax,
+          bankFeePercent: cfg.bankFeePercent,
         }),
       ),
     );
@@ -3292,12 +3342,12 @@
   };
 
   // Nombre entier : la valeur est transmise telle quelle, le serveur vérifie les bornes.
-  function fieldNumber(label, value, { min, max, hint, onInput } = {}) {
+  function fieldNumber(label, value, { min, max, hint, onInput, step = 1 } = {}) {
     const input = h('input', {
       type: 'number',
       min,
       max,
-      step: 1,
+      step,
       value: String(value ?? ''),
       oninput: (e) => onInput(Number(e.target.value)),
     });

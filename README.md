@@ -324,28 +324,50 @@ argent réel.
 - **`/play`** : panneau **public** (visible de tous) qui présente l'économie et la **banque du serveur**. Le bouton
   *Ouvrir mon compte* affiche, en privé, le tableau de bord du membre. Le premier `/play` ouvre la banque avec son
   montant initial (300 000 `$` par défaut). Sans compte, une courte animation donne le **solde de départ**, tiré au
-  hasard entre 100 et 500 `$` (une seule fois par membre). Avec un compte, le tableau de bord affiche le solde, le rang,
-  la série, la banque et les boutons *Récompense quotidienne*, *Emprunter* et *Rembourser*.
+  hasard entre 100 et 500 `$` (une seule fois par membre).
+- **Tableau de bord** : solde « sur soi », rang, série, banque du serveur, et les boutons *Récompense quotidienne*,
+  *Emprunter* / *Rembourser*, *Entreprises*. Le montant mis à l'abri en banque y apparaît aussi.
 - **Récompense quotidienne** : bouton bleu *Récompense quotidienne* tant qu'elle est disponible ; une fois prise, il
   devient rouge *Récompense quotidienne déjà récupérée*. Montant de base 100 `$`, un passage toutes les 22 h ; la série
   continue si l'on revient dans les 48 h, avec +10 `$` par jour de série, plafonné à 100 `$` de bonus.
 - **`/daily`** : même récompense, en commande (réponse privée).
-- **Banque et emprunts** : un membre peut emprunter à la banque, dans la limite de **10 000 `$`** par emprunt, avec
-  **10 % d'intérêts** fixes et un délai de **7 jours**. Un seul emprunt ouvert à la fois. Un emprunt de 10 000 `$`
-  coûte 11 000 `$` à rembourser ; le remboursement peut être partiel. Un emprunt en retard est seulement signalé :
-  pas de pénalité, et aucun nouvel emprunt n'est bloqué au-delà de la règle « un emprunt ouvert à la fois ».
-  La banque ne peut prêter que ce qu'elle a en réserve.
+- **Banque du serveur et emprunts** : un membre peut emprunter à la banque du serveur, dans la limite de **10 000 `$`**
+  par emprunt, avec **10 % d'intérêts** fixes et un délai de **7 jours**. Un seul emprunt ouvert à la fois. Un emprunt de
+  10 000 `$` coûte 11 000 `$` à rembourser ; le remboursement peut être partiel. Un emprunt en retard est seulement
+  signalé. La banque ne peut prêter que ce qu'elle a en réserve.
+- **`/rob @membre`** : tenter de voler l'argent **« sur soi »** d'un membre (jamais l'argent à la banque).
+  - Une tentative toutes les **3 h** par voleur.
+  - **Réussite** : le voleur prend entre **1 %** et **20 %** du solde de la victime. La chance de base est de **50 %**
+    pour une victime qui a 1 000 `$` ; elle monte avec la fortune de la victime (+5 points à chaque multiplication par
+    10, borné à ±20 points) et reste entre **5 % et 90 %**.
+  - **Échec** : le voleur verse entre **50 et 100 `$`** à la victime (limité à son solde).
+  - Le résultat est public dans le salon. Le délai, la chance, la part volée et l'amende se règlent sur le tableau de bord.
+- **Entreprises** (bouton *Entreprises* du tableau de bord) : chaque membre peut créer **une** entreprise. Pour l'instant,
+  le seul type est la **banque** ; un casino est prévu plus tard (le type est ajouté dans `economy-companies.js` et dans
+  la base).
+  - **Banque** : le patron crée des **abonnements** (5 au maximum), chacun avec un prix par jour et un **stockage**
+    maximum par abonné. La banque a aussi un **montant maximum** qu'elle peut stocker pour l'ensemble de ses abonnés.
+  - **Membres** : un abonnement, puis *Déposer* et *Retirer* dans le coffre. Un seul abonnement à la fois ; on ne peut
+    pas déposer dans une autre banque tant qu'on a de l'argent dans celle-ci. *Résilier* arrête les prélèvements, mais
+    l'argent reste protégé à la banque.
+  - **Prélèvement quotidien** (minuit, heure de Paris) : le prix du jour est pris **sur le coffre** du membre et versé à
+    la **trésorerie** de la banque. Si le coffre ne suffit plus, l'abonnement est résilié (l'argent reste à la banque).
+  - **Frais du serveur** : chaque jour, le serveur prélève **0,1 %** du total stocké dans chaque banque, sur la
+    trésorerie de la banque, et ces frais vont à la banque du serveur.
+  - **Patron** : *Gérer mon entreprise* permet d'ajouter et de supprimer des abonnements, de changer la capacité
+    maximale et de retirer la trésorerie vers son solde.
 - **`/profile`** : carte PNG privée (avatar, solde, rang sur le serveur, série et prochaine récompense). Aucun montant d'XP.
-- **`/leaderboard`** : classement du serveur en Edge Dollar, en PNG (top 10, du plus riche au moins riche).
-  Le classement XP reste disponible avec `/leaderboard type:XP`.
+- **`/leaderboard`** : classement du serveur en Edge Dollar, en PNG (top 10, du plus riche au moins riche). Le classement
+  XP reste disponible avec `/leaderboard type:XP`.
 - **Réglages** : nom et symbole de la monnaie, solde de départ (min/max), montants quotidiens, banque (montant initial),
-  emprunts (maximum, intérêts, délai), sur le tableau de bord (page **Économie**). L'activation se fait dans
-  `/config` → **Économie**.
-- **Données** : soldes, journal, banque et emprunts dans Supabase (sections 12 et 13 de `supabase/schema.sql` : tables
-  `edge_economy_accounts`, `edge_economy_ledger`, `edge_economy_bank`, `edge_economy_loans`). Chaque mouvement passe par
-  une fonction SQL qui verrouille les lignes concernées : un double clic ne double jamais une récompense ni un emprunt.
-- **Après une mise à jour** : exécuter les sections 12 puis 13 de `supabase/schema.sql` dans Supabase. Relancer
-  `deploy-commands.js` seulement si les définitions de commandes ont changé.
+  emprunts (maximum, intérêts, délai), vols (délai, chance de base, part maximum, amende) et frais des banques, sur le
+  tableau de bord (page **Économie**). L'activation se fait dans `/config` → **Économie**.
+- **Données** : soldes, journal, banque, emprunts, entreprises, abonnements et coffres dans Supabase (sections 12, 13 et
+  14 de `supabase/schema.sql`). Chaque mouvement passe par une fonction SQL qui verrouille les lignes concernées : un
+  double clic ne double jamais une récompense, un emprunt ni un vol ; l'argent total du serveur reste constant (le vol, le
+  dépôt et le prélèvement ne font que déplacer l'argent).
+- **Après une mise à jour** : exécuter les sections 12, 13 puis 14 de `supabase/schema.sql` dans Supabase, puis relancer
+  `deploy-commands.js` (nouvelle commande `/rob`).
 
 ## Tests
 
@@ -503,10 +525,14 @@ src/
   level-card.js         carte de niveau /level (PNG)
   leaderboard-card.js   carte du classement XP (/leaderboard type:XP, PNG)
   economy-card.js       cartes /profile et /leaderboard de l'économie (PNG)
+  economy-money.js       montants de l'économie (affichage, saisie), partagés
   leveling.js           XP vocal et texte, niveaux, annonces, classement, sauvegarde Supabase
   modules/suggestions.js  commande /suggestion, votes de 3 jours, fermeture automatique
   modules/links.js      blocage des liens, rôles autorisés, avertissement
   modules/giveaways.js  commande /giveaway, participation, tirage au sort
+  modules/economy.js    module Économie (monnaie, /play, /daily, emprunts, prélèvement des banques)
+  modules/economy-companies.js  entreprises (banques) : création, abonnements, coffres, trésorerie
+  modules/economy-rob.js        commande /rob (vol, chance, amende)
   xp-rules.js           valeurs de gain d'XP (vocal, texte)
   modules/registry.js   liste des modules affichés dans le menu
   modules/ticket.js     module Ticket (panneau, tickets, textes, images/GIF)

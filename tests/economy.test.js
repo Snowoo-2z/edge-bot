@@ -30,6 +30,8 @@ let borrowResult = null;
 let borrowArgs = null;
 let repayResult = null;
 let repayArgs = null;
+let membership = null;
+let companiesList = [];
 
 store.getEconomyAccount = async () => (account ? { ...account } : null);
 store.economyStart = async (g, u, amount) => {
@@ -58,6 +60,8 @@ store.economyRepay = async (g, u, amount) => {
   return repayResult;
 };
 store.economyTop = async () => [];
+store.economyMemberBank = async () => (membership ? { ...membership } : null);
+store.economyCompanies = async () => structuredClone(companiesList);
 
 // Faux objet d'interaction : enregistre ce que le bot renvoie.
 function fake({ customId, commandName, modal = false, values = {} } = {}) {
@@ -125,6 +129,8 @@ beforeEach(() => {
   borrowArgs = null;
   repayResult = null;
   repayArgs = null;
+  membership = null;
+  companiesList = [];
   economy.setFrameDelay(0);
   configs.clear();
 });
@@ -199,7 +205,7 @@ test('solde de départ : animé, versé une seule fois, puis tableau de bord', a
   assert.deepEqual(start.log.edits[0].components, [], 'le bouton disparaît pendant le tirage');
   const final = start.log.edits.at(-1);
   assert.match(textOf(final), /Bienvenue ! Tu reçois/);
-  assert.deepEqual(buttonIds(final), ['eco:daily', 'eco:profile', 'eco:borrow']);
+  assert.deepEqual(buttonIds(final), ['eco:daily', 'eco:profile', 'eco:borrow', 'eco:co:home']);
   assert.equal(startCalls.length, 1);
   const amount = startCalls[0].amount;
   assert.ok(amount >= 100 && amount <= 500);

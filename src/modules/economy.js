@@ -7,16 +7,22 @@
 //  - /daily  : récompense quotidienne (montant de base + bonus de série, plafonné). Le bouton devient rouge une fois
 //              récupérée.
 //  - /profile: carte PNG privée (solde, rang, série).
-//  - Réglages (monnaie, montants, banque, emprunts) : tableau de bord. Activation : /config.
-// Les soldes, la banque et les emprunts sont dans Supabase (sections 12 et 13 de schema.sql) : chaque mouvement est
-// verrouillé côté base.
+//  - /rob @membre : voler le solde « sur soi » d'un membre (une fois toutes les 3 h). L'argent à la banque est protégé.
+//  - Entreprises (bouton du tableau de bord) : créer une banque, proposer des abonnements, déposer et retirer.
+//    Module-entreprises dans economy-companies.js ; prélèvement quotidien des banques (runBankDaily).
+//  - Réglages (monnaie, montants, banque, emprunts, vols, banques) : tableau de bord. Activation : /config.
+// Les soldes, la banque, les emprunts et les entreprises sont dans Supabase (sections 12 à 14 de schema.sql) : chaque
+// mouvement est verrouillé côté base.
 const crypto = require('crypto');
-const { AttachmentBuilder, ButtonStyle, MessageFlags } = require('discord.js');
+const { AttachmentBuilder, ButtonStyle, Events, MessageFlags } = require('discord.js');
 const store = require('../store');
 const { embed, button, row, toggleButton, moduleSelectRow, ephemeralPayload, textModal } = require('../ui');
 const { MODULE_LIST } = require('./registry');
 const levelsModule = require('./levels');
 const { renderProfileCard, renderEconomyLeaderboardCard, ECONOMY_DEFAULT_THEME } = require('../economy-card');
+const { formatMoney, parseAmount } = require('../economy-money');
+const companies = require('./economy-companies');
+const { handleRob } = require('./economy-rob');
 
 const ID = 'economy';
 const DEFAULTS = {
@@ -32,12 +38,17 @@ const DEFAULTS = {
   loanMax: 10000, // emprunt maximum par membre et par emprunt
   loanRatePercent: 10, // intérêts forfaitaires, en pourcentage du montant emprunté
   loanDays: 7, // délai de remboursement
+  robCooldownHours: 3, // délai entre deux vols d'un même membre
+  robSuccessPercent: 50, // chance de réussite de base (ajustée selon le solde de la victime)
+  robMaxPercent: 20, // un vol réussi prend entre 1 % et ce pourcentage du solde de la victime
+  robFailMin: 50, // amende d'un vol raté : tirée entre ces deux montants, payée à la victime
+  robFailMax: 100,
+  bankFeePercent: 0.1, // frais du serveur : part du total stocké dans chaque banque, prélevée chaque jour
 };
 const LIMITS = { amount: 100000000, streakBonus: 10000, currencyName: 30, symbol: 4 };
 // /daily : un passage toutes les 22 h ; la série continue si le passage précédent date de moins de 48 h.
 const DAILY_TIMING = { cooldownHours: 22, windowHours: 48 };
 const LEADERBOARD_SIZE = 10;
-const NBSP = '\u00a0';
 
 let frameDelayMs = 700; // délai entre deux images de l'animation (réduit dans les tests)
 function setFrameDelay(ms) {
@@ -48,26 +59,8 @@ const cfgOf = (guildId) => store.getModuleConfig(guildId, ID, DEFAULTS);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // ---------------------------------------------------------------------------
-// Montants
+// Montants (formatMoney, parseAmount : voir economy-money.js)
 // ---------------------------------------------------------------------------
-
-// 1250 -> « 1 250 » (espace insécable, lisible en français).
-function formatNumber(n) {
-  return String(Math.trunc(n)).replace(/\B(?=(\d{3})+(?!\d))/g, NBSP);
-}
-
-// 1250 -> « 1 250 $ » (symbole après le montant, à la française).
-function formatMoney(n, cfg = DEFAULTS) {
-  return `${formatNumber(n)}${NBSP}${cfg.symbol}`;
-}
-
-// Saisie d'un montant : chiffres seuls (espaces et symbole tolérés). null si invalide.
-function parseAmount(raw) {
-  const digits = String(raw ?? '').replace(/[\s\u00a0\u202f$]/g, '');
-  if (!/^\d{1,12}$/.test(digits)) return null;
-  const n = Number(digits);
-  return n > 0 ? n : null;
-}
 
 // Montant à rembourser : principal + intérêts forfaitaires, arrondis à l'unité supérieure.
 function loanTotal(amount, ratePercent) {
@@ -117,17 +110,18 @@ function dailyButton(account) {
 async function loadHub(guildId, userId) {
   const account = await store.getEconomyAccount(guildId, userId);
   if (!account?.started) return null;
-  const [rank, loan, reserve] = await Promise.all([
+  const [rank, loan, reserve, membership] = await Promise.all([
     store.economyRank(guildId, account.balance),
     store.economyOpenLoan(guildId, userId),
     store.economyBankReserve(guildId),
+    store.economyMemberBank(guildId, userId),
   ]);
-  return { account, rank, loan, reserve };
+  return { account, rank, loan, reserve, membership };
 }
 
 // Vue du tableau de bord (sans indicateur « privé » : il est fixé à la réponse d'origine).
 function hubView(cfg, hub, notice = '') {
-  const { account, rank, loan, reserve } = hub;
+  const { account, rank, loan, reserve, membership } = hub;
   const title = `💰 **${cfg.currencyName}** · ton tableau de bord`;
   const e = embed(notice ? `${notice}\n\n${title}` : title).addFields(
     { name: 'Solde', value: formatMoney(account.balance, cfg), inline: true },
@@ -135,6 +129,9 @@ function hubView(cfg, hub, notice = '') {
     { name: 'Série', value: `${account.daily_streak ?? 0} jour(s)`, inline: true },
     { name: '🏦 Banque du serveur', value: formatMoney(reserve ?? 0, cfg), inline: true },
   );
+  if (membership?.stored > 0) {
+    e.addFields({ name: '🔒 À l’abri en banque', value: formatMoney(membership.stored, cfg), inline: true });
+  }
   if (loan) {
     const remaining = loan.total_due - loan.repaid;
     const unix = Math.floor(Date.parse(loan.due_at) / 1000);
@@ -149,7 +146,10 @@ function hubView(cfg, hub, notice = '') {
     : button('eco:borrow', 'Emprunter', ButtonStyle.Secondary, '🏦');
   return {
     embeds: [e],
-    components: [row(dailyButton(account), button('eco:profile', 'Profil', ButtonStyle.Secondary, '👤')), row(loanButton)],
+    components: [
+      row(dailyButton(account), button('eco:profile', 'Profil', ButtonStyle.Secondary, '👤')),
+      row(loanButton, button('eco:co:home', 'Entreprises', ButtonStyle.Secondary, '🏦')),
+    ],
   };
 }
 
@@ -186,6 +186,8 @@ async function handleCommand(interaction) {
       return dailyAction(interaction, cfg);
     case 'profile':
       return profileAction(interaction, cfg);
+    case 'rob':
+      return handleRob(interaction, cfg);
     default:
       return;
   }
@@ -198,7 +200,8 @@ async function playAction(interaction, cfg) {
   const reserve = await store.economyBankReserve(guildId);
   const panel = embed(
     `💰 **${cfg.currencyName}** (${cfg.symbol}) · la monnaie du serveur.\n\n` +
-      'Ouvre ton compte pour voir ton solde, récupérer ta récompense quotidienne et emprunter à la banque du serveur.',
+      'Ouvre ton compte pour voir ton solde, récupérer ta récompense quotidienne, emprunter à la banque du serveur ' +
+        'et mettre ton argent à l’abri dans une banque (les voleurs ne touchent pas à l’argent déposé).',
   ).addFields({ name: '🏦 Banque du serveur', value: formatMoney(reserve ?? 0, cfg), inline: true });
   // Pas d'indicateur « privé » : le panneau est visible de tous.
   return interaction.reply({
@@ -215,6 +218,7 @@ async function handleInteraction(interaction) {
   const cfg = cfgOf(guild.id);
   if (!cfg.enabled) return interaction.reply(ephemeralPayload('L’économie n’est pas activée sur ce serveur.'));
   const [, action] = interaction.customId.split(':');
+  if (action === 'co') return companies.handleInteraction(interaction, cfg);
   if (interaction.isModalSubmit?.()) {
     if (action === 'borrow') return borrowSubmitAction(interaction, cfg);
     if (action === 'repay') return repaySubmitAction(interaction, cfg);
@@ -473,7 +477,7 @@ function renderMain(guild) {
   const cfg = cfgOf(guild.id);
   return {
     content:
-      '💰 **Module Économie** · la monnaie du serveur, avec les commandes `/play`, `/daily`, `/profile` et `/leaderboard`.',
+      '💰 **Module Économie** · la monnaie du serveur, avec les commandes `/play`, `/daily`, `/profile`, `/rob` et `/leaderboard`.',
     embeds: [
       embed().addFields(
         { name: 'Module', value: cfg.enabled ? '🟢 Activé' : '⚪ Désactivé', inline: true },
@@ -513,9 +517,57 @@ async function handleComponent(interaction) {
 // Ce module n'a pas de modale de configuration.
 async function handleModal() {}
 
+// ---------------------------------------------------------------------------
+// Banques : prélèvement quotidien (abonnements et frais du serveur), une seule fois par jour et par serveur.
+// ---------------------------------------------------------------------------
+
+const BANK_TICK_MS = 10 * 60 * 1000; // le bot vérifie toutes les 10 min ; la base garantit un seul passage par jour
+let bankTimerStarted = false;
+
+// Jour civil à Paris (AAAA-MM-JJ) : les prélèvements ont lieu au changement de jour, heure de Paris.
+function parisDay(date = new Date()) {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Paris', year: 'numeric', month: '2-digit', day: '2-digit' }).format(date);
+}
+
+// Frais du serveur en points de base : 0,1 % = 10 (la base attend un entier).
+const feeBasisPoints = (cfg) => Math.round(Number(cfg.bankFeePercent) * 100);
+
+async function runBankDaily(client, date = new Date()) {
+  const day = parisDay(date);
+  for (const guild of client.guilds.cache.values()) {
+    try {
+      const cfg = cfgOf(guild.id);
+      if (!cfg.enabled) continue;
+      const res = await store.economyBankDaily(guild.id, day, feeBasisPoints(cfg));
+      if (res.status === 'ok' && (res.charged || res.cancelled || res.server_cut)) {
+        console.log(
+          `[economy] banques ${guild.id} (${day}) : ${res.charged} prélèvement(s), ${res.cancelled} résiliation(s), frais serveur ${res.server_cut}.`,
+        );
+      }
+    } catch (err) {
+      console.error(`[economy] prélèvement des banques impossible (${guild.id}) :`, err.message);
+    }
+  }
+}
+
+// Appelée au démarrage (comme les autres modules) : une seule boucle, quel que soit le nombre de connexions.
+function registerEvents(client) {
+  client.once(Events.ClientReady, () => {
+    if (bankTimerStarted) return;
+    bankTimerStarted = true;
+    const tick = () => runBankDaily(client).catch((err) => console.error('[economy] erreur :', err));
+    tick();
+    setInterval(tick, BANK_TICK_MS).unref();
+  });
+}
+
 module.exports = {
   ID,
   DEFAULTS,
+  registerEvents,
+  runBankDaily,
+  parisDay,
+  feeBasisPoints,
   LIMITS,
   DAILY_TIMING,
   render,

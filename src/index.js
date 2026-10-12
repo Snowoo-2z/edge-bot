@@ -114,6 +114,7 @@ function registerHandlers(client) {
   ai.registerEvents(client);
   suggestions.registerEvents(client);
   giveaways.registerEvents(client);
+  economy.registerEvents(client);
   registerLogEvents(client);
   reactionRoles.registerEvents(client);
   security.registerEvents(client);
@@ -147,7 +148,7 @@ async function handleInteraction(interaction) {
       }
       if (interaction.commandName === 'suggestion') return await suggestions.handleCommand(interaction);
       if (interaction.commandName === 'giveaway') return await giveaways.handleCommand(interaction);
-      if (['play', 'daily', 'profile'].includes(interaction.commandName)) return await economy.handleCommand(interaction);
+      if (['play', 'daily', 'profile', 'rob'].includes(interaction.commandName)) return await economy.handleCommand(interaction);
       if (interaction.commandName === 'server') return await handleServerCommand(interaction);
       if (MODERATION_COMMANDS.has(interaction.commandName)) return await moderation.handleCommand(interaction);
       return;

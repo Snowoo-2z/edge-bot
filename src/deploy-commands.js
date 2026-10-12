@@ -82,6 +82,14 @@ const commands = [
     .setDescription('Affiche ta carte : solde, rang, série (réponse privée, en image)')
     .setDMPermission(false)
     .toJSON(),
+  new SlashCommandBuilder()
+    .setName('rob')
+    .setDescription('Tente de voler l’argent que ce membre a sur lui (toutes les 3 h, chance de réussite variable)')
+    .addUserOption((option) =>
+      option.setName('membre').setDescription('Le membre à voler').setRequired(true),
+    )
+    .setDMPermission(false)
+    .toJSON(),
   buildServerCommand(),
   ...buildModerationCommands(),
 ];
@@ -92,7 +100,7 @@ const commands = [
     ? Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID)
     : Routes.applicationCommands(CLIENT_ID);
   await rest.put(route, { body: commands });
-  console.log(`${commands.length} commandes enregistrées ${GUILD_ID ? `sur le serveur ${GUILD_ID}` : 'globalement'} (config, level, leaderboard, suggestion, giveaway, play, daily, profile, server, ban, unban, kick, timeout, untimeout, warn, warnings, unwarn, purge, slowmode).`);
+  console.log(`${commands.length} commandes enregistrées ${GUILD_ID ? `sur le serveur ${GUILD_ID}` : 'globalement'} (config, level, leaderboard, suggestion, giveaway, play, daily, profile, rob, server, ban, unban, kick, timeout, untimeout, warn, warnings, unwarn, purge, slowmode).`);
 })().catch((err) => {
   console.error(err);
   process.exit(1);

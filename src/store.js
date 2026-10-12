@@ -365,7 +365,7 @@ const ECONOMY_ACCOUNTS_TABLE = 'edge_economy_accounts';
 async function getEconomyAccount(guildId, userId) {
   const { data, error } = await supabase
     .from(ECONOMY_ACCOUNTS_TABLE)
-    .select('balance, started, last_daily, daily_streak')
+    .select('balance, started, last_daily, daily_streak, last_rob_at')
     .eq('guild_id', guildId)
     .eq('user_id', userId)
     .maybeSingle();
@@ -472,12 +472,140 @@ async function economyRepay(guildId, userId, amount) {
   return data;
 }
 
+// ---------------------------------------------------------------------------
+// Entreprises (banques), coffres des membres et vols (section 14 de schema.sql)
+// ---------------------------------------------------------------------------
+
+// Toutes les entreprises du serveur, avec leurs abonnements actifs et le total stocké dans chaque banque.
+async function economyCompanies(guildId) {
+  const [companies, plans, deposits] = await Promise.all([
+    supabase.from('edge_economy_companies').select('id, kind, name, owner_id, treasury, max_storage').eq('guild_id', guildId).order('id'),
+    supabase.from('edge_economy_plans').select('id, company_id, name, daily_price, storage').eq('guild_id', guildId).eq('active', true).order('id'),
+    supabase.from('edge_economy_deposits').select('company_id, stored, plan_id').eq('guild_id', guildId),
+  ]);
+  for (const r of [companies, plans, deposits]) {
+    if (r.error) throw new Error(`Lecture des entreprises impossible : ${r.error.message}`);
+  }
+  const stored = new Map();
+  const subscribers = new Map();
+  for (const d of deposits.data ?? []) {
+    stored.set(d.company_id, (stored.get(d.company_id) ?? 0) + Number(d.stored));
+    if (d.plan_id !== null) subscribers.set(d.company_id, (subscribers.get(d.company_id) ?? 0) + 1);
+  }
+  return (companies.data ?? []).map((c) => ({
+    id: Number(c.id),
+    kind: c.kind,
+    name: c.name,
+    owner_id: c.owner_id,
+    treasury: Number(c.treasury),
+    max_storage: Number(c.max_storage),
+    stored: stored.get(c.id) ?? 0,
+    subscribers: subscribers.get(c.id) ?? 0,
+    plans: (plans.data ?? [])
+      .filter((p) => Number(p.company_id) === Number(c.id))
+      .map((p) => ({ id: Number(p.id), name: p.name, daily_price: Number(p.daily_price), storage: Number(p.storage) })),
+  }));
+}
+
+// Coffre du membre (null s'il n'a jamais déposé ni souscrit).
+async function economyMemberBank(guildId, userId) {
+  const { data, error } = await supabase
+    .from('edge_economy_deposits')
+    .select('company_id, plan_id, stored')
+    .eq('guild_id', guildId)
+    .eq('user_id', userId)
+    .maybeSingle();
+  if (error) throw new Error(`Lecture du coffre impossible : ${error.message}`);
+  return data ? { company_id: Number(data.company_id), plan_id: data.plan_id === null ? null : Number(data.plan_id), stored: Number(data.stored) } : null;
+}
+
+async function economyRpc(fn, params, label) {
+  const { data, error } = await supabase.rpc(fn, params);
+  if (error) throw new Error(`${label} impossible : ${error.message}`);
+  return data;
+}
+
+async function economyCompanyCreate(guildId, ownerId, { kind, name, max }) {
+  return economyRpc('edge_economy_company_create', { p_guild: guildId, p_owner: ownerId, p_kind: kind, p_name: name, p_max: max }, 'Création de l’entreprise');
+}
+
+async function economyPlanAdd(guildId, ownerId, { name, price, storage }) {
+  return economyRpc('edge_economy_plan_add', { p_guild: guildId, p_owner: ownerId, p_name: name, p_price: price, p_storage: storage }, 'Ajout de l’abonnement');
+}
+
+async function economyPlanRemove(guildId, ownerId, planId) {
+  return economyRpc('edge_economy_plan_remove', { p_guild: guildId, p_owner: ownerId, p_plan: planId }, 'Suppression de l’abonnement');
+}
+
+async function economyCompanyCapacity(guildId, ownerId, max) {
+  return economyRpc('edge_economy_company_capacity', { p_guild: guildId, p_owner: ownerId, p_max: max }, 'Changement de capacité');
+}
+
+async function economyTreasuryWithdraw(guildId, ownerId, amount) {
+  return economyRpc('edge_economy_treasury_withdraw', { p_guild: guildId, p_owner: ownerId, p_amount: amount }, 'Retrait de trésorerie');
+}
+
+async function economySubscribe(guildId, userId, planId) {
+  return economyRpc('edge_economy_subscribe', { p_guild: guildId, p_user: userId, p_plan: planId }, 'Abonnement');
+}
+
+async function economyUnsubscribe(guildId, userId) {
+  return economyRpc('edge_economy_unsubscribe', { p_guild: guildId, p_user: userId }, 'Résiliation');
+}
+
+async function economyDeposit(guildId, userId, amount) {
+  return economyRpc('edge_economy_deposit', { p_guild: guildId, p_user: userId, p_amount: amount }, 'Dépôt');
+}
+
+async function economyWithdraw(guildId, userId, amount) {
+  return economyRpc('edge_economy_withdraw', { p_guild: guildId, p_user: userId, p_amount: amount }, 'Retrait');
+}
+
+// Vol : tout est calculé et verrouillé côté base (cadence, chance, montant, amende).
+async function economyRob(guildId, thiefId, victimId, { cooldownHours, base, ref, slope, clamp, maxPercent, fineMin, fineMax }) {
+  return economyRpc(
+    'edge_economy_rob',
+    {
+      p_guild: guildId,
+      p_thief: thiefId,
+      p_victim: victimId,
+      p_cooldown_hours: cooldownHours,
+      p_base: base,
+      p_ref: ref,
+      p_slope: slope,
+      p_clamp: clamp,
+      p_max_percent: maxPercent,
+      p_fine_min: fineMin,
+      p_fine_max: fineMax,
+    },
+    'Vol',
+  );
+}
+
+// Prélèvement quotidien d'un serveur : une seule fois par jour (clé « bank:<serveur>:<jour> »).
+async function economyBankDaily(guildId, day, feeBp) {
+  return economyRpc('edge_economy_bank_daily', { p_guild: guildId, p_day: day, p_fee_bp: feeBp }, 'Prélèvement des banques');
+}
+
 module.exports = {
   economyBankFund,
   economyBankReserve,
   economyOpenLoan,
   economyBorrow,
   economyRepay,
+  economyCompanies,
+  economyMemberBank,
+  economyCompanyCreate,
+  economyPlanAdd,
+  economyPlanRemove,
+  economyCompanyCapacity,
+  economyTreasuryWithdraw,
+  economySubscribe,
+  economyUnsubscribe,
+  economyDeposit,
+  economyWithdraw,
+  economyRob,
+  economyBankDaily,
   getEconomyAccount,
   economyStart,
   economyDaily,

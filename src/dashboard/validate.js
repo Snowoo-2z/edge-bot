@@ -152,6 +152,12 @@ function sanitizeEconomy(guild, input, current = {}) {
       'loanMax',
       'loanRatePercent',
       'loanDays',
+      'robCooldownHours',
+      'robSuccessPercent',
+      'robMaxPercent',
+      'robFailMin',
+      'robFailMax',
+      'bankFeePercent',
     ],
     (key, value) => {
       switch (key) {
@@ -179,6 +185,18 @@ function sanitizeEconomy(guild, input, current = {}) {
           return integer(value, 'Intérêts des emprunts (%)', 0, 100);
         case 'loanDays':
           return integer(value, 'Délai de remboursement (jours)', 1, 30);
+        case 'robCooldownHours':
+          return integer(value, 'Délai entre deux vols (heures)', 1, 24);
+        case 'robSuccessPercent':
+          return integer(value, 'Chance de réussite d’un vol (%)', 1, 100);
+        case 'robMaxPercent':
+          return integer(value, 'Part maximum volée (%)', 1, 100);
+        case 'robFailMin':
+          return integer(value, 'Amende minimum (vol raté)', 0, 100000);
+        case 'robFailMax':
+          return integer(value, 'Amende maximum (vol raté)', 0, 100000);
+        case 'bankFeePercent':
+          return Math.round(number(value, 'Frais du serveur sur les banques (%)', 0, 5) * 100) / 100;
         default:
           return undefined;
       }
@@ -186,6 +204,7 @@ function sanitizeEconomy(guild, input, current = {}) {
   );
   const merged = { ...current, ...patch };
   if (merged.startMin > merged.startMax) fail('Solde de départ : le minimum ne peut pas dépasser le maximum.');
+  if (merged.robFailMin > merged.robFailMax) fail('Amende d’un vol raté : le minimum ne peut pas dépasser le maximum.');
   return patch;
 }
 
