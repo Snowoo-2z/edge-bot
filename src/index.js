@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits, Events, Partials, RESTEvents } = require('discord.js');
+const { Client, GatewayIntentBits, Events, Partials, RESTEvents, Options } = require('discord.js');
 const { handleConfigCommand, handleConfigInteraction } = require('./config');
 const ticket = require('./modules/ticket');
 const welcome = require('./modules/welcome');
@@ -64,6 +64,16 @@ function buildClient() {
     // d'anciens messages restent journalisées).
     // Reaction et User : réactions sur d'anciens messages (panneaux de rôles après redémarrage).
     partials: [Partials.Message, Partials.Channel, Partials.Reaction, Partials.User],
+    // Mémoire bornée : le bot ne relit que les messages récents (journal des modifications, panneaux de rôles).
+    // Membres, salons et rôles restent entièrement en cache (utilisés partout, sans appel réseau).
+    makeCache: Options.cacheWithLimits({
+      ...Options.DefaultMakeCacheSettings,
+      MessageManager: 100,
+    }),
+    sweepers: {
+      ...Options.DefaultSweeperSettings,
+      messages: { interval: 900, lifetime: 1800 }, // toutes les 15 min : messages de plus de 30 min
+    },
   });
   registerHandlers(client);
   return client;
@@ -267,24 +277,28 @@ async function main() {
   // Charge les réglages depuis Supabase avant d'accepter les interactions.
   console.log('[startup] Chargement des réglages depuis Supabase…');
   await withTimeout(store.init(), 20_000, 'Supabase ne répond pas après 20 s (vérifie SUPABASE_URL).');
-  // Non bloquant : si la table des niveaux n'existe pas encore, le bot démarre quand même.
-  await withTimeout(leveling.init(), 30_000, 'Lecture des niveaux trop lente (table edge_levels).').catch((err) =>
-    console.error('[niveaux] chargement impossible (la table edge_levels existe-t-elle ? voir supabase/schema.sql) :', err.message),
-  );
+  // Les chargements et la sonde Discord partent en même temps (au lieu de s'enchaîner).
+  // Non bloquants : si une table n'existe pas encore, le bot démarre quand même.
+  const probe = probeDiscord();
+  await Promise.all([
+    withTimeout(leveling.init(), 30_000, 'Lecture des niveaux trop lente (table edge_levels).').catch((err) =>
+      console.error('[niveaux] chargement impossible (la table edge_levels existe-t-elle ? voir supabase/schema.sql) :', err.message),
+    ),
+    withTimeout(suggestions.init(), 30_000, 'Lecture des suggestions trop lente (table edge_suggestions).').catch((err) =>
+      console.error('[suggestions] chargement impossible (la table edge_suggestions existe-t-elle ? voir supabase/schema.sql) :', err.message),
+    ),
+    withTimeout(giveaways.init(), 30_000, 'Lecture des giveaways trop lente (table edge_giveaways).').catch((err) =>
+      console.error('[giveaways] chargement impossible (la table edge_giveaways existe-t-elle ? voir supabase/schema.sql) :', err.message),
+    ),
+  ]);
   leveling.startTimers();
   logs.start();
   // Sauvegarde quotidienne (vérifiée toutes les 10 min, une fois connecté à Discord).
   backups.start(() => bot);
-  await withTimeout(suggestions.init(), 30_000, 'Lecture des suggestions trop lente (table edge_suggestions).').catch((err) =>
-    console.error('[suggestions] chargement impossible (la table edge_suggestions existe-t-elle ? voir supabase/schema.sql) :', err.message),
-  );
-  await withTimeout(giveaways.init(), 30_000, 'Lecture des giveaways trop lente (table edge_giveaways).').catch((err) =>
-    console.error('[giveaways] chargement impossible (la table edge_giveaways existe-t-elle ? voir supabase/schema.sql) :', err.message),
-  );
   console.log('[startup] Réglages chargés. Connexion à Discord…');
   // Si Discord impose une limite de débit, on attend sa fin avant toute tentative :
   // chaque demande envoyée pendant la limite la prolonge.
-  const retryAfterS = await probeDiscord();
+  const retryAfterS = await probe;
   if (retryAfterS > 0) {
     const waitS = retryAfterS + 10;
     console.log(

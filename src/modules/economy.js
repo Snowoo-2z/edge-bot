@@ -259,11 +259,17 @@ async function startAction(interaction, cfg) {
   }
   await interaction.deferUpdate();
   const amount = drawStart(cfg);
+  // L'écriture du solde part tout de suite et se termine pendant l'animation.
+  const pending = store
+    .economyStart(guildId, interaction.user.id, amount)
+    .then((value) => ({ ok: true, value }), (error) => ({ ok: false, error }));
   for (const frame of ['🎰 Ouverture du coffre…', '💵 On compte les billets…', '✨ Presque…']) {
-    await interaction.editReply({ embeds: [embed(frame)], components: [] });
-    await sleep(frameDelayMs);
+    // Chaque image dure frameDelayMs, l'envoi Discord compris (il ne rallonge pas l'animation).
+    await Promise.all([interaction.editReply({ embeds: [embed(frame)], components: [] }), sleep(frameDelayMs)]);
   }
-  const res = await store.economyStart(guildId, interaction.user.id, amount);
+  const outcome = await pending;
+  if (!outcome.ok) throw outcome.error;
+  const res = outcome.value;
   const hub = await loadHub(guildId, interaction.user.id);
   const notice =
     res.status === 'already'

@@ -201,7 +201,28 @@ function wrap(g, text, maxWidth, maxLines) {
   return lines;
 }
 
-async function fetchAvatar(url) {
+// Cache des avatars décodés. L'URL Discord contient le hachage de l'image : une même URL ne change jamais.
+// Borné à AVATAR_CACHE_MAX entrées (~256 Ko par avatar 256 px) ; les échecs ne sont pas mis en cache.
+const AVATAR_CACHE_MAX = 100;
+const avatarCache = new Map(); // url -> Promise<Image | null>
+
+function fetchAvatar(url) {
+  const hit = avatarCache.get(url);
+  if (hit) {
+    avatarCache.delete(url); // remonte en tête (LRU)
+    avatarCache.set(url, hit);
+    return hit;
+  }
+  const pending = downloadAvatar(url).then((img) => {
+    if (!img) avatarCache.delete(url);
+    return img;
+  });
+  avatarCache.set(url, pending);
+  if (avatarCache.size > AVATAR_CACHE_MAX) avatarCache.delete(avatarCache.keys().next().value);
+  return pending;
+}
+
+async function downloadAvatar(url) {
   try {
     const res = await fetch(url);
     if (!res.ok) return null;

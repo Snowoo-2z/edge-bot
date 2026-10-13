@@ -35,6 +35,7 @@ const SEND_DELAY_MS = 1500;
 const MAX_EMBEDS_PER_MESSAGE = 10;
 const DB_FLUSH_MS = 5000;
 const DB_BATCH = 500;
+const DB_MAX_BATCHES_PER_TICK = 10; // jusqu'à 5 000 lignes par passage : la file ne prend pas de retard pendant une rafale
 const DB_QUEUE_LIMIT = 10000;
 const BOT_ACTION_TTL_MS = 30_000;
 
@@ -149,16 +150,31 @@ async function flushChannel(channelId) {
   }
 }
 
-async function flushRows() {
-  if (!dbQueue.length) return;
-  const rows = dbQueue.splice(0, DB_BATCH);
-  try {
-    await store.insertLogs(rows);
-  } catch (err) {
-    console.error('[logs] écriture du journal échouée :', err.message);
-    // On garde les lignes pour une nouvelle tentative, sans dépasser la limite.
-    const room = DB_QUEUE_LIMIT - dbQueue.length;
-    if (room > 0) dbQueue.unshift(...rows.slice(0, room));
+let inFlight = null;
+
+// Vide la file par lots successifs ; s'arrête à la première erreur (les lignes restent en file).
+// Un appel pendant un passage en cours attend ce passage (ne retourne pas à vide).
+function flushRows() {
+  if (!inFlight) {
+    inFlight = drainQueue().finally(() => {
+      inFlight = null;
+    });
+  }
+  return inFlight;
+}
+
+async function drainQueue() {
+  for (let i = 0; i < DB_MAX_BATCHES_PER_TICK && dbQueue.length; i++) {
+    const rows = dbQueue.splice(0, DB_BATCH);
+    try {
+      await store.insertLogs(rows);
+    } catch (err) {
+      console.error('[logs] écriture du journal échouée :', err.message);
+      // On garde les lignes pour une nouvelle tentative, sans dépasser la limite.
+      const room = DB_QUEUE_LIMIT - dbQueue.length;
+      if (room > 0) dbQueue.unshift(...rows.slice(0, room));
+      return;
+    }
   }
 }
 

@@ -60,13 +60,18 @@ function updateModuleConfig(guildId, moduleId, cfg) {
 }
 
 function enqueueWrite(key, guildId, moduleId, snapshot) {
-  const previous = writeQueues.get(key) ?? Promise.resolve();
+  // catch() avant then() : une exception réseau ne doit pas rompre la chaîne (les écritures suivantes seraient perdues).
+  const previous = (writeQueues.get(key) ?? Promise.resolve()).catch(() => {});
   const next = previous.then(async () => {
-    const { error } = await supabase.from(TABLE).upsert(
-      { guild_id: guildId, module: moduleId, config: snapshot, updated_at: new Date().toISOString() },
-      { onConflict: 'guild_id,module' },
-    );
-    if (error) console.error(`[store] écriture Supabase échouée (${key}) :`, error.message);
+    try {
+      const { error } = await supabase.from(TABLE).upsert(
+        { guild_id: guildId, module: moduleId, config: snapshot, updated_at: new Date().toISOString() },
+        { onConflict: 'guild_id,module' },
+      );
+      if (error) console.error(`[store] écriture Supabase échouée (${key}) :`, error.message);
+    } catch (err) {
+      console.error(`[store] écriture Supabase échouée (${key}) :`, err.message);
+    }
   });
   writeQueues.set(key, next);
 }
@@ -291,7 +296,23 @@ function listGuildConfigs(guildId) {
 const AI_MEMORY_TABLE = 'edge_ai_memories';
 
 // Notes d'un membre (tableau de chaînes). Vide si aucune.
+// Cache des mémoires IA (une entrée par membre). Mis à jour à chaque écriture de ce processus ; expire après 10 min
+// pour rattraper une modification faite directement dans Supabase.
+const AI_MEMORY_TTL_MS = 10 * 60 * 1000;
+const AI_MEMORY_MAX = 5000;
+const aiMemoryCache = new Map(); // "guildId:userId" -> { notes, at }
+
+function aiMemoryPut(guildId, userId, notes) {
+  const key = `${guildId}:${userId}`;
+  aiMemoryCache.delete(key);
+  aiMemoryCache.set(key, { notes, at: Date.now() });
+  if (aiMemoryCache.size > AI_MEMORY_MAX) aiMemoryCache.delete(aiMemoryCache.keys().next().value);
+}
+
 async function loadAiMemory(guildId, userId) {
+  const key = `${guildId}:${userId}`;
+  const hit = aiMemoryCache.get(key);
+  if (hit && Date.now() - hit.at < AI_MEMORY_TTL_MS) return hit.notes.slice();
   const { data, error } = await supabase
     .from(AI_MEMORY_TABLE)
     .select('notes')
@@ -299,7 +320,9 @@ async function loadAiMemory(guildId, userId) {
     .eq('user_id', userId)
     .maybeSingle();
   if (error) throw new Error(`Lecture Supabase échouée (${AI_MEMORY_TABLE}) : ${error.message}`);
-  return Array.isArray(data?.notes) ? data.notes : [];
+  const notes = Array.isArray(data?.notes) ? data.notes : [];
+  aiMemoryPut(guildId, userId, notes);
+  return notes.slice();
 }
 
 // Remplace les notes d'un membre. Une liste vide efface la ligne.
@@ -308,11 +331,13 @@ async function saveAiMemory(guildId, userId, notes) {
   const row = { guild_id: guildId, user_id: userId, notes, updated_at: new Date().toISOString() };
   const { error } = await supabase.from(AI_MEMORY_TABLE).upsert(row, { onConflict: 'guild_id,user_id' });
   if (error) throw new Error(`Écriture Supabase échouée (${AI_MEMORY_TABLE}) : ${error.message}`);
+  aiMemoryPut(guildId, userId, notes.slice());
 }
 
 async function deleteAiMemory(guildId, userId) {
   const { error } = await supabase.from(AI_MEMORY_TABLE).delete().eq('guild_id', guildId).eq('user_id', userId);
   if (error) throw new Error(`Suppression Supabase échouée (${AI_MEMORY_TABLE}) : ${error.message}`);
+  aiMemoryCache.delete(`${guildId}:${userId}`);
 }
 
 // Toutes les mémoires d'un serveur : [{ user_id, notes, updated_at }], les plus récentes d'abord.
