@@ -80,6 +80,12 @@ const MODULE_LIST = [
     description: 'Sauvegarde quotidienne (création et restauration depuis le tableau de bord)',
   },
   {
+    id: 'agent',
+    label: 'Agent IA (serveur)',
+    emoji: '🧠',
+    description: 'Un agent qui lit, crée et modifie le serveur selon ton objectif (/agent), avec validation du plan',
+  },
+  {
     id: 'moderation',
     label: 'Modération',
     emoji: '🛡️',

@@ -13,6 +13,7 @@ const moderation = require('./modules/moderation');
 const { registerLogEvents } = require('./log-events');
 const reactionRoles = require('./modules/reaction-roles');
 const security = require('./modules/security');
+const agent = require('./modules/agent');
 const backups = require('./backup');
 const { handleServerCommand } = require('./server-info');
 const { buildModerationCommands } = require('./moderation-commands');
@@ -160,6 +161,7 @@ async function handleInteraction(interaction) {
       if (interaction.commandName === 'giveaway') return await giveaways.handleCommand(interaction);
       if (['play', 'daily', 'profile', 'rob'].includes(interaction.commandName)) return await economy.handleCommand(interaction);
       if (interaction.commandName === 'server') return await handleServerCommand(interaction);
+      if (interaction.commandName === 'agent') return await agent.handleCommand(interaction);
       if (MODERATION_COMMANDS.has(interaction.commandName)) return await moderation.handleCommand(interaction);
       return;
     }
@@ -170,6 +172,7 @@ async function handleInteraction(interaction) {
     if (id.startsWith('suggest:')) return await suggestions.handleInteraction(interaction);
     if (id.startsWith('giveaway:')) return await giveaways.handleInteraction(interaction);
     if (id.startsWith('eco:')) return await economy.handleInteraction(interaction);
+    if (id.startsWith('agent:')) return await agent.handleInteraction(interaction);
   } catch (err) {
     console.error('Erreur interaction :', err);
     const payload = ephemeralPayload('❌ Une erreur est survenue.');

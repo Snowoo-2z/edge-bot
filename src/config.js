@@ -14,6 +14,7 @@ const moderation = require('./modules/moderation');
 const reactionRoles = require('./modules/reaction-roles');
 const ai = require('./modules/ai');
 const security = require('./modules/security');
+const agent = require('./modules/agent');
 const backups = require('./backup');
 
 // Modules réellement implémentés (id -> module).
@@ -29,6 +30,7 @@ const MODULES = {
   [logs.ID]: logs,
   [moderation.ID]: moderation,
   [ai.ID]: ai,
+  [agent.ID]: agent,
   [reactionRoles.ID]: reactionRoles,
   [security.ID]: security,
   [backups.ID]: backups,

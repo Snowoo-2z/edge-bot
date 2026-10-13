@@ -90,6 +90,19 @@ const commands = [
     )
     .setDMPermission(false)
     .toJSON(),
+  new SlashCommandBuilder()
+    .setName('agent')
+    .setDescription('Lance l’agent IA qui lit, crée et modifie le serveur selon ton objectif')
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .setDMPermission(false)
+    .addStringOption((option) =>
+      option
+        .setName('objectif')
+        .setDescription('Ce que l’agent doit faire, ex. : créer une section Annonces et une section Discussion')
+        .setRequired(true)
+        .setMaxLength(1000),
+    )
+    .toJSON(),
   buildServerCommand(),
   ...buildModerationCommands(),
 ];

@@ -218,6 +218,19 @@ un rôle, publier, supprimer). Un panneau est un message du bot (embed violet) a
 - Permissions : Bannir des membres, Gérer les rôles, Gérer les salons, Gérer le serveur (verrouillage), Voir le journal d'audit.
 - Intents : **Server Members** (privilégié, déjà requis) et **Guild Moderation**.
 
+## Agent IA (serveur)
+
+Un agent qui **lit, crée et modifie le serveur** selon un objectif donné en une phrase.
+
+- **Lancer** : `/agent objectif:…` (administrateurs). Exemple : *« Crée une section Communauté avec #discussion et #memes, réservée à @Membres »*.
+- **Préparation** (si *Validation* est ON, recommandé) : l'agent inspecte le serveur en **lecture seule**, puis publie son **plan** dans le salon de suivi, avec les boutons ✅ *Lancer* / ✖️ *Annuler*. Rien n'est modifié avant ton clic.
+- **Suivi** : chaque action est un **message séparé** dans le salon de suivi (`1/12 ✅ Créer le salon texte #discussion — salon créé : …`), puis un résumé final. Les erreurs Discord (permissions, hiérarchie des rôles) apparaissent telles quelles.
+- **Outils** : lire les salons, rôles et messages · créer catégories, salons et rôles (sans permissions particulières) · modifier salons et accès par rôle · envoyer des messages (sans mention de masse) · supprimer salons et rôles.
+- **Garde-fous** : les identifiants doivent exister dans le serveur (pas d'invention) ; **toute suppression demande une confirmation** d'un administrateur (délai de 3 min) ; le salon de suivi ne peut pas être supprimé ; au plus 40 actions modifiantes par exécution ; les rôles créés n'ont aucune permission ; le contenu des membres est traité comme donnée, jamais comme instruction.
+- **Réglages** (`/config` → 🧠 Agent IA) : module ON/OFF, validation du plan, nombre d'étapes (5 à 25), modèle Mistral, salon de suivi, outils activés. *Supprimer* est désactivé par défaut.
+
+Un seul agent tourne à la fois par serveur. Il nécessite `MISTRAL_API_KEY` et les permissions du bot correspondant aux outils activés (gérer les salons, gérer les rôles, envoyer des messages).
+
 ## Sauvegardes
 
 Module **Sauvegardes** dans `/config` (activation de la sauvegarde quotidienne) ; **création et restauration se font
@@ -544,6 +557,9 @@ src/
   modules/moderation.js module Modération (rôles par commande, actions, avertissements)
   modules/reaction-roles.js module Rôles par réaction (panneaux, ajout et retrait de rôles)
   modules/security.js   module Sécurité (anti-raid, anti-nuke, liste blanche, alertes)
+  modules/agent.js      module Agent IA (serveur) : configuration, /agent, boutons de validation
+  agent/tools.js        outils de l'agent (lire, créer, modifier, envoyer, supprimer) et garde-fous
+  agent/engine.js       boucle de l'agent : phase de plan, exécution, trace par message
   backup.js             sauvegardes : capture, restauration non destructive, quotidienne, rétention 7
   server-info.js        commande /server
   audit.js              lecture du journal d'audit (logs et sécurité)
