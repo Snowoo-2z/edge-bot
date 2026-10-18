@@ -629,6 +629,24 @@ test('rôle déjà existant : refusé, pas recréé', async () => {
   assert.equal([...h.guild.roles.cache.values()].filter((r) => r.name.toLowerCase() === 'membre').length, 1);
 });
 
+test('plan : une étape hors de portée n’est jamais présentée comme faite', async () => {
+  const h = harness();
+  const plan =
+    '1. Créer le salon #bannissement.\n' +
+    '2. ⚠️ Hors de portée de l’agent : donner la permission « Bannir des membres » à Admin (via /config → Modération).';
+  const script = scriptedChat([
+    reply('', call('p', 'submit_plan', { plan })),
+    reply('', call('c', 'create_text_channel', { name: 'bannissement' })),
+    reply('Salon créé. Le reste se fait à la main.'),
+  ]);
+  const res = await runAgent({ guild: h.guild, goal: 'bans', cfg: { ...CFG, approval: true }, traceChannelId: TRACE, say: h.say, confirm: h.confirm, chat: script.chat });
+  assert.equal(res.status, 'done');
+  assert.equal(res.skipped, 1);
+  const last = h.said.at(-1);
+  assert.ok(last.includes('Non fait par l’agent'), 'étape non faite signalée');
+  assert.ok(last.includes('Bannir des membres'), 'marche à suivre affichée');
+});
+
 test('moteur : préparation en mode « any », exécution en mode « auto »', async () => {
   const h = harness();
   const modes = [];

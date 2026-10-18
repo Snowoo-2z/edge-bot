@@ -56,7 +56,10 @@ function systemFor({ serverName, planning, plan }) {
     return (
       `${head} Phase de préparation : tu ne modifies RIEN. Inspecte le serveur avec les outils de lecture, ` +
       `puis appelle obligatoirement ${PLAN_TOOL} avec un plan concret : étapes courtes et numérotées, en français clair, ` +
-      `sans identifiants. Ne pose pas de question, propose. ${PALETTE}`
+      `sans identifiants. Ne propose que des actions faisables avec tes outils. Si l’objectif demande autre chose ` +
+      `(permissions Discord d’un rôle, réglages de modules, bannissements…), ajoute une ligne commençant par ` +
+      `« ⚠️ Hors de portée de l’agent : » qui explique la marche à suivre à la main (ex. /config). ` +
+      `Ne pose pas de question, propose. ${PALETTE}`
     );
   }
   const planText = plan ? `\n\nPlan validé par un administrateur à suivre :\n${plan}` : '';
@@ -105,8 +108,17 @@ async function loop({ phase, messages, tools, maxTurns, model, chat, run, say, a
 
 // Message de fin : titre, puis le résumé des actions réalisées, puis la phrase de conclusion du modèle.
 const shorten = (s, max) => (s.length > max ? `${s.slice(0, max - 1)}…` : s);
-const report = (head, log, closing = '') =>
-  [head, ...summarize(log), shorten(cleanText(closing), CLOSING_MAX)].filter(Boolean).join('\n');
+const report = (head, log, closing = '', notes = []) =>
+  [head, ...summarize(log), ...notes, shorten(cleanText(closing), CLOSING_MAX)].filter(Boolean).join('\n');
+
+// Étapes du plan que l'agent ne peut pas réaliser (signalées par « ⚠️ Hors de portée »).
+const OUT_OF_SCOPE = /⚠️|hors de portée/i;
+function outOfScopeLines(plan = '') {
+  return plan
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => OUT_OF_SCOPE.test(l));
+}
 
 // Lance un agent sur le serveur.
 // opts : { guild, goal, cfg, traceChannelId, serverName, say(text), confirm({text,yes,no,timeoutMs}), chat }
@@ -214,8 +226,13 @@ async function runAgent(opts) {
       actions === 0
         ? '🏁 **Terminé** · aucune modification (lecture seule)'
         : `🏁 **Terminé** · ${actions} action(s)${planned ? ' · selon le plan validé' : ''}`;
-    await say(report(head, ctx.log, result.text));
-    return { status: 'done', actions, text: result.text };
+    // Étapes hors de portée : jamais présentées comme faites.
+    const skipped = outOfScopeLines(plan ?? '');
+    const notes = skipped.length
+      ? ['⚠️ **Non fait par l’agent** (hors de portée, à faire à la main) :', ...skipped]
+      : [];
+    await say(report(head, ctx.log, result.text, notes));
+    return { status: 'done', actions, text: result.text, skipped: skipped.length };
   } catch (err) {
     await say(report(`❌ L’agent s’est arrêté : ${cleanText(err?.message ?? err)}`, ctx.log));
     return { status: 'error', actions: ctx.log.length };
