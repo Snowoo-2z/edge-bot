@@ -466,7 +466,7 @@ npm start
    |---|---|---|
    | `DISCORD_TOKEN` | oui | token du bot Discord |
    | `CLIENT_ID` (ou `DISCORD_CLIENT_ID`) | oui | Application ID de Discord |
-   | `GUILD_IDS` | non | ID des serveurs, séparés par des virgules (commandes disponibles immédiatement sur chacun). Sans elle : enregistrement global, visible partout sous ~1 h. `GUILD_ID` (un seul serveur) reste accepté. |
+   | `GUILD_IDS` | non | ID des serveurs supplémentaires, séparés par des virgules. Le serveur `1546113304932655224` est inscrit dans le code (`src/guild-ids.js`) et n'a pas besoin de figurer ici. Le bot enregistre ses commandes sur chaque serveur de la liste à son démarrage, et `npm run deploy` le fait aussi. `GUILD_ID` (un seul serveur) reste accepté. |
    | `SUPABASE_URL` | oui | URL du projet Supabase |
    | `SUPABASE_SERVICE_ROLE_KEY` | oui | clé service_role Supabase |
    | `DASHBOARD_PASSWORD` | non | mot de passe du tableau de bord web (12 caractères minimum ; sans cette variable, `/dashboard` est désactivé) |

@@ -6,16 +6,11 @@ const { REST, Routes, SlashCommandBuilder, PermissionFlagsBits, ChannelType } = 
 const { buildModerationCommands } = require('./moderation-commands');
 const { buildServerCommand } = require('./server-info');
 
-const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
-// Accepte CLIENT_ID ou DISCORD_CLIENT_ID (les deux noms sont courants).
-const CLIENT_ID = process.env.CLIENT_ID || process.env.DISCORD_CLIENT_ID;
 const { parseGuildIds } = require('./guild-ids');
-if (!DISCORD_TOKEN || !CLIENT_ID) {
-  console.error("DISCORD_TOKEN et CLIENT_ID sont requis (variables d'environnement).");
-  process.exit(1);
-}
 
-const commands = [
+// Liste des commandes (utilisée par `npm run deploy` et par le bot au démarrage).
+function buildCommands() {
+  return [
   new SlashCommandBuilder()
     .setName('config')
     .setDescription('Ouvre le panneau de configuration Edge')
@@ -105,21 +100,34 @@ const commands = [
     )
     .toJSON(),
   buildServerCommand(),
-  ...buildModerationCommands(),
-];
+    ...buildModerationCommands(),
+  ];
+}
 
-(async () => {
-  const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
-  const guildIds = parseGuildIds();
-  const routes = guildIds.length
-    ? guildIds.map((id) => Routes.applicationGuildCommands(CLIENT_ID, id))
-    : [Routes.applicationCommands(CLIENT_ID)];
-  for (const route of routes) {
-    await rest.put(route, { body: commands });
-  }
-  const where = guildIds.length ? `sur ${guildIds.length} serveur(s) : ${guildIds.join(', ')}` : 'globalement';
-  console.log(`${commands.length} commandes enregistrées ${where} (config, level, leaderboard, suggestion, giveaway, play, daily, profile, rob, server, ban, unban, kick, timeout, untimeout, warn, warnings, unwarn, purge, slowmode).`);
-})().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+// Exécution directe (npm run deploy) uniquement.
+if (require.main === module) {
+  (async () => {
+    const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
+    // Accepte CLIENT_ID ou DISCORD_CLIENT_ID (les deux noms sont courants).
+    const CLIENT_ID = process.env.CLIENT_ID || process.env.DISCORD_CLIENT_ID;
+    if (!DISCORD_TOKEN || !CLIENT_ID) {
+      throw new Error("DISCORD_TOKEN et CLIENT_ID sont requis (variables d'environnement).");
+    }
+    const commands = buildCommands();
+    const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
+    const guildIds = parseGuildIds();
+    const routes = guildIds.length
+      ? guildIds.map((id) => Routes.applicationGuildCommands(CLIENT_ID, id))
+      : [Routes.applicationCommands(CLIENT_ID)];
+    for (const route of routes) {
+      await rest.put(route, { body: commands });
+    }
+    const where = guildIds.length ? `sur ${guildIds.length} serveur(s) : ${guildIds.join(', ')}` : 'globalement';
+    console.log(`${commands.length} commandes enregistrées ${where} (config, level, leaderboard, suggestion, giveaway, play, daily, profile, rob, server, ban, unban, kick, timeout, untimeout, warn, warnings, unwarn, purge, slowmode).`);
+  })().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}
+
+module.exports = { buildCommands };

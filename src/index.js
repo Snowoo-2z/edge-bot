@@ -1,4 +1,5 @@
-const { Client, GatewayIntentBits, Events, Partials, RESTEvents, Options } = require('discord.js');
+const { Client, GatewayIntentBits, Events, Partials, RESTEvents, Options, Routes } = require('discord.js');
+const { parseGuildIds } = require('./guild-ids');
 const { handleConfigCommand, handleConfigInteraction } = require('./config');
 const ticket = require('./modules/ticket');
 const welcome = require('./modules/welcome');
@@ -226,6 +227,28 @@ async function probeDiscord() {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// Enregistre les commandes slash sur chaque serveur de la liste (serveurs intégrés + GUILD_IDS).
+// Idempotent : si les commandes sont déjà là, Discord ne change rien.
+async function syncGuildCommands(client) {
+  let guildIds;
+  try {
+    guildIds = parseGuildIds();
+  } catch (error) {
+    console.error('[commandes] Liste de serveurs invalide :', error.message);
+    return;
+  }
+  const { buildCommands } = require('./deploy-commands');
+  const body = buildCommands();
+  for (const guildId of guildIds) {
+    try {
+      await client.rest.put(Routes.applicationGuildCommands(client.user.id, guildId), { body });
+      console.log(`[commandes] ${body.length} commandes enregistrées sur le serveur ${guildId}.`);
+    } catch (error) {
+      console.error(`[commandes] Échec sur le serveur ${guildId} :`, error.message);
+    }
+  }
+}
+
 // Essaie de se connecter à Discord, avec un client neuf à chaque tentative et une pause qui s'allonge.
 async function connectWithRetry() {
   let pauseMs = RETRY_MIN_MS;
@@ -236,6 +259,7 @@ async function connectWithRetry() {
     const readyP = new Promise((resolve) => {
       client.once(Events.ClientReady, (c) => {
         console.log(`Edge connecté en tant que ${c.user.tag} (tentative n°${attempt}).`);
+        syncGuildCommands(c);
         resolve('ready');
       });
     });
