@@ -20,7 +20,8 @@ function isConfigured() {
 
 // messages : [{ role, content, ... }] (conversation complète). tools : outils proposés au modèle (facultatif).
 // Renvoie { text, toolCalls } : le texte (peut être vide si le modèle appelle un outil) et les appels demandés.
-async function chat({ model, messages, tools, temperature = 0.5, maxTokens = 400 }) {
+// toolChoice : 'auto' (le modèle peut répondre sans outil), 'any' (il doit appeler un outil), 'none'.
+async function chat({ model, messages, tools, temperature = 0.5, maxTokens = 400, toolChoice = 'auto' }) {
   const key = apiKey();
   if (!key) {
     throw new AiError('Clé MISTRAL_API_KEY absente : ajoute-la aux variables d’environnement de l’hébergeur.', 'no_key');
@@ -30,7 +31,7 @@ async function chat({ model, messages, tools, temperature = 0.5, maxTokens = 400
   const body = { model, messages, temperature, max_tokens: maxTokens };
   if (tools?.length) {
     body.tools = tools;
-    body.tool_choice = 'auto';
+    body.tool_choice = toolChoice;
   }
   let res;
   try {

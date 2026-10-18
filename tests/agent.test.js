@@ -552,3 +552,92 @@ test('trace : lectures silencieuses, échecs visibles sans identifiant', async (
   assert.ok(h.said.every((s) => !s.includes('💭') && !/\b\d+\/\d+\b/.test(s)), 'pas de narration ni de compteur');
 });
 
+
+// ---------------------------------------------------------------------------
+// Plan structuré obligatoire, relance si le modèle répond en texte, pas de « Terminé » sans action
+// ---------------------------------------------------------------------------
+
+test('plan : un texte libre n’est jamais présenté comme plan ; le modèle est relancé vers submit_plan', async () => {
+  const h = harness();
+  const script = scriptedChat([
+    reply('Voici une palette élégante, souhaitez-vous la créer ?'),
+    reply('', call('p', 'submit_plan', { plan: '1. Créer le rôle Fondateur.' })),
+    reply('', call('r', 'create_role', { name: 'Fondateur', color: '#6D28D9' })),
+    reply('Rôles en place.'),
+  ]);
+  const res = await runAgent({ guild: h.guild, goal: 'palette', cfg: { ...CFG, approval: true }, traceChannelId: TRACE, say: h.say, confirm: h.confirm, chat: script.chat });
+  assert.equal(res.status, 'done');
+  assert.ok(h.said.some((s) => s.includes('1. Créer le rôle Fondateur.')), 'le plan soumis est affiché');
+  assert.ok(!h.said.some((s) => s.includes('souhaitez-vous')), 'le texte libre n’est pas affiché comme plan');
+  assert.ok(h.said.some((s) => s === '✅ Rôle créé : Fondateur'));
+});
+
+test('plan : sans submit_plan après les relances, rien n’est proposé ni exécuté', async () => {
+  const h = harness();
+  const script = scriptedChat([
+    reply('Je propose une palette.'),
+    reply('Souhaitez-vous la créer ?'),
+    reply('Dites-moi comment procéder.'),
+  ]);
+  const res = await runAgent({ guild: h.guild, goal: 'palette', cfg: { ...CFG, approval: true }, traceChannelId: TRACE, say: h.say, confirm: h.confirm, chat: script.chat });
+  assert.equal(res.status, 'error');
+  assert.equal(res.actions, 0);
+  assert.ok(h.said.some((s) => s.includes('pas réussi à présenter un plan')));
+  assert.ok(!h.said.some((s) => s.includes('📋 Plan proposé')), 'aucun plan proposé');
+  assert.equal(h.confirms.length, 0, 'aucune demande de validation');
+});
+
+test('exécution : plan validé mais réponse en texte seule → relance, puis exécution réelle', async () => {
+  const h = harness();
+  const script = scriptedChat([
+    reply('', call('p', 'submit_plan', { plan: '1. Créer le rôle Admin.' })),
+    reply('Voici la palette, souhaitez-vous la créer ?'),
+    reply('', call('r', 'create_role', { name: 'Admin', color: '#8B5CF6' })),
+    reply('Rôle Admin créé.'),
+  ]);
+  const res = await runAgent({ guild: h.guild, goal: 'palette', cfg: { ...CFG, approval: true }, traceChannelId: TRACE, say: h.say, confirm: h.confirm, chat: script.chat });
+  assert.equal(res.status, 'done');
+  assert.equal(res.actions, 1);
+  assert.ok(h.said.at(-1).includes('Terminé'));
+  assert.ok(h.said.some((s) => s === '✅ Rôle créé : Admin'));
+});
+
+test('exécution : plan validé, aucune action après les relances → « incomplete », jamais « Terminé »', async () => {
+  const h = harness();
+  const script = scriptedChat([
+    reply('', call('p', 'submit_plan', { plan: '1. Créer les rôles.' })),
+    reply('Voici la palette, souhaitez-vous la créer ?'),
+    reply('Dites-moi si je continue.'),
+    reply('Je reste à votre disposition.'),
+  ]);
+  const res = await runAgent({ guild: h.guild, goal: 'palette', cfg: { ...CFG, approval: true }, traceChannelId: TRACE, say: h.say, confirm: h.confirm, chat: script.chat });
+  assert.equal(res.status, 'incomplete');
+  assert.equal(res.actions, 0);
+  assert.ok(h.said.at(-1).includes('aucune action réalisée'));
+  assert.ok(!h.said.some((s) => s.includes('Terminé')), 'pas de « Terminé » sans action');
+  assert.ok(!h.said.some((s) => s.includes('souhaitez-vous')), 'la proposition du modèle n’est pas affichée comme résultat');
+});
+
+test('rôle déjà existant : refusé, pas recréé', async () => {
+  const h = harness();
+  h.guild.roles.cache.set('830000000000000777', { id: '830000000000000777', name: 'Membre', position: 1, managed: false, hexColor: '#206694' });
+  const ctx = { guild: h.guild, traceChannelId: TRACE, budget: { actions: 0 }, confirm: async () => true };
+  const allowed = tools.allowedNames(CFG.categories);
+  const dup = await tools.execute('create_role', { name: 'membre' }, ctx, allowed);
+  assert.equal(dup.ok, false);
+  assert.ok(dup.text.includes('existe déjà'));
+  assert.equal([...h.guild.roles.cache.values()].filter((r) => r.name.toLowerCase() === 'membre').length, 1);
+});
+
+test('moteur : préparation en mode « any », exécution en mode « auto »', async () => {
+  const h = harness();
+  const modes = [];
+  const chat = async (opts) => {
+    modes.push(opts.toolChoice);
+    if (modes.length === 1) return reply('', call('p', 'submit_plan', { plan: '1. Rien.' }));
+    return reply('Fini.');
+  };
+  await runAgent({ guild: h.guild, goal: 'x', cfg: { ...CFG, approval: true }, traceChannelId: TRACE, say: h.say, confirm: h.confirm, chat });
+  assert.equal(modes[0], 'any', 'préparation : un outil doit être appelé');
+  assert.ok(modes.slice(1).every((m) => m === 'auto'), 'exécution : réponse libre permise');
+});

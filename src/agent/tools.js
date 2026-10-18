@@ -451,6 +451,9 @@ async function createCategory(guild, args) {
 async function createRole(guild, args) {
   const name = clip(String(args.name ?? '').trim(), 100);
   if (!name) return fail('nom vide.');
+  // Pas de doublon : un rôle déjà présent (même nom) est signalé, il n'est pas recréé.
+  const existing = [...guild.roles.cache.values()].find((r) => r.name.toLowerCase() === name.toLowerCase());
+  if (existing) return fail(`un rôle nommé « ${existing.name} » existe déjà (id ${existing.id}) : il n’est pas recréé.`);
   let color;
   if (args.color !== undefined) {
     if (!HEX_COLOR.test(String(args.color))) return fail('couleur invalide (format #RRGGBB).');
