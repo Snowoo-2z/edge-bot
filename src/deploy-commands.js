@@ -1,5 +1,6 @@
-// Enregistre la commande /config auprès de Discord.
-// - Si GUILD_ID est défini : enregistrement instantané sur ce serveur (idéal pour tester).
+// Enregistre les commandes auprès de Discord.
+// - Si GUILD_IDS (ou GUILD_ID) est défini : enregistrement instantané sur chacun de ces serveurs
+//   (ex. GUILD_IDS=111…,222…). Tous les serveurs listés reçoivent les mêmes commandes.
 // - Sinon : enregistrement global (peut prendre jusqu'à 1 h à apparaître).
 const { REST, Routes, SlashCommandBuilder, PermissionFlagsBits, ChannelType } = require('discord.js');
 const { buildModerationCommands } = require('./moderation-commands');
@@ -8,7 +9,7 @@ const { buildServerCommand } = require('./server-info');
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 // Accepte CLIENT_ID ou DISCORD_CLIENT_ID (les deux noms sont courants).
 const CLIENT_ID = process.env.CLIENT_ID || process.env.DISCORD_CLIENT_ID;
-const GUILD_ID = process.env.GUILD_ID;
+const { parseGuildIds } = require('./guild-ids');
 if (!DISCORD_TOKEN || !CLIENT_ID) {
   console.error("DISCORD_TOKEN et CLIENT_ID sont requis (variables d'environnement).");
   process.exit(1);
@@ -109,11 +110,15 @@ const commands = [
 
 (async () => {
   const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
-  const route = GUILD_ID
-    ? Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID)
-    : Routes.applicationCommands(CLIENT_ID);
-  await rest.put(route, { body: commands });
-  console.log(`${commands.length} commandes enregistrées ${GUILD_ID ? `sur le serveur ${GUILD_ID}` : 'globalement'} (config, level, leaderboard, suggestion, giveaway, play, daily, profile, rob, server, ban, unban, kick, timeout, untimeout, warn, warnings, unwarn, purge, slowmode).`);
+  const guildIds = parseGuildIds();
+  const routes = guildIds.length
+    ? guildIds.map((id) => Routes.applicationGuildCommands(CLIENT_ID, id))
+    : [Routes.applicationCommands(CLIENT_ID)];
+  for (const route of routes) {
+    await rest.put(route, { body: commands });
+  }
+  const where = guildIds.length ? `sur ${guildIds.length} serveur(s) : ${guildIds.join(', ')}` : 'globalement';
+  console.log(`${commands.length} commandes enregistrées ${where} (config, level, leaderboard, suggestion, giveaway, play, daily, profile, rob, server, ban, unban, kick, timeout, untimeout, warn, warnings, unwarn, purge, slowmode).`);
 })().catch((err) => {
   console.error(err);
   process.exit(1);
