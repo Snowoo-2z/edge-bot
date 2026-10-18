@@ -194,8 +194,8 @@ const SCHEMAS = {
   ),
   [PLAN_TOOL]: fn(
     'submit_plan',
-    'Termine la phase de préparation : envoie le plan complet, en étapes numérotées, à faire valider.',
-    { plan: str('Plan détaillé en français, étapes numérotées.') },
+    'Termine la phase de préparation : envoie le plan, à faire valider par un administrateur.',
+    { plan: str('Plan en français clair, étapes numérotées et courtes, pour un humain. Pas d’identifiants, pas de noms techniques de permissions : dis ce qui sera créé ou modifié et pour qui.') },
     ['plan'],
   ),
 };
@@ -241,44 +241,54 @@ function clampLimit(v) {
   return Math.min(MAX_READ, Math.max(1, n));
 }
 
-// Phrase lisible pour la trace (une ligne par action dans le salon de suivi).
-function describeCall(name, args = {}) {
-  switch (name) {
-    case 'configure_welcome':
-      return 'Configurer le module Bienvenue';
-    case 'configure_ticket':
-      return args.publish_channel_id
-        ? `Configurer le module Ticket et publier le panneau dans <#${args.publish_channel_id}>`
-        : 'Configurer le module Ticket';
-    case 'list_channels':
-      return 'Lecture des salons';
-    case 'list_roles':
-      return 'Lecture des rôles';
-    case 'read_channel_messages':
-      return `Lecture des messages de <#${args.channel_id}>`;
-    case 'create_category':
-      return `Créer la catégorie « ${clip(args.name, 40)} »`;
-    case 'create_text_channel':
-      return `Créer le salon texte #${channelName(args.name)}`;
-    case 'create_voice_channel':
-      return `Créer le salon vocal « ${clip(args.name, 40)} »`;
-    case 'create_role':
-      return `Créer le rôle « ${clip(args.name, 40)} »`;
-    case 'edit_channel':
-      return `Modifier le salon <#${args.channel_id}>`;
-    case 'set_channel_access':
-      return `Modifier l’accès de <#${args.channel_id}>`;
-    case 'send_message':
-      return `Envoyer un message dans <#${args.channel_id}>`;
-    case 'delete_channel':
-      return `Supprimer le salon ${args.channel_id}`;
-    case 'delete_role':
-      return `Supprimer le rôle ${args.role_id}`;
-    case PLAN_TOOL:
-      return 'Plan soumis';
-    default:
-      return name;
+// Retire identifiants, mentions brutes et jargon de permissions avant tout affichage dans le salon.
+// (Le modèle, lui, reçoit les identifiants complets : il en a besoin pour travailler.)
+// Termes techniques de permissions, avec leur valeur éventuelle (« ViewChannel: allow »).
+const TECH_TERMS =
+  /\b(ViewChannel|SendMessages|ManageRoles|ManageChannels|ManageMessages|EmbedLinks|AttachFiles|ReadMessageHistory|Administrator|permissionOverwrites?|PermissionFlagsBits)\b(\s*:\s*(allow|deny|default|true|false))?/g;
+function cleanText(raw) {
+  return String(raw ?? '')
+    .replace(/<[#@&!]*\d{17,20}>/g, '')
+    .replace(/\(\s*(?:id\s*:?\s*)?\d{17,20}\s*\)/gi, '')
+    .replace(/\b(?:id\s*:?\s*)?\d{17,20}\b/gi, '')
+    .replace(TECH_TERMS, '')
+    .replace(/ {2,}/g, ' ')
+    .replace(/ +([,.;:!?])/g, '$1')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+// Ligne de trace pour un résultat d'outil. Les lectures ne sont pas affichées (sauf en cas d'échec d'une action).
+function traceLine(name, res) {
+  if (res.ok) return res.line ? `✅ ${res.line}` : null;
+  if (CATEGORY_OF[name] === 'read') return null;
+  return `⚠️ ${clip(cleanText(res.text), 200)}`;
+}
+
+// Résumé final : une ligne par type d'action réalisée, avec les noms (pas les identifiants).
+const SUMMARY_KINDS = [
+  ['category', 'Catégories créées'],
+  ['channel', 'Salons texte créés'],
+  ['voice', 'Salons vocaux créés'],
+  ['role', 'Rôles créés'],
+  ['edit', 'Salons modifiés'],
+  ['access', 'Accès ajustés'],
+  ['message', 'Messages envoyés'],
+  ['module', 'Modules configurés'],
+  ['delete', 'Suppressions'],
+];
+const SUMMARY_MAX_ITEMS = 12;
+
+function summarize(log = []) {
+  const lines = [];
+  for (const [kind, label] of SUMMARY_KINDS) {
+    const items = [...new Set(log.filter((e) => e.kind === kind).map((e) => e.item))];
+    if (!items.length) continue;
+    const shown = items.slice(0, SUMMARY_MAX_ITEMS).join(', ');
+    const more = items.length > SUMMARY_MAX_ITEMS ? ` (+${items.length - SUMMARY_MAX_ITEMS})` : '';
+    lines.push(`• **${label}** (${items.length}) : ${shown}${more}`);
   }
+  return lines;
 }
 
 // ---------------------------------------------------------------------------
@@ -322,7 +332,11 @@ async function configureWelcome(guild, args) {
   if (!Object.keys(input).length) return fail('rien à modifier.');
   const patch = validate.sanitizeWelcome(guild, input);
   store.updateModuleConfig(guild.id, welcome.ID, { ...current, ...patch });
-  return done(`module Bienvenue mis à jour (${Object.keys(patch).join(', ')}).`);
+  return done(`module Bienvenue mis à jour (${Object.keys(patch).join(', ')}).`, {
+    kind: 'module',
+    item: 'Bienvenue',
+    line: 'Module Bienvenue configuré',
+  });
 }
 
 async function configureTicket(guild, args) {
@@ -356,9 +370,13 @@ async function configureTicket(guild, args) {
     await ticket.publishPanel(guild, next, channel);
     published = ` Panneau publié dans #${channel.name}.`;
   }
-  return done(`module Ticket mis à jour (${Object.keys(patch).join(', ') || 'aucun réglage'}).${published}`);
+  return done(`module Ticket mis à jour (${Object.keys(patch).join(', ') || 'aucun réglage'}).${published}`, {
+    kind: 'module',
+    item: published ? 'Ticket (panneau publié)' : 'Ticket',
+    line: published ? 'Module Ticket configuré, panneau publié' : 'Module Ticket configuré',
+  });
 }
-const done = (text) => ({ ok: true, text });
+const done = (text, extra = {}) => ({ ok: true, text, ...extra });
 
 async function listChannels(guild) {
   const all = [...guild.channels.cache.values()];
@@ -411,14 +429,23 @@ async function createChannel(guild, args, type) {
   const options = { name, type, parent: parent.parent, reason: 'Agent IA' };
   if (type === ChannelType.GuildText && args.topic) options.topic = clip(args.topic, 1024);
   const created = await guild.channels.create(options);
-  return done(`salon créé : #${created.name} (id ${created.id}).`);
+  const voice = type === ChannelType.GuildVoice;
+  return done(`salon créé : #${created.name} (id ${created.id}).`, {
+    kind: voice ? 'voice' : 'channel',
+    item: voice ? created.name : `#${created.name}`,
+    line: voice ? `Salon vocal créé : ${created.name}` : `Salon créé : #${created.name}`,
+  });
 }
 
 async function createCategory(guild, args) {
   const name = clip(String(args.name ?? '').trim(), 100);
   if (!name) return fail('nom vide.');
   const created = await guild.channels.create({ name, type: ChannelType.GuildCategory, reason: 'Agent IA' });
-  return done(`catégorie créée : ${created.name} (id ${created.id}).`);
+  return done(`catégorie créée : ${created.name} (id ${created.id}).`, {
+    kind: 'category',
+    item: created.name,
+    line: `Catégorie créée : ${created.name}`,
+  });
 }
 
 async function createRole(guild, args) {
@@ -436,7 +463,11 @@ async function createRole(guild, args) {
     mentionable: args.mentionable === true,
     reason: 'Agent IA',
   });
-  return done(`rôle créé : ${role.name} (id ${role.id}).`);
+  return done(`rôle créé : ${role.name} (id ${role.id}).`, {
+    kind: 'role',
+    item: role.name,
+    line: `Rôle créé : ${role.name}`,
+  });
 }
 
 async function editChannel(guild, args) {
@@ -457,7 +488,11 @@ async function editChannel(guild, args) {
   }
   if (!Object.keys(options).length) return fail('rien à modifier.');
   await channel.edit({ ...options, reason: 'Agent IA' });
-  return done(`salon #${channel.name} modifié.`);
+  return done(`salon #${channel.name} modifié.`, {
+    kind: 'edit',
+    item: `#${channel.name}`,
+    line: `Salon modifié : #${channel.name}`,
+  });
 }
 
 const ACCESS_VALUE = { allow: true, deny: false, default: null };
@@ -479,7 +514,11 @@ async function setAccess(guild, args) {
   }
   if (!Object.keys(overwrite).length) return fail('indique view et/ou send.');
   await channel.permissionOverwrites.edit(role.id, overwrite, { reason: 'Agent IA' });
-  return done(`accès mis à jour pour @${role.name} dans #${channel.name}.`);
+  return done(`accès mis à jour pour @${role.name} dans #${channel.name}.`, {
+    kind: 'access',
+    item: `#${channel.name}`,
+    line: `Accès ajusté dans #${channel.name} (${role.name})`,
+  });
 }
 
 async function sendMessage(guild, args) {
@@ -488,7 +527,11 @@ async function sendMessage(guild, args) {
   const content = String(args.content ?? '').trim();
   if (!content) return fail('message vide.');
   const sent = await channel.send({ content: clip(content, MAX_MESSAGE), allowedMentions: { parse: [] } });
-  return done(`message envoyé dans #${channel.name} (id ${sent.id}).`);
+  return done(`message envoyé dans #${channel.name} (id ${sent.id}).`, {
+    kind: 'message',
+    item: `#${channel.name}`,
+    line: `Message envoyé dans #${channel.name}`,
+  });
 }
 
 // Suppressions : confirmation humaine obligatoire.
@@ -503,7 +546,11 @@ async function deleteChannel(guild, args, ctx) {
   });
   if (!ok) return fail('suppression refusée par un administrateur.');
   await channel.delete('Agent IA (confirmé)');
-  return done(`salon ${channel.name} supprimé.`);
+  return done(`salon ${channel.name} supprimé.`, {
+    kind: 'delete',
+    item: `#${channel.name}`,
+    line: `Salon supprimé : #${channel.name}`,
+  });
 }
 
 async function deleteRole(guild, args, ctx) {
@@ -518,7 +565,11 @@ async function deleteRole(guild, args, ctx) {
   });
   if (!ok) return fail('suppression refusée par un administrateur.');
   await role.delete('Agent IA (confirmé)');
-  return done(`rôle ${role.name} supprimé.`);
+  return done(`rôle ${role.name} supprimé.`, {
+    kind: 'delete',
+    item: `@${role.name}`,
+    line: `Rôle supprimé : ${role.name}`,
+  });
 }
 
 // Exécute un appel d'outil. Ne lève jamais : l'erreur est renvoyée au modèle sous forme de texte.
@@ -580,7 +631,9 @@ module.exports = {
   SCHEMAS,
   specsFor,
   allowedNames,
-  describeCall,
+  traceLine,
+  cleanText,
+  summarize,
   execute,
   channelName,
   clampLimit,

@@ -275,10 +275,14 @@ test('exécution directe : chaque action est une ligne de trace, puis un résum�
   const res = await runAgent({ guild: h.guild, goal: 'Créer une section Communauté', cfg: CFG, traceChannelId: TRACE, say: h.say, confirm: h.confirm, chat: script.chat });
   assert.equal(res.status, 'done');
   assert.equal(res.actions, 2);
-  assert.ok(h.said.some((s) => s.includes('Créer la catégorie')), 'trace de la création');
-  assert.ok(h.said.some((s) => s.includes('Lecture des salons')), 'trace de la lecture');
+  assert.ok(h.said.some((s) => s.includes('Catégorie créée : Communauté')), 'trace de la création');
+  assert.ok(!h.said.some((s) => s.includes('Lecture')), 'les lectures ne sont pas affichées');
   assert.ok(h.said.at(-1).includes('Terminé'));
+  const plain = h.said.at(-1).replace(/\*\*/g, '');
+  assert.ok(plain.includes('Catégories créées (1) : Communauté'), 'résumé des actions');
+  assert.ok(plain.includes('Salons texte créés (1) : #discussion'), 'résumé des salons');
   assert.ok(h.said.at(-1).includes('Serveur prêt.'));
+  assert.ok(h.said.every((s) => !/\d{17,20}/.test(s)), 'aucun identifiant dans le salon de suivi');
   assert.ok([...h.guild.channels.cache.values()].some((c) => c.name === 'Communauté'), 'catégorie créée');
   assert.ok([...h.guild.channels.cache.values()].some((c) => c.name === 'discussion'), 'salon créé');
 });
@@ -331,7 +335,7 @@ test('étapes épuisées : statut limit et message explicite', async () => {
   };
   const res = await runAgent({ guild: h.guild, goal: 'boucle', cfg: { ...CFG, maxSteps: 3 }, traceChannelId: TRACE, say: h.say, confirm: h.confirm, chat: forever.chat });
   assert.equal(res.status, 'limit');
-  assert.ok(h.said.some((s) => s.includes('Étapes épuisées (3)')));
+  assert.ok(h.said.some((s) => s.includes('Étapes épuisées') && s.includes('(3)')), 'message de limite');
 });
 
 test('erreur du modèle : statut error, message dans le salon, rien ne plante', async () => {
@@ -506,3 +510,45 @@ test('catégorie « Configurer » : active par défaut, absente de la préparati
   assert.ok(!plan.includes('configure_ticket'), 'pas de modification pendant la préparation');
   assert.ok(agent.cfgOf(G).categories.modules === true);
 });
+
+test('nettoyage : identifiants, mentions et jargon de permissions retirés de l’affichage', () => {
+  const raw = 'Salon <#830000000000000111> (id 830000000000000222) : ViewChannel: deny, rôle <@&830000000000000333>, SendMessages.';
+  const clean = tools.cleanText(raw);
+  assert.ok(!/\d{17,20}/.test(clean), clean);
+  assert.ok(!/ViewChannel|SendMessages|<[#@&]|deny/.test(clean), clean);
+  assert.ok(clean.includes('Salon'));
+});
+
+test('résumé : regroupe les actions par type, sans doublon ni identifiant', () => {
+  const lines = tools.summarize([
+    { kind: 'role', item: 'Fondateur' },
+    { kind: 'role', item: 'Membre' },
+    { kind: 'access', item: '#annonces' },
+    { kind: 'access', item: '#annonces' },
+    { kind: 'module', item: 'Bienvenue' },
+  ]);
+  assert.deepEqual(lines, [
+    '• **Rôles créés** (2) : Fondateur, Membre',
+    '• **Accès ajustés** (1) : #annonces',
+    '• **Modules configurés** (1) : Bienvenue',
+  ]);
+  assert.deepEqual(tools.summarize([]), []);
+});
+
+test('trace : lectures silencieuses, échecs visibles sans identifiant', async () => {
+  const h = harness();
+  const script = scriptedChat([
+    reply('', call('a', 'list_roles', {})),
+    reply('', call('b', 'create_text_channel', { name: 'annonces', category_id: '830000000000009999' })),
+    reply('', call('c', 'create_role', { name: 'Membre' })),
+    reply('Tout est en place.'),
+  ]);
+  const res = await runAgent({ guild: h.guild, goal: 'test', cfg: CFG, traceChannelId: TRACE, say: h.say, confirm: h.confirm, chat: script.chat });
+  assert.equal(res.status, 'done');
+  assert.equal(res.actions, 1, 'un échec ne compte pas comme action réussie');
+  assert.ok(h.said.some((s) => s.startsWith('⚠️') && s.includes('catégorie introuvable')), 'échec affiché');
+  assert.ok(h.said.some((s) => s === '✅ Rôle créé : Membre'), 'création affichée en clair');
+  assert.ok(h.said.every((s) => !/\d{17,20}/.test(s)), 'aucun identifiant dans le salon');
+  assert.ok(h.said.every((s) => !s.includes('💭') && !/\b\d+\/\d+\b/.test(s)), 'pas de narration ni de compteur');
+});
+

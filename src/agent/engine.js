@@ -1,7 +1,9 @@
 // Moteur de l'agent : boucle modèle ↔ outils, phase de plan, trace dans le salon.
 // Ne dépend pas de discord.js pour la logique : le salon, la confirmation et le modèle sont injectés
 // (ce qui permet de tester sans Discord ni Mistral).
-const { CATEGORY_OF, specsFor, allowedNames, describeCall, execute, PLAN_TOOL } = require('./tools');
+// Ce qui part dans le salon reste sobre : une ligne par action réussie (ou échouée), puis un résumé.
+// Pas d'identifiants, pas de détails techniques ; le modèle, lui, garde les identifiants pour travailler.
+const { CATEGORY_OF, specsFor, allowedNames, traceLine, cleanText, summarize, execute, PLAN_TOOL } = require('./tools');
 
 const PLAN_TIMEOUT_MS = 10 * 60 * 1000;
 const DELETE_TIMEOUT_MS = 3 * 60 * 1000;
@@ -30,26 +32,25 @@ const EXEC_RULES =
   'salons en minuscules avec tirets, regroupés par catégorie dont le nom commence par un emoji (ex. 📢 Annonces, 💬 Discussion, 🎫 Support). ' +
   'Textes de bienvenue et de tickets en français, chaleureux et courts. ' +
   'Configure les modules (Bienvenue, Ticket) après avoir créé les salons dont ils ont besoin, en utilisant les identifiants renvoyés par les outils. ' +
-  'Quand tout est fait, termine par un court résumé en français, sans appeler d’outil.';
+  'Quand tout est fait, termine par une seule phrase en français qui résume le résultat, sans identifiant et sans appeler d’outil.';
 
 function systemFor({ serverName, planning, plan }) {
   const head = `Tu es l’agent de configuration du serveur Discord « ${serverName} ». Tu réponds en français.`;
   if (planning) {
     return (
       `${head} Phase de préparation : tu ne modifies RIEN. Inspecte le serveur avec les outils de lecture, ` +
-      `puis appelle ${PLAN_TOOL} avec un plan détaillé et numéroté, pour validation humaine.`
+      `puis appelle ${PLAN_TOOL} avec un plan court et numéroté, en langage courant, pour validation humaine.`
     );
   }
   const planText = plan ? `\n\nPlan validé par un administrateur à suivre :\n${plan}` : '';
   return `${head} ${EXEC_RULES}${planText}`;
 }
 
-// Boucle commune aux deux phases. Chaque appel d'outil produit une ligne dans le salon de suivi.
+// Boucle commune aux deux phases. Chaque appel d'outil publie sa ligne de trace (si elle existe).
 async function loop({ phase, messages, tools, maxTurns, model, chat, run, say, allowed }) {
   for (let turn = 1; turn <= maxTurns; turn++) {
     const { text, toolCalls } = await chat({ model, messages, tools, temperature: 0.3, maxTokens: 700 });
     if (!toolCalls.length) return { done: true, text };
-    if (text) await say(`💭 ${text}`);
     messages.push({ role: 'assistant', content: text || '', tool_calls: toolCalls });
     for (const call of toolCalls) {
       const name = call.function?.name ?? '';
@@ -58,13 +59,15 @@ async function loop({ phase, messages, tools, maxTurns, model, chat, run, say, a
         return { plan: String(args.plan ?? '').trim().slice(0, PLAN_MAX) };
       }
       const res = await run(name, args, allowed);
-      const label = describeCall(name, args);
-      await say(`\`${turn}/${maxTurns}\` ${res.ok ? '✅' : '⚠️'} ${label}${res.text ? ` — ${res.text}` : ''}`);
       messages.push({ role: 'tool', name, tool_call_id: call.id, content: res.text });
+      if (res.line) await say(res.line);
     }
   }
   return { limit: true };
 }
+
+// Message de fin : titre, puis le résumé des actions réalisées, puis la phrase de conclusion du modèle.
+const report = (head, log, closing = '') => [head, ...summarize(log), cleanText(closing)].filter(Boolean).join('\n');
 
 // Lance un agent sur le serveur.
 // opts : { guild, goal, cfg, traceChannelId, serverName, say(text), confirm({text,yes,no,timeoutMs}), chat }
@@ -74,11 +77,18 @@ async function runAgent(opts) {
   const goal = String(opts.goal ?? '').trim().slice(0, GOAL_MAX);
   const serverName = opts.serverName ?? guild.name ?? 'Discord';
   const maxTurns = Math.min(25, Math.max(1, Number(cfg.maxSteps) || 12));
-  const ctx = { guild, traceChannelId, budget: { actions: 0 }, confirm };
+  // log : ce qui a été réellement fait (sert au résumé final).
+  const ctx = { guild, traceChannelId, budget: { actions: 0 }, confirm, log: [] };
 
   const run = async (name, args, allowed) => {
-    if (!allowed.has(name)) return { ok: false, text: `outil non autorisé ici (${name}).` };
-    return execute(name, args, { ...ctx, confirm: (o) => confirm({ timeoutMs: DELETE_TIMEOUT_MS, ...o }) }, allowed);
+    const res = await execute(
+      name,
+      args,
+      { ...ctx, confirm: (o) => confirm({ timeoutMs: DELETE_TIMEOUT_MS, ...o }) },
+      allowed,
+    );
+    if (res.ok && res.kind) ctx.log.push({ kind: res.kind, item: res.item });
+    return { ...res, line: traceLine(name, res) };
   };
 
   try {
@@ -103,7 +113,7 @@ async function runAgent(opts) {
         await say('⛔ L’agent n’a pas réussi à préparer un plan dans le nombre d’étapes prévu.');
         return { status: 'limit', actions: 0 };
       }
-      plan = prep.plan ?? prep.text ?? '';
+      plan = cleanText(prep.plan ?? prep.text ?? '');
       if (!plan) {
         await say('⛔ Plan vide : rien à faire.');
         return { status: 'limit', actions: 0 };
@@ -139,16 +149,23 @@ async function runAgent(opts) {
       run,
       say,
     });
-    const actions = ctx.budget.actions;
+    // Compte les actions réussies (le budget, lui, compte aussi les tentatives).
+    const actions = ctx.log.length;
     if (result.limit) {
-      await say(`⛔ Étapes épuisées (${maxTurns}) avant la fin. ${actions} action(s) faite(s).`);
+      await say(report(`⛔ **Étapes épuisées** (${maxTurns}) avant la fin · ${actions} action(s)`, ctx.log));
       return { status: 'limit', actions };
     }
-    await say(`🏁 **Terminé** · ${actions} action(s)${planned ? ' · selon le plan validé' : ''}.\n${result.text || ''}`.trim());
+    await say(
+      report(
+        `🏁 **Terminé** · ${actions} action(s)${planned ? ' · selon le plan validé' : ''}`,
+        ctx.log,
+        result.text,
+      ),
+    );
     return { status: 'done', actions, text: result.text };
   } catch (err) {
-    await say(`❌ L’agent s’est arrêté : ${err?.message ?? err}`);
-    return { status: 'error', actions: ctx.budget.actions };
+    await say(report(`❌ L’agent s’est arrêté : ${cleanText(err?.message ?? err)}`, ctx.log));
+    return { status: 'error', actions: ctx.log.length };
   }
 }
 
