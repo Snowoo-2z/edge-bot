@@ -6,7 +6,7 @@
 // - le salon de suivi de l'agent ne peut pas être supprimé ;
 // - nombre d'actions modifiantes limité par exécution ;
 // - aucun outil ne crée de rôle avec des permissions : les rôles sont créés sans droits particuliers.
-const { ChannelType } = require('discord.js');
+const { ChannelType, PermissionFlagsBits, PermissionsBitField } = require('discord.js');
 const store = require('../store');
 const validate = require('../dashboard/validate');
 const welcome = require('../modules/welcome');
@@ -22,6 +22,21 @@ const MAX_LIST = 150;
 const RESULT_MAX = 1500;
 
 // Catégorie de chaque outil (les catégories sont activables une à une dans /config).
+// Commandes de modération (mêmes clés que src/modules/moderation.js ; un test vérifie qu'elles correspondent).
+// Le module est chargé à la demande : il dépend de registry.js, qui dépend de l'agent, donc un import direct ferait une boucle.
+const MOD_COMMANDS = ['ban', 'unban', 'kick', 'timeout', 'untimeout', 'warn', 'warnings', 'unwarn', 'purge', 'slowmode'];
+const moderation = () => require('../modules/moderation');
+
+// Droits de rôle que l'agent peut ajouter ou retirer : liste fermée. Jamais l'administrateur, jamais « gérer les rôles ».
+const ROLE_PERMS = {
+  BanMembers: 'Bannir des membres',
+  KickMembers: 'Expulser des membres',
+  ModerateMembers: 'Exclure temporairement (timeout)',
+  ManageMessages: 'Gérer les messages',
+  ManageChannels: 'Gérer les salons',
+  ViewAuditLog: 'Voir le journal d’audit',
+};
+
 const CATEGORY_OF = {
   list_channels: 'read',
   list_roles: 'read',
@@ -35,10 +50,12 @@ const CATEGORY_OF = {
   send_message: 'send',
   configure_welcome: 'modules',
   configure_ticket: 'modules',
+  configure_moderation: 'modules',
+  set_role_permissions: 'permissions',
   delete_channel: 'delete',
   delete_role: 'delete',
 };
-const CATEGORIES = ['read', 'create', 'edit', 'modules', 'send', 'delete'];
+const CATEGORIES = ['read', 'create', 'edit', 'modules', 'send', 'delete', 'permissions'];
 const CATEGORY_LABEL = {
   read: 'Lire',
   create: 'Créer',
@@ -46,6 +63,7 @@ const CATEGORY_LABEL = {
   modules: 'Configurer',
   send: 'Envoyer',
   delete: 'Supprimer',
+  permissions: 'Droits',
 };
 const PLAN_TOOL = 'submit_plan';
 const MUTATING = new Set(Object.keys(CATEGORY_OF).filter((n) => CATEGORY_OF[n] !== 'read'));
@@ -192,6 +210,34 @@ const SCHEMAS = {
     },
     [],
   ),
+  configure_moderation: fn(
+    'configure_moderation',
+    'Configure le module Modération d’Edge : quels rôles peuvent utiliser les commandes de modération (/ban, /kick, /timeout, /warn, /purge…). ' +
+      'Ajoute les rôles indiqués à la liste de chacune des commandes données, sans retirer les autres rôles.',
+    {
+      commands: {
+        type: 'array',
+        minItems: 1,
+        items: { type: 'string', enum: MOD_COMMANDS },
+        description: 'Commandes concernées, ex. ["ban", "unban", "kick"].',
+      },
+      role_ids: { type: 'array', items: { type: 'string' }, description: 'Ids des rôles à autoriser (ids renvoyés par list_roles).' },
+      remove_role_ids: { type: 'array', items: { type: 'string' }, description: 'Ids des rôles à retirer de ces commandes (facultatif).' },
+      enabled: { type: 'boolean', description: 'Activer le module Modération (facultatif).' },
+    },
+    ['commands'],
+  ),
+  set_role_permissions: fn(
+    'set_role_permissions',
+    'Ajoute ou retire des droits d’un rôle, parmi : bannir, expulser, timeout, gérer les messages, gérer les salons, journal d’audit. ' +
+      'Jamais l’administrateur ni la gestion des rôles. Demande toujours la confirmation d’un administrateur.',
+    {
+      role_id: str('Id du rôle (renvoyé par list_roles).'),
+      grant: { type: 'array', items: { type: 'string', enum: Object.keys(ROLE_PERMS) }, description: 'Droits à ajouter.' },
+      revoke: { type: 'array', items: { type: 'string', enum: Object.keys(ROLE_PERMS) }, description: 'Droits à retirer.' },
+    },
+    ['role_id'],
+  ),
   [PLAN_TOOL]: fn(
     'submit_plan',
     'Termine la phase de préparation : envoie le plan, à faire valider par un administrateur.',
@@ -275,6 +321,7 @@ const SUMMARY_KINDS = [
   ['access', 'Accès ajustés'],
   ['message', 'Messages envoyés'],
   ['module', 'Modules configurés'],
+  ['permissions', 'Droits de rôles modifiés'],
   ['delete', 'Suppressions'],
 ];
 const SUMMARY_MAX_ITEMS = 12;
@@ -377,6 +424,79 @@ async function configureTicket(guild, args) {
   });
 }
 const done = (text, extra = {}) => ({ ok: true, text, ...extra });
+
+// Modération : ajoute / retire des rôles autorisés pour les commandes données (liste fusionnée, pas remplacée).
+async function configureModeration(guild, args) {
+  const mod = moderation();
+  const commands = [...new Set(Array.isArray(args.commands) ? args.commands : [])];
+  if (!commands.length) return fail('indique au moins une commande (ex. ban).');
+  const unknown = commands.filter((c) => !mod.COMMAND_KEYS.includes(c));
+  if (unknown.length) return fail(`commande inconnue : ${unknown.join(', ')}.`);
+  const addIds = [...new Set(Array.isArray(args.role_ids) ? args.role_ids : [])];
+  const removeIds = [...new Set(Array.isArray(args.remove_role_ids) ? args.remove_role_ids : [])];
+  if (typeof args.enabled !== 'boolean' && !addIds.length && !removeIds.length) return fail('rien à modifier.');
+  for (const id of [...addIds, ...removeIds]) {
+    if (id === guild.id) return fail('le rôle @everyone ne peut pas être autorisé pour la modération.');
+    if (!resolveRole(guild, id)) return fail(`rôle introuvable (id ${id}).`);
+  }
+  const addNames = addIds.map((id) => resolveRole(guild, id).name);
+  const current = store.getModuleConfig(guild.id, mod.ID, mod.DEFAULTS);
+  const next = { ...current, roles: { ...mod.DEFAULTS.roles, ...(current.roles ?? {}) } };
+  for (const c of commands) {
+    const existing = Array.isArray(next.roles[c]) ? next.roles[c] : [];
+    next.roles[c] = [...new Set([...existing.filter((id) => !removeIds.includes(id)), ...addIds])].slice(0, 25);
+  }
+  if (typeof args.enabled === 'boolean') next.enabled = args.enabled;
+  store.updateModuleConfig(guild.id, mod.ID, next);
+  const cmdLabel = commands.map((c) => `/${c}`).join(', ');
+  const who = addNames.length ? `autorisé : ${addNames.join(', ')}` : 'liste mise à jour';
+  return done(`module Modération mis à jour (${cmdLabel} ; ${who}).`, {
+    kind: 'module',
+    item: 'Modération',
+    line: `Modération : ${cmdLabel}${addNames.length ? ` → ${addNames.join(', ')}` : ''}`,
+  });
+}
+
+// Droits d'un rôle : liste fermée, jamais l'administrateur, toujours confirmé par un administrateur.
+async function setRolePermissions(guild, args, ctx) {
+  const role = resolveRole(guild, args.role_id);
+  if (!role) return fail('rôle introuvable.');
+  if (role.id === guild.id) return fail('le rôle @everyone ne se modifie pas ici.');
+  if (role.managed) return fail('ce rôle est géré par une intégration.');
+  const current = new PermissionsBitField(role.permissions ?? 0n);
+  if (current.has(PermissionFlagsBits.Administrator)) {
+    return fail('rôle administrateur : l’agent ne le modifie jamais.');
+  }
+  const grant = [...new Set(Array.isArray(args.grant) ? args.grant : [])];
+  const revoke = [...new Set(Array.isArray(args.revoke) ? args.revoke : [])];
+  if (!grant.length && !revoke.length) return fail('indique les droits à ajouter ou retirer.');
+  const bad = [...grant, ...revoke].filter((k) => !Object.prototype.hasOwnProperty.call(ROLE_PERMS, k));
+  if (bad.length) return fail(`droit non autorisé pour l’agent : ${bad.join(', ')}.`);
+  if (grant.some((k) => revoke.includes(k))) return fail('un même droit ne peut pas être ajouté et retiré.');
+  const me = guild.members?.me;
+  if (me && role.position >= me.roles.highest.position) {
+    return fail('ce rôle est au-dessus du bot (ou à son niveau) : Discord ne permet pas de le modifier.');
+  }
+  const parts = [
+    ...(grant.length ? [`ajouter : ${grant.map((k) => ROLE_PERMS[k]).join(', ')}`] : []),
+    ...(revoke.length ? [`retirer : ${revoke.map((k) => ROLE_PERMS[k]).join(', ')}`] : []),
+  ];
+  const ok = await ctx.confirm({
+    text: `🔑 L’agent veut modifier les droits du rôle @${role.name} (${parts.join(' ; ')}). Confirmer ?`,
+    yes: 'Appliquer',
+    no: 'Refuser',
+  });
+  if (!ok) return fail('modification refusée par un administrateur.');
+  let next = current;
+  for (const k of grant) next = next.add(PermissionFlagsBits[k]);
+  for (const k of revoke) next = next.remove(PermissionFlagsBits[k]);
+  await role.edit({ permissions: next, reason: 'Agent IA (confirmé)' });
+  return done(`droits du rôle ${role.name} mis à jour.`, {
+    kind: 'permissions',
+    item: `@${role.name}`,
+    line: `Droits mis à jour pour @${role.name}`,
+  });
+}
 
 async function listChannels(guild) {
   const all = [...guild.channels.cache.values()];
@@ -610,6 +730,10 @@ async function execute(name, args, ctx, allowed) {
         return await configureWelcome(guild, args);
       case 'configure_ticket':
         return await configureTicket(guild, args);
+      case 'configure_moderation':
+        return await configureModeration(guild, args);
+      case 'set_role_permissions':
+        return await setRolePermissions(guild, args, ctx);
       case 'delete_channel':
         return await deleteChannel(guild, args, ctx);
       case 'delete_role':
@@ -637,6 +761,8 @@ module.exports = {
   traceLine,
   cleanText,
   summarize,
+  ROLE_PERMS,
+  MOD_COMMANDS,
   execute,
   channelName,
   clampLimit,

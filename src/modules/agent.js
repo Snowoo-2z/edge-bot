@@ -16,7 +16,8 @@ const { runAgent, PLAN_TIMEOUT_MS, DELETE_TIMEOUT_MS } = require('../agent/engin
 
 const ID = 'agent';
 const STEP_CHOICES = [5, 8, 12, 16, 20, 25];
-const DEFAULT_CATEGORIES = { read: true, create: true, edit: true, modules: true, send: true, delete: false };
+// « Droits » (permissions de rôles) est désactivé par défaut : c'est une action sensible, à activer volontairement.
+const DEFAULT_CATEGORIES = { read: true, create: true, edit: true, modules: true, send: true, delete: false, permissions: false };
 
 const DEFAULTS = {
   enabled: false,
@@ -92,7 +93,8 @@ function renderTools(guild) {
     read: 'Lire les salons, rôles et messages (aussi utilisé pour préparer le plan).',
     create: 'Créer catégories, salons texte/vocaux et rôles (sans permissions particulières).',
     edit: 'Modifier salons (nom, sujet, catégorie) et accès des rôles.',
-    modules: 'Régler les modules Bienvenue et Ticket (textes, salon, types de tickets, panneau).',
+    modules: 'Régler les modules Bienvenue, Ticket et Modération (quels rôles peuvent utiliser /ban, /kick…).',
+    permissions: 'Ajouter ou retirer des droits de modération d’un rôle (bannir, expulser, timeout…). Jamais l’administrateur. Chaque changement est confirmé par un administrateur.',
     send: 'Envoyer des messages dans les salons.',
     delete: 'Supprimer salons et rôles. Chaque suppression est confirmée par un administrateur.',
   };

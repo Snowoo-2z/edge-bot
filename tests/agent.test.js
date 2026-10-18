@@ -659,3 +659,86 @@ test('moteur : préparation en mode « any », exécution en mode « auto »', a
   assert.equal(modes[0], 'any', 'préparation : un outil doit être appelé');
   assert.ok(modes.slice(1).every((m) => m === 'auto'), 'exécution : réponse libre permise');
 });
+
+// ---------------------------------------------------------------------------
+// Modération (rôles par commande) et droits de rôle (liste fermée, confirmation)
+// ---------------------------------------------------------------------------
+
+test('modération : liste de commandes identique au module ; catégorie Droits désactivée par défaut', () => {
+  const moderation = require('../src/modules/moderation');
+  assert.deepEqual([...tools.MOD_COMMANDS].sort(), [...moderation.COMMAND_KEYS].sort());
+  assert.equal(agent.DEFAULTS.categories.permissions, false, 'droits : désactivés par défaut');
+  assert.equal(tools.CATEGORY_OF.set_role_permissions, 'permissions');
+});
+
+test('modération : rôles ajoutés aux commandes données, sans effacer les autres rôles', async () => {
+  const moderation = require('../src/modules/moderation');
+  const h = harness();
+  const mk = (id, name) => h.guild.roles.cache.set(id, { id, name, position: 2, managed: false, permissions: 0n });
+  mk('830000000000000601', 'Admin');
+  mk('830000000000000602', 'Modérateur');
+  mk('830000000000000603', 'Ancien');
+  store.updateModuleConfig(G, moderation.ID, { ...moderation.DEFAULTS, roles: { ...moderation.DEFAULTS.roles, ban: ['830000000000000603'] } });
+  const ctx = { guild: h.guild, traceChannelId: TRACE, budget: { actions: 0 }, confirm: async () => true };
+  const allowed = new Set(['configure_moderation']);
+  const ok = await tools.execute('configure_moderation', { commands: ['ban', 'kick'], role_ids: ['830000000000000601', '830000000000000602'] }, ctx, allowed);
+  assert.equal(ok.ok, true, ok.text);
+  const cfg = store.getModuleConfig(G, moderation.ID, moderation.DEFAULTS);
+  assert.deepEqual([...cfg.roles.ban].sort(), ['830000000000000601', '830000000000000602', '830000000000000603'].sort());
+  assert.deepEqual([...cfg.roles.kick].sort(), ['830000000000000601', '830000000000000602'].sort());
+  assert.equal(cfg.roles.unban.length, 0, 'les autres commandes ne changent pas');
+  const unknownCmd = await tools.execute('configure_moderation', { commands: ['nuke'], role_ids: ['830000000000000601'] }, ctx, allowed);
+  assert.equal(unknownCmd.ok, false);
+  const unknownRole = await tools.execute('configure_moderation', { commands: ['ban'], role_ids: ['830000000000000999'] }, ctx, allowed);
+  assert.equal(unknownRole.ok, false, 'rôle inventé refusé');
+  const everyone = await tools.execute('configure_moderation', { commands: ['ban'], role_ids: [G] }, ctx, allowed);
+  assert.equal(everyone.ok, false, '@everyone refusé');
+});
+
+test('droits de rôle : liste fermée, jamais l’administrateur, confirmation obligatoire', async () => {
+  const { PermissionFlagsBits: P, PermissionsBitField } = require('discord.js');
+  const h = harness();
+  const mk = (id, name, permissions) => {
+    const role = { id, name, position: 1, managed: false, permissions };
+    role.edit = async (o) => {
+      role.permissions = o.permissions;
+    };
+    h.guild.roles.cache.set(id, role);
+    return role;
+  };
+  const staff = mk('830000000000000611', 'Staff', 0n);
+  const boss = mk('830000000000000612', 'Boss', new PermissionsBitField(P.Administrator).bitfield);
+  const allowed = new Set(['set_role_permissions']);
+  const ctx = (confirm) => ({ guild: h.guild, traceChannelId: TRACE, budget: { actions: 0 }, confirm });
+
+  const admin = await tools.execute('set_role_permissions', { role_id: boss.id, grant: ['BanMembers'] }, ctx(async () => true), allowed);
+  assert.equal(admin.ok, false, 'rôle administrateur intouchable');
+  const forbidden = await tools.execute('set_role_permissions', { role_id: staff.id, grant: ['ManageRoles'] }, ctx(async () => true), allowed);
+  assert.equal(forbidden.ok, false, 'gestion des rôles refusée');
+  const everyone = await tools.execute('set_role_permissions', { role_id: h.guild.id, grant: ['BanMembers'] }, ctx(async () => true), allowed);
+  assert.equal(everyone.ok, false, '@everyone refusé');
+
+  const refused = await tools.execute('set_role_permissions', { role_id: staff.id, grant: ['BanMembers'] }, ctx(async () => false), allowed);
+  assert.equal(refused.ok, false);
+  assert.equal(staff.permissions, 0n, 'refusé : rien ne change');
+
+  let asked = '';
+  const yes = await tools.execute(
+    'set_role_permissions',
+    { role_id: staff.id, grant: ['BanMembers', 'KickMembers'] },
+    ctx(async (o) => {
+      asked = o.text;
+      return true;
+    }),
+    allowed,
+  );
+  assert.equal(yes.ok, true, yes.text);
+  assert.ok(asked.includes('Staff') && asked.includes('Bannir des membres'), 'la confirmation dit exactement ce qui change');
+  const bits = new PermissionsBitField(staff.permissions);
+  assert.ok(bits.has(P.BanMembers) && bits.has(P.KickMembers));
+  assert.ok(!bits.has(P.Administrator), 'jamais l’administrateur');
+
+  const revoke = await tools.execute('set_role_permissions', { role_id: staff.id, revoke: ['BanMembers'] }, ctx(async () => true), allowed);
+  assert.equal(revoke.ok, true);
+  assert.ok(!new PermissionsBitField(staff.permissions).has(P.BanMembers), 'retrait effectif');
+});
