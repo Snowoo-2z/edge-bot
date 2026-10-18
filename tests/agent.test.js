@@ -424,3 +424,85 @@ test('demande expirée : les boutons ne font plus rien', async () => {
   const res = await agent.handleInteraction({ customId: 'agent:ok:inconnu', reply, memberPermissions: { has: () => true } });
   assert.match(res.embeds[0].data.description, /plus active/);
 });
+
+// ---------------------------------------------------------------------------
+// Réglages des modules Bienvenue et Ticket
+// ---------------------------------------------------------------------------
+
+test('bienvenue : salon, thème et textes validés comme sur le tableau de bord', async () => {
+  const h = harness();
+  const welcomeChannel = h.makeChannel(h.nextId(), 'bienvenue', ChannelType.GuildText);
+  const ctx = { guild: h.guild, traceChannelId: TRACE, budget: { actions: 0 }, confirm: async () => true };
+  const allowed = tools.allowedNames({ modules: true });
+
+  const ok = await tools.execute(
+    'configure_welcome',
+    { enabled: true, channel_id: welcomeChannel.id, theme: 'noel', title: 'Bienvenue {user} !' },
+    ctx,
+    allowed,
+  );
+  assert.equal(ok.ok, true, ok.text);
+  const saved = store.getModuleConfig(G, 'welcome', require('../src/modules/welcome').DEFAULTS);
+  assert.equal(saved.enabled, true);
+  assert.equal(saved.channelId, welcomeChannel.id);
+  assert.equal(saved.theme, 'noel');
+  assert.equal(saved.texts.title, 'Bienvenue {user} !');
+  assert.ok(saved.texts.subtitle, 'les autres textes sont conservés');
+
+  const badTheme = await tools.execute('configure_welcome', { theme: 'inconnu' }, ctx, allowed);
+  assert.equal(badTheme.ok, false);
+  const badChannel = await tools.execute('configure_welcome', { channel_id: '830000000000000777' }, ctx, allowed);
+  assert.equal(badChannel.ok, false, 'salon inconnu refusé');
+  const nothing = await tools.execute('configure_welcome', {}, ctx, allowed);
+  assert.equal(nothing.ok, false);
+});
+
+test('ticket : types avec emoji et rôle, catégorie vérifiée, panneau publié', async () => {
+  const h = harness();
+  const category = h.makeChannel(h.nextId(), 'Support', ChannelType.GuildCategory);
+  const staff = await h.guild.roles.create({ name: 'Staff' });
+  const panelChannel = h.makeChannel(h.nextId(), 'support', ChannelType.GuildText);
+  const ctx = { guild: h.guild, traceChannelId: TRACE, budget: { actions: 0 }, confirm: async () => true };
+  const allowed = tools.allowedNames({ modules: true });
+
+  const res = await tools.execute(
+    'configure_ticket',
+    {
+      enabled: true,
+      category_id: category.id,
+      panel_style: 'buttons',
+      types: [
+        { label: 'Support', emoji: '🛠️', description: 'Une question ou un bug', role_id: staff.id },
+        { label: 'Signalement' },
+      ],
+      panel_title: '🎫 Support Edge',
+      publish_channel_id: panelChannel.id,
+    },
+    ctx,
+    allowed,
+  );
+  assert.equal(res.ok, true, res.text);
+  assert.match(res.text, /Panneau publié dans #support/);
+  const saved = store.getModuleConfig(G, 'ticket', require('../src/modules/ticket').DEFAULTS);
+  assert.equal(saved.types.length, 2);
+  assert.equal(saved.types[0].roleId, staff.id);
+  assert.equal(saved.categoryId, category.id);
+  assert.equal(saved.texts.panel_title, '🎫 Support Edge');
+  const panel = h.log.sent.find((m) => m.channel === panelChannel.id);
+  assert.ok(panel, 'le panneau est envoyé dans le salon choisi');
+
+  const badEmoji = await tools.execute('configure_ticket', { types: [{ label: 'X', emoji: 'texte' }] }, ctx, allowed);
+  assert.equal(badEmoji.ok, false, 'emoji invalide refusé');
+  const badRole = await tools.execute('configure_ticket', { types: [{ label: 'X', role_id: '830000000000000778' }] }, ctx, allowed);
+  assert.equal(badRole.ok, false, 'rôle inconnu refusé');
+  const notCategory = await tools.execute('configure_ticket', { category_id: panelChannel.id }, ctx, allowed);
+  assert.equal(notCategory.ok, false, 'une catégorie doit être une catégorie');
+});
+
+test('catégorie « Configurer » : active par défaut, absente de la préparation', () => {
+  const exec = tools.specsFor({ modules: true }).map((s) => s.function.name);
+  assert.ok(exec.includes('configure_welcome') && exec.includes('configure_ticket'));
+  const plan = tools.specsFor({ modules: true, read: true }, { planning: true }).map((s) => s.function.name);
+  assert.ok(!plan.includes('configure_ticket'), 'pas de modification pendant la préparation');
+  assert.ok(agent.cfgOf(G).categories.modules === true);
+});

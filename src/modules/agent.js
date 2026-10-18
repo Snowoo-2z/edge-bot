@@ -16,7 +16,7 @@ const { runAgent, PLAN_TIMEOUT_MS, DELETE_TIMEOUT_MS } = require('../agent/engin
 
 const ID = 'agent';
 const STEP_CHOICES = [5, 8, 12, 16, 20, 25];
-const DEFAULT_CATEGORIES = { read: true, create: true, edit: true, send: true, delete: false };
+const DEFAULT_CATEGORIES = { read: true, create: true, edit: true, modules: true, send: true, delete: false };
 
 const DEFAULTS = {
   enabled: false,
@@ -92,18 +92,18 @@ function renderTools(guild) {
     read: 'Lire les salons, rôles et messages (aussi utilisé pour préparer le plan).',
     create: 'Créer catégories, salons texte/vocaux et rôles (sans permissions particulières).',
     edit: 'Modifier salons (nom, sujet, catégorie) et accès des rôles.',
+    modules: 'Régler les modules Bienvenue et Ticket (textes, salon, types de tickets, panneau).',
     send: 'Envoyer des messages dans les salons.',
     delete: 'Supprimer salons et rôles. Chaque suppression est confirmée par un administrateur.',
   };
   return {
     embeds: [embed(CATEGORIES.map((c) => `**${CATEGORY_LABEL[c]}** : ${help[c]}`).join('\n'))],
     components: [
+      row(...CATEGORIES.slice(0, 5).map((c) => toggleButton(`cfg:agent:tool:${c}`, CATEGORY_LABEL[c], cfg.categories[c]))),
       row(
-        ...CATEGORIES.map((c) =>
-          toggleButton(`cfg:agent:tool:${c}`, CATEGORY_LABEL[c], cfg.categories[c]),
-        ),
+        ...CATEGORIES.slice(5).map((c) => toggleButton(`cfg:agent:tool:${c}`, CATEGORY_LABEL[c], cfg.categories[c])),
+        button('cfg:agent:view:main', '◀ Retour', ButtonStyle.Danger),
       ),
-      row(button('cfg:agent:view:main', '◀ Retour', ButtonStyle.Danger)),
     ],
   };
 }

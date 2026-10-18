@@ -7,6 +7,11 @@
 // - nombre d'actions modifiantes limité par exécution ;
 // - aucun outil ne crée de rôle avec des permissions : les rôles sont créés sans droits particuliers.
 const { ChannelType } = require('discord.js');
+const store = require('../store');
+const validate = require('../dashboard/validate');
+const welcome = require('../modules/welcome');
+const ticket = require('../modules/ticket');
+const { THEMES } = require('../welcome-image');
 
 const SNOWFLAKE = /^\d{17,20}$/;
 const HEX_COLOR = /^#?[0-9a-fA-F]{6}$/;
@@ -28,14 +33,17 @@ const CATEGORY_OF = {
   edit_channel: 'edit',
   set_channel_access: 'edit',
   send_message: 'send',
+  configure_welcome: 'modules',
+  configure_ticket: 'modules',
   delete_channel: 'delete',
   delete_role: 'delete',
 };
-const CATEGORIES = ['read', 'create', 'edit', 'send', 'delete'];
+const CATEGORIES = ['read', 'create', 'edit', 'modules', 'send', 'delete'];
 const CATEGORY_LABEL = {
   read: 'Lire',
   create: 'Créer',
   edit: 'Modifier',
+  modules: 'Configurer',
   send: 'Envoyer',
   delete: 'Supprimer',
 };
@@ -139,6 +147,51 @@ const SCHEMAS = {
     { role_id: str('Id du rôle à supprimer.') },
     ['role_id'],
   ),
+  configure_welcome: fn(
+    'configure_welcome',
+    'Configure le module Bienvenue d’Edge (carte envoyée à chaque arrivée). Seuls les champs fournis sont modifiés.',
+    {
+      enabled: { type: 'boolean', description: 'Activer le module.' },
+      channel_id: str('Id du salon d’arrivée.'),
+      show_avatar: { type: 'boolean', description: 'Afficher l’avatar sur la carte.' },
+      theme: { type: 'string', enum: Object.keys(THEMES), description: 'Thème de la carte.' },
+      title: str('Titre de la carte (80 caractères max). Variables : {user}, {server}, {count}.'),
+      subtitle: str('Sous-titre (100 caractères max). Variables : {user}, {server}, {count}.'),
+      message: str('Message au-dessus de la carte (500 caractères max). Variables : {user}, {server}, {count}.'),
+    },
+    [],
+  ),
+  configure_ticket: fn(
+    'configure_ticket',
+    'Configure le module Ticket d’Edge : types de tickets, catégorie, textes du panneau. ' +
+      'Avec publish_channel_id, publie le panneau « Ouvrir un ticket » dans ce salon.',
+    {
+      enabled: { type: 'boolean', description: 'Activer le module.' },
+      category_id: str('Id de la catégorie où créer les salons de tickets.'),
+      panel_style: { type: 'string', enum: ['buttons', 'select'], description: 'Boutons ou menu déroulant.' },
+      types: {
+        type: 'array',
+        maxItems: ticket.MAX_TYPES,
+        description: 'Types de tickets (ex. Support, Candidature, Signalement).',
+        items: {
+          type: 'object',
+          properties: {
+            label: str('Nom du type (80 caractères max).'),
+            emoji: str('Un seul emoji (facultatif).'),
+            description: str('Description courte (100 caractères max, facultatif).'),
+            role_id: str('Id du rôle à mentionner dans les tickets de ce type (facultatif).'),
+          },
+          required: ['label'],
+        },
+      },
+      panel_title: str('Titre du panneau (256 caractères max).'),
+      panel_description: str('Description du panneau (4000 caractères max).'),
+      panel_button: str('Texte du bouton d’ouverture (80 caractères max).'),
+      panel_footer: str('Pied du panneau (2048 caractères max).'),
+      publish_channel_id: str('Salon où publier le panneau maintenant (facultatif).'),
+    },
+    [],
+  ),
   [PLAN_TOOL]: fn(
     'submit_plan',
     'Termine la phase de préparation : envoie le plan complet, en étapes numérotées, à faire valider.',
@@ -191,6 +244,12 @@ function clampLimit(v) {
 // Phrase lisible pour la trace (une ligne par action dans le salon de suivi).
 function describeCall(name, args = {}) {
   switch (name) {
+    case 'configure_welcome':
+      return 'Configurer le module Bienvenue';
+    case 'configure_ticket':
+      return args.publish_channel_id
+        ? `Configurer le module Ticket et publier le panneau dans <#${args.publish_channel_id}>`
+        : 'Configurer le module Ticket';
     case 'list_channels':
       return 'Lecture des salons';
     case 'list_roles':
@@ -246,6 +305,59 @@ function resolveCategory(guild, id) {
 }
 
 const fail = (text) => ({ ok: false, text: `ERREUR : ${text}` });
+
+// Réglages des modules : mêmes validateurs que le tableau de bord (un champ invalide = erreur renvoyée au modèle).
+async function configureWelcome(guild, args) {
+  const current = store.getModuleConfig(guild.id, welcome.ID, welcome.DEFAULTS);
+  const input = {};
+  if (args.enabled !== undefined) input.enabled = args.enabled;
+  if (args.channel_id !== undefined) input.channelId = args.channel_id;
+  if (args.show_avatar !== undefined) input.showAvatar = args.show_avatar;
+  if (args.theme !== undefined) input.theme = args.theme;
+  const texts = {};
+  if (args.title !== undefined) texts.title = args.title;
+  if (args.subtitle !== undefined) texts.subtitle = args.subtitle;
+  if (args.message !== undefined) texts.message = args.message;
+  if (Object.keys(texts).length) input.texts = { ...current.texts, ...texts };
+  if (!Object.keys(input).length) return fail('rien à modifier.');
+  const patch = validate.sanitizeWelcome(guild, input);
+  store.updateModuleConfig(guild.id, welcome.ID, { ...current, ...patch });
+  return done(`module Bienvenue mis à jour (${Object.keys(patch).join(', ')}).`);
+}
+
+async function configureTicket(guild, args) {
+  const current = store.getModuleConfig(guild.id, ticket.ID, ticket.DEFAULTS);
+  const input = {};
+  if (args.enabled !== undefined) input.enabled = args.enabled;
+  if (args.category_id !== undefined) input.categoryId = args.category_id;
+  if (args.panel_style !== undefined) input.panelStyle = args.panel_style;
+  if (args.types !== undefined) {
+    input.types = (Array.isArray(args.types) ? args.types : []).map((t) => ({
+      label: t?.label,
+      emoji: t?.emoji,
+      description: t?.description,
+      roleId: t?.role_id,
+    }));
+  }
+  const texts = {};
+  if (args.panel_title !== undefined) texts.panel_title = args.panel_title;
+  if (args.panel_description !== undefined) texts.panel_description = args.panel_description;
+  if (args.panel_button !== undefined) texts.panel_button = args.panel_button;
+  if (args.panel_footer !== undefined) texts.panel_footer = args.panel_footer;
+  if (Object.keys(texts).length) input.texts = texts;
+  if (!Object.keys(input).length && !args.publish_channel_id) return fail('rien à modifier.');
+  const patch = Object.keys(input).length ? validate.sanitizeTicket(guild, input, current) : {};
+  const next = { ...current, ...patch };
+  if (Object.keys(patch).length) store.updateModuleConfig(guild.id, ticket.ID, next);
+  let published = '';
+  if (args.publish_channel_id) {
+    const channel = resolveChannel(guild, args.publish_channel_id);
+    if (!channel?.send) return fail('salon de publication introuvable ou sans écriture.');
+    await ticket.publishPanel(guild, next, channel);
+    published = ` Panneau publié dans #${channel.name}.`;
+  }
+  return done(`module Ticket mis à jour (${Object.keys(patch).join(', ') || 'aucun réglage'}).${published}`);
+}
 const done = (text) => ({ ok: true, text });
 
 async function listChannels(guild) {
@@ -440,6 +552,10 @@ async function execute(name, args, ctx, allowed) {
         return await setAccess(guild, args);
       case 'send_message':
         return await sendMessage(guild, args);
+      case 'configure_welcome':
+        return await configureWelcome(guild, args);
+      case 'configure_ticket':
+        return await configureTicket(guild, args);
       case 'delete_channel':
         return await deleteChannel(guild, args, ctx);
       case 'delete_role':
