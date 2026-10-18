@@ -46,6 +46,7 @@ const CATEGORY_OF = {
   create_voice_channel: 'create',
   create_role: 'create',
   edit_channel: 'edit',
+  edit_role: 'edit',
   set_channel_access: 'edit',
   send_message: 'send',
   configure_welcome: 'modules',
@@ -124,6 +125,18 @@ const SCHEMAS = {
       mentionable: { type: 'boolean', description: 'Mentionnable par tous.' },
     },
     ['name'],
+  ),
+  edit_role: fn(
+    'edit_role',
+    'Modifie le nom, la couleur, l’affichage séparé ou la mention d’un rôle existant (jamais ses droits).',
+    {
+      role_id: str('Id du rôle (renvoyé par list_roles).'),
+      name: str('Nouveau nom (facultatif).'),
+      color: str('Nouvelle couleur hexadécimale, ex. #6D28D9 (facultatif).'),
+      hoist: { type: 'boolean', description: 'Afficher séparément dans la liste des membres.' },
+      mentionable: { type: 'boolean', description: 'Mentionnable par tous.' },
+    },
+    ['role_id'],
   ),
   edit_channel: fn(
     'edit_channel',
@@ -317,6 +330,7 @@ const SUMMARY_KINDS = [
   ['channel', 'Salons texte créés'],
   ['voice', 'Salons vocaux créés'],
   ['role', 'Rôles créés'],
+  ['role_edit', 'Rôles modifiés'],
   ['edit', 'Salons modifiés'],
   ['access', 'Accès ajustés'],
   ['message', 'Messages envoyés'],
@@ -457,6 +471,42 @@ async function configureModeration(guild, args) {
   });
 }
 
+// Vrai si le rôle est au-dessus du bot (ou à son niveau) : Discord refuse alors toute modification.
+const outranksBot = (guild, role) => {
+  const me = guild.members?.me;
+  return Boolean(me && role.position >= me.roles.highest.position);
+};
+
+// Modification d'un rôle existant : nom, couleur, affichage. Les droits passent par set_role_permissions.
+async function editRole(guild, args) {
+  const role = resolveRole(guild, args.role_id);
+  if (!role) return fail('rôle introuvable.');
+  if (role.id === guild.id) return fail('le rôle @everyone ne se modifie pas ici.');
+  if (role.managed) return fail('ce rôle est géré par une intégration.');
+  if (outranksBot(guild, role)) return fail('ce rôle est au-dessus du bot : Discord ne permet pas de le modifier.');
+  const options = {};
+  if (args.name !== undefined) {
+    const name = clip(String(args.name).trim(), 100);
+    if (!name) return fail('nom vide.');
+    options.name = name;
+  }
+  if (args.color !== undefined) {
+    if (!HEX_COLOR.test(String(args.color))) return fail('couleur invalide (format #RRGGBB).');
+    options.color = parseInt(String(args.color).replace('#', ''), 16);
+  }
+  if (args.hoist !== undefined) options.hoist = args.hoist === true;
+  if (args.mentionable !== undefined) options.mentionable = args.mentionable === true;
+  if (!Object.keys(options).length) return fail('rien à modifier.');
+  const before = role.name;
+  await role.edit({ ...options, reason: 'Agent IA' });
+  const name = options.name ?? before;
+  return done(`rôle ${before} modifié.`, {
+    kind: 'role_edit',
+    item: `@${name}`,
+    line: `Rôle modifié : ${name}`,
+  });
+}
+
 // Droits d'un rôle : liste fermée, jamais l'administrateur, toujours confirmé par un administrateur.
 async function setRolePermissions(guild, args, ctx) {
   const role = resolveRole(guild, args.role_id);
@@ -473,8 +523,7 @@ async function setRolePermissions(guild, args, ctx) {
   const bad = [...grant, ...revoke].filter((k) => !Object.prototype.hasOwnProperty.call(ROLE_PERMS, k));
   if (bad.length) return fail(`droit non autorisé pour l’agent : ${bad.join(', ')}.`);
   if (grant.some((k) => revoke.includes(k))) return fail('un même droit ne peut pas être ajouté et retiré.');
-  const me = guild.members?.me;
-  if (me && role.position >= me.roles.highest.position) {
+  if (outranksBot(guild, role)) {
     return fail('ce rôle est au-dessus du bot (ou à son niveau) : Discord ne permet pas de le modifier.');
   }
   const parts = [
@@ -720,6 +769,8 @@ async function execute(name, args, ctx, allowed) {
         return await createChannel(guild, args, ChannelType.GuildVoice);
       case 'create_role':
         return await createRole(guild, args);
+      case 'edit_role':
+        return await editRole(guild, args);
       case 'edit_channel':
         return await editChannel(guild, args);
       case 'set_channel_access':

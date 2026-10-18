@@ -742,3 +742,28 @@ test('droits de rôle : liste fermée, jamais l’administrateur, confirmation o
   assert.equal(revoke.ok, true);
   assert.ok(!new PermissionsBitField(staff.permissions).has(P.BanMembers), 'retrait effectif');
 });
+
+test('rôle existant : couleur et nom modifiables, @everyone et rôles gérés refusés', async () => {
+  const h = harness();
+  const role = { id: '830000000000000701', name: 'Membre', position: 1, managed: false, permissions: 0n, color: 0x206694 };
+  role.edit = async (o) => {
+    Object.assign(role, o);
+    role.name = o.name ?? role.name;
+  };
+  h.guild.roles.cache.set(role.id, role);
+  const managed = { id: '830000000000000702', name: 'Bot', position: 1, managed: true, permissions: 0n, edit: async () => {} };
+  h.guild.roles.cache.set(managed.id, managed);
+  const ctx = { guild: h.guild, traceChannelId: TRACE, budget: { actions: 0 }, confirm: async () => true };
+  const allowed = new Set(['edit_role']);
+
+  const ok = await tools.execute('edit_role', { role_id: role.id, name: 'Utilisateur', color: '#C4B5FD' }, ctx, allowed);
+  assert.equal(ok.ok, true, ok.text);
+  assert.equal(role.name, 'Utilisateur');
+  assert.equal(role.color, 0xc4b5fd);
+  assert.equal(ok.kind, 'role_edit');
+
+  assert.equal((await tools.execute('edit_role', { role_id: role.id, color: 'violet' }, ctx, allowed)).ok, false, 'couleur invalide');
+  assert.equal((await tools.execute('edit_role', { role_id: h.guild.id, color: '#6D28D9' }, ctx, allowed)).ok, false, '@everyone refusé');
+  assert.equal((await tools.execute('edit_role', { role_id: managed.id, color: '#6D28D9' }, ctx, allowed)).ok, false, 'rôle d’intégration refusé');
+  assert.equal((await tools.execute('edit_role', { role_id: role.id }, ctx, allowed)).ok, false, 'rien à modifier');
+});
